@@ -1,6 +1,6 @@
 # MATLAB Agent 故障排除指南
 
-> 版本: 2.0.0 | 最后更新: 2026-04-08
+> 版本: 3.0.1 | 最后更新: 2026-04-08
 
 本文档汇总了 MATLAB Agent 开发和运行中遇到的所有问题及其解决方案。
 
@@ -20,6 +20,9 @@
 10. [端口被占用](#10-端口被占用)
 11. [Python 找不到](#11-python-找不到)
 12. [超时问题](#12-超时问题)
+13. [Windows stdin 中文编码](#13-windows-stdin-中文编码)
+14. [中文路径 set_project_dir 报错](#14-中文路径-set_project_dir-报错)
+15. [Skill 目录缺少 node_modules](#15-skill-目录缺少-node_modules)
 
 ---
 
@@ -286,3 +289,72 @@ MATLAB 桥接执行超时（120秒）
 6. ✅ 脚本文件路径是否含中文？
 7. ✅ 函数名是否以下划线开头？
 8. ✅ 查看 stderr 输出中的具体错误信息
+
+---
+
+## 13. Windows stdin 中文编码
+
+### 症状
+```json
+{"status":"error","message":"[WinError 123] 文件名、目录名或卷标语法不正确。: 'D:\\RL\\xxx\\xxx_ptp_final_??'"}
+```
+路径中的中文变成 `??`，`os.path.abspath()` 或 `os.makedirs()` 报错。
+
+### 根因
+Windows 下 Python 的 `sys.stdin` 默认使用 GBK 编码。即使设置了 `PYTHONIOENCODING=utf-8` 环境变量，`sys.stdin.reconfigure(encoding='utf-8')` 在 stdin 的底层 buffer 已创建后可能不生效。使用 `for line in sys.stdin` 迭代时，行内容被 GBK 解码导致 UTF-8 中文乱码。
+
+### 解决方案
+在 `matlab_bridge.py` 的 `server_mode()` 中，改用二进制模式读取 stdin：
+```python
+# 替代: for line in sys.stdin:
+stdin_buffer = sys.stdin.buffer
+for raw_line in stdin_buffer:
+    try:
+        line = raw_line.decode('utf-8').strip()
+    except UnicodeDecodeError:
+        line = raw_line.decode('gbk', errors='replace').strip()
+```
+
+同时在文件开头添加 stdin reconfigure 作为第一道防线：
+```python
+if sys.stdin.encoding != 'utf-8':
+    sys.stdin.reconfigure(encoding='utf-8', errors='replace')
+```
+
+---
+
+## 14. 中文路径 set_project_dir 报错
+
+### 症状
+设置含中文的项目目录时，即使路径存在也报错 `WinError 123`。
+
+### 根因
+`set_project_dir()` 在路径不存在时调用 `os.makedirs()`，当路径含中文且 stdin 编码异常时，传入的路径字符串已损坏，导致 `os.makedirs()` 报错。
+
+### 解决方案
+不再尝试创建目录，改为检查后返回错误：
+```python
+def set_project_dir(dir_path):
+    dir_path = os.path.abspath(dir_path)
+    if not os.path.exists(dir_path):
+        return {"status": "error", "message": f"目录不存在: {dir_path}"}
+    _project_dir = dir_path
+    # ... cd 和 addpath
+```
+
+---
+
+## 15. Skill 目录缺少 node_modules
+
+### 症状
+从 skill 目录启动 `npm run dev` 报 `concurrently is not recognized`。
+
+### 根因
+Skill 打包时 `.gitignore` 排除了 `node_modules`，robocopy 也排除了它，导致 skill 目录中无依赖。
+
+### 解决方案
+用 Windows Junction 链接共享项目目录的 node_modules：
+```powershell
+cmd /c mklink /J "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\node_modules" "D:\CherryStudio\coder\MATLAB_agent\matlab-agent\node_modules"
+```
+Junction 不需要管理员权限（区别于 SymbolicLink），且两边修改实时同步。

@@ -25,6 +25,8 @@ from pathlib import Path
 from datetime import datetime
 
 # 强制 UTF-8
+if sys.stdin.encoding != 'utf-8':
+    sys.stdin.reconfigure(encoding='utf-8', errors='replace')
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if sys.stderr.encoding != 'utf-8':
@@ -71,7 +73,7 @@ def set_project_dir(dir_path):
     global _project_dir
     dir_path = os.path.abspath(dir_path)
     if not os.path.exists(dir_path):
-        os.makedirs(dir_path, exist_ok=True)
+        return {"status": "error", "message": f"目录不存在: {dir_path}"}
     _project_dir = dir_path
     eng = get_engine()
     dir_safe = dir_path.replace('\\', '/')
@@ -495,8 +497,15 @@ def server_mode():
     sys.stderr.write("[MATLAB Bridge] Server mode started. Engine will persist.\n")
     sys.stderr.flush()
     
-    for line in sys.stdin:
-        line = line.strip()
+    # Windows 下 stdin 可能不是 utf-8，用二进制模式读取并手动解码
+    stdin_buffer = sys.stdin.buffer
+    
+    for raw_line in stdin_buffer:
+        try:
+            line = raw_line.decode('utf-8').strip()
+        except UnicodeDecodeError:
+            line = raw_line.decode('gbk', errors='replace').strip()
+        
         if not line:
             continue
         
