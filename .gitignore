@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.vite/
+
+# Database
+data/
+*.db
+*.sqlite
+
+# Benchmarks
+bench_*
+
+# Logs
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.engine_info.json
+
+# MATLAB generated
+*.asv
+*.slxc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
