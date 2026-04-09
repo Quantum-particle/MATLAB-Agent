@@ -7,7 +7,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import * as db from "./db.js";
 import * as matlab from "./matlab-controller.js";
-import { MATLAB_SYSTEM_PROMPT, SIMULINK_SYSTEM_PROMPT } from "./system-prompts.js";
+import { MATLAB_SYSTEM_PROMPT, SIMULINK_SYSTEM_PROMPT, getMATLABSystemPrompt, getSimulinkSystemPrompt } from "./system-prompts.js";
 
 const execAsync = promisify(exec);
 
@@ -52,9 +52,46 @@ const defaultModel = "claude-sonnet-4";
 const MATLAB_AGENT_ID = "matlab-default";
 const SIMULINK_AGENT_ID = "simulink-default";
 
-// 健康检查
+// ============= 预热状态管理 =============
+let warmupStatus: 'idle' | 'warming_bridge' | 'warming_engine' | 'ready' | 'failed' = 'idle';
+let warmupError: string | null = null;
+let warmupStartTime: number = 0;
+
+function getWarmupInfo() {
+  return {
+    status: warmupStatus,
+    error: warmupError,
+    elapsed: warmupStartTime ? Math.round((Date.now() - warmupStartTime) / 1000) : 0,
+  };
+}
+
+// 健康检查（含预热状态）
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  const info = getWarmupInfo();
+  const matlabConfig = matlab.getMATLABConfig();
+  res.json({
+    status: "ok",
+    timestamp: new Date().toISOString(),
+    matlab: {
+      warmup: info.status,
+      ready: info.status === 'ready',
+      error: info.error,
+      elapsedSeconds: info.elapsed,
+      root: matlabConfig.matlab_root,
+      connectionMode: matlabConfig.matlab_root_source,
+    }
+  });
+});
+
+// 专门的预热状态端点
+app.get("/api/matlab/warmup-status", (req, res) => {
+  const info = getWarmupInfo();
+  res.json({
+    status: info.status,
+    ready: info.status === 'ready',
+    error: info.error,
+    elapsedSeconds: info.elapsed,
+  });
 });
 
 // ============= MATLAB 专用 API =============
@@ -74,7 +111,7 @@ app.get("/api/matlab/status", async (req, res) => {
     res.json({
       status: "error",
       message: error.message,
-      matlab_root: 'D:\\Program Files(x86)\\MATLAB2023b'
+      matlab_root: matlab.getMATLABConfig().matlab_root,
     });
   }
 });
@@ -277,6 +314,35 @@ app.post("/api/matlab/simulink/open", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供模型名称" });
   try {
     const result = await matlab.openSimulinkModel(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// ============= v4.0 通用化 API =============
+
+// 获取 MATLAB 配置
+app.get("/api/matlab/config", (req, res) => {
+  try {
+    const config = matlab.getMATLABConfig();
+    res.json(config);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 设置 MATLAB 根目录
+app.post("/api/matlab/config", async (req, res) => {
+  // 兼容 matlab_root（下划线）和 matlabRoot（驼峰）两种命名
+  const matlabRoot = req.body.matlab_root || req.body.matlabRoot;
+  if (!matlabRoot) return res.status(400).json({ error: "请提供 MATLAB 根目录路径" });
+  try {
+    const result = matlab.setMATLABRoot(matlabRoot);
+    if (result.success) {
+      // 重启桥接进程以应用新的 MATLAB_ROOT
+      await matlab.restartBridge();
+    }
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });
@@ -606,8 +672,9 @@ app.post("/api/chat", async (req, res) => {
   // 根据选择的 Agent 决定系统提示词
   const getSystemPrompt = () => {
     if (systemPrompt) return systemPrompt;
-    if (agentId === SIMULINK_AGENT_ID) return SIMULINK_SYSTEM_PROMPT;
-    return MATLAB_SYSTEM_PROMPT; // 默认使用 MATLAB 提示词
+    if (agentId === SIMULINK_AGENT_ID) return getSimulinkSystemPrompt();
+    // 使用动态提示词（含当前环境信息）
+    return getMATLABSystemPrompt();
   };
 
   const workingDir = cwd || process.cwd();
@@ -779,15 +846,70 @@ app.post("/api/chat", async (req, res) => {
 
 // 启动服务器
 app.listen(PORT, () => {
+  const matlabConfig = matlab.getMATLABConfig();
   console.log(`
 ╔════════════════════════════════════════════════════╗
 ║                                                    ║
 ║     ◉ MATLAB Agent - API 服务器已启动              ║
 ║                                                    ║
 ║     地址: http://localhost:${PORT}                    ║
-║     MATLAB: R2023b                                  ║
+║     MATLAB: ${!matlabConfig.matlab_root ? '未配置 (请设置 MATLAB_ROOT)' : matlabConfig.matlab_root.substring(0, 30)}║
 ║     数据库: SQLite (data/chat.db)                  ║
 ║                                                    ║
 ╚════════════════════════════════════════════════════╝
   `);
+
+  // ============= 后台预热 MATLAB Engine =============
+  // 服务器已就绪，但 MATLAB Engine 还未启动。
+  // 在后台异步预热，避免用户首次请求时等待 15~60 秒。
+  // 带超时机制：如果预热超过 WARMUP_TIMEOUT 秒还没完成，标记为失败并停止等待。
+  
+  // 先检查 MATLAB 是否可用，不可用则跳过 warmup 并提示用户配置
+  if (!matlab.isMATLABAvailable()) {
+    warmupStatus = 'failed';
+    warmupError = 'MATLAB 未配置。首次使用请通过 POST /api/matlab/config 设置 MATLAB_ROOT';
+    console.warn('[Warmup] ✗ 跳过预热：MATLAB 未配置');
+    console.warn('[Warmup] 提示：请通过 POST /api/matlab/config 设置 MATLAB 安装路径');
+    console.warn('[Warmup] 示例：curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: application/json" -d "{\\"matlabRoot\\":\\"D:\\\\Program Files\\\\MATLAB\\\\R2023b\\"}"');
+    console.warn('[Warmup] 或设置环境变量：set MATLAB_ROOT=D:\\Program Files\\MATLAB\\R2023b');
+  } else {
+    const WARMUP_TIMEOUT = 90; // 预热总超时（秒），包含 Engine 兼容性检测 + Engine 启动
+  warmupStartTime = Date.now();
+  warmupStatus = 'warming_bridge';
+  console.log(`[Warmup] 开始预热 MATLAB Engine（超时 ${WARMUP_TIMEOUT}秒）...`);
+
+  const warmupTimeoutHandle = setTimeout(() => {
+    if (warmupStatus === 'warming_bridge' || warmupStatus === 'warming_engine') {
+      warmupStatus = 'failed';
+      warmupError = `预热超时（${WARMUP_TIMEOUT}秒），MATLAB Engine 可能不兼容当前环境。将使用 CLI 回退模式。`;
+      console.warn(`[Warmup] ✗ 预热超时（${WARMUP_TIMEOUT}秒），停止等待`);
+    }
+  }, WARMUP_TIMEOUT * 1000);
+
+  matlab.startMATLAB()
+    .then((result) => {
+      clearTimeout(warmupTimeoutHandle);
+      if (warmupStatus === 'failed') {
+        // 已经超时了，忽略后续结果
+        console.warn('[Warmup] Engine 启动结果返回，但已超时跳过');
+        return;
+      }
+      if (result.status === 'ok') {
+        warmupStatus = 'ready';
+        const elapsed = Math.round((Date.now() - warmupStartTime) / 1000);
+        console.log(`[Warmup] ✓ MATLAB Engine 预热完成 (${elapsed}秒)`);
+      } else {
+        warmupStatus = 'failed';
+        warmupError = result.message || '预热失败';
+        console.warn(`[Warmup] ✗ MATLAB Engine 预热失败: ${warmupError}`);
+      }
+    })
+    .catch((err) => {
+      clearTimeout(warmupTimeoutHandle);
+      if (warmupStatus === 'failed') return; // 已超时
+      warmupStatus = 'failed';
+      warmupError = err.message || String(err);
+      console.warn(`[Warmup] ✗ MATLAB Engine 预热异常: ${warmupError}`);
+    });
+  } // end of else (MATLAB available)
 });

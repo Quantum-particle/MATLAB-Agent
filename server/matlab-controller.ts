@@ -1,28 +1,143 @@
 /**
- * MATLAB Controller v3.0 - 后端 MATLAB 控制器
- * 
- * 核心架构: 使用常驻 Python 桥接进程（--server 模式）
- * - Python 进程保持运行，MATLAB Engine 持久化
- * - 变量跨命令保持，图形窗口实时显示
- * - 通过 stdin/stdout JSON 行协议通信
- */
+* MATLAB Controller v4.1 - 通用化后端 MATLAB 控制器
+* 
+* 核心架构: 使用常驻 Python 桥接进程（--server 模式）
+* - Python 进程保持运行，MATLAB Engine 持久化
+* - 变量跨命令保持，图形窗口实时显示
+* - 通过 stdin/stdout JSON 行协议通信
+* 
+* v4.1 变更:
+* - 移除自动检测逻辑，首次启动需用户手动输入 MATLAB 安装路径
+* - MATLAB_ROOT 优先级: 环境变量 > 配置文件（持久化）> 未配置
+* - 配置通过 POST /api/matlab/config 或环境变量 MATLAB_ROOT 设置
+*/
 
-import { execFile, spawn, ChildProcess } from "child_process";
-import { promisify } from "util";
+import { spawn, ChildProcess } from "child_process";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { fileURLToPath } from "url";
-
-const execFileAsync = promisify(execFile);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const MATLAB_ROOT = 'D:\\Program Files(x86)\\MATLAB2023b';
-const MATLAB_BIN = path.join(MATLAB_ROOT, 'bin', 'matlab.exe');
+// ============= MATLAB 路径配置 =============
+
+/**
+ * MATLAB_ROOT 优先级:
+ * 1. 环境变量 MATLAB_ROOT（最高优先级，用户显式设置）
+ * 2. 本地配置文件 data/matlab-config.json（用户通过 API 配置，持久化）
+ * 3. 无 → 返回空字符串，提示用户配置
+ * 
+ * 首次启动时需要用户手动输入 MATLAB 安装路径，不再自动扫描。
+ */
+
+let _configuredMatlabRoot: string | null = null;
+
+// 配置文件路径
+const CONFIG_DIR = path.join(__dirname, '..', '..', 'data');
+const CONFIG_FILE = path.join(CONFIG_DIR, 'matlab-config.json');
+
+/** 从配置文件读取 MATLAB_ROOT */
+function loadConfigFromFile(): string | null {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
+      if (config.matlab_root && fs.existsSync(config.matlab_root)) {
+        return config.matlab_root;
+      }
+    }
+  } catch {
+    // 配置文件损坏，忽略
+  }
+  return null;
+}
+
+/** 保存 MATLAB_ROOT 到配置文件 */
+function saveConfigToFile(matlabRoot: string): void {
+  try {
+    if (!fs.existsSync(CONFIG_DIR)) {
+      fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    }
+    const config = fs.existsSync(CONFIG_FILE) 
+      ? JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'))
+      : {};
+    config.matlab_root = matlabRoot;
+    config.updated_at = new Date().toISOString();
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+    console.log(`[MATLAB Config] 已保存 MATLAB_ROOT 到配置文件: ${matlabRoot}`);
+  } catch (err: any) {
+    console.error(`[MATLAB Config] 保存配置失败: ${err.message}`);
+  }
+}
+
+/** 获取当前有效的 MATLAB_ROOT */
+function getMATLABRoot(): string {
+  // 1. 环境变量（最高优先级）
+  const envRoot = process.env.MATLAB_ROOT;
+  if (envRoot && fs.existsSync(envRoot)) {
+    return envRoot;
+  }
+  // 2. API 动态设置（本次会话内存缓存）
+  if (_configuredMatlabRoot && fs.existsSync(_configuredMatlabRoot)) {
+    return _configuredMatlabRoot;
+  }
+  // 3. 配置文件（持久化）
+  const fileRoot = loadConfigFromFile();
+  if (fileRoot) {
+    _configuredMatlabRoot = fileRoot;  // 缓存到内存
+    return fileRoot;
+  }
+  // 未配置，返回空字符串
+  return '';
+}
+
+/** 检查 MATLAB 是否可用（MATLAB_ROOT 有效且 matlab.exe 存在） */
+export function isMATLABAvailable(): boolean {
+  const root = getMATLABRoot();
+  if (!root) return false;
+  return fs.existsSync(path.join(root, 'bin', 'matlab.exe'));
+}
+
+/** 通过 API 设置 MATLAB_ROOT（同时持久化到配置文件） */
+export function setMATLABRoot(root: string): { success: boolean; message: string } {
+  if (!root) {
+    return { success: false, message: '路径不能为空' };
+  }
+  // 用户可能输入的是 bin 目录，自动取父目录
+  let normalizedPath = path.normalize(root);
+  if (normalizedPath.endsWith('bin') || normalizedPath.endsWith('bin\\') || normalizedPath.endsWith('bin/')) {
+    normalizedPath = path.dirname(normalizedPath);
+  }
+  if (!fs.existsSync(normalizedPath)) {
+    return { success: false, message: `路径不存在: ${normalizedPath}` };
+  }
+  // 验证是否像 MATLAB 安装目录
+  if (!fs.existsSync(path.join(normalizedPath, 'bin', 'matlab.exe'))) {
+    return { success: false, message: `未找到 matlab.exe: ${path.join(normalizedPath, 'bin', 'matlab.exe')}` };
+  }
+  _configuredMatlabRoot = normalizedPath;
+  // 持久化到配置文件
+  saveConfigToFile(normalizedPath);
+  console.log(`[MATLAB Config] MATLAB_ROOT 已设置为: ${normalizedPath}`);
+  return { success: true, message: `MATLAB_ROOT 已设置为 ${normalizedPath}` };
+}
+
+// ============= 动态路径常量 =============
+
+/** 获取 MATLAB bin 路径 */
+function getMATLABBin(): string {
+  const root = getMATLABRoot();
+  if (!root) return '';
+  return path.join(root, 'bin', 'matlab.exe');
+}
+
+/** 获取 Python Bridge 脚本路径 */
 const BRIDGE_SCRIPT = path.join(__dirname, '..', 'matlab-bridge', 'matlab_bridge.py');
-const DEFAULT_WORKSPACE = 'D:\\MATLAB_Workspace';
+
+/** 获取默认工作空间（当前工作区目录） */
+function getDefaultWorkspace(): string {
+  return process.env.MATLAB_WORKSPACE || 'd:\\MATLAB_Workspace\\work1';
+}
 
 // 超时配置
 const TIMEOUTS = {
@@ -33,8 +148,13 @@ const TIMEOUTS = {
   projectScan: 30_000,
   fileRead: 60_000,
   runCode: 120_000,
+  engineStart: 90_000,    // Engine 启动超时（含兼容性检测）
+  engineCompatTest: 45_000, // Engine 兼容性测试超时
   default: 300_000,
 };
+
+// 命令执行进度检测间隔（毫秒）
+const PROGRESS_CHECK_INTERVAL = 15_000;
 
 export interface MATLABCommand {
   action: string;
@@ -60,7 +180,8 @@ function getTimeout(command: MATLABCommand): number {
     case 'run_code': return TIMEOUTS.runCode;
     case 'create_simulink': return TIMEOUTS.simulinkCreate;
     case 'run_simulink': return TIMEOUTS.simulinkRun;
-    case 'check': return TIMEOUTS.check;
+    case 'check': return TIMEOUTS.engineCompatTest;
+    case 'start': return TIMEOUTS.engineStart;
     case 'scan_project': return TIMEOUTS.projectScan;
     case 'read_m_file':
     case 'read_mat_file':
@@ -76,6 +197,7 @@ let responseBuffer = '';
 let pendingResolve: ((result: MATLABResult) => void) | null = null;
 let pendingReject: ((error: Error) => void) | null = null;
 let pendingTimer: NodeJS.Timeout | null = null;
+let pendingProgressTimer: NodeJS.Timeout | null = null;
 
 /**
  * 确保常驻 Python 桥接进程已启动
@@ -85,13 +207,27 @@ function ensureBridgeProcess(): void {
     return; // 已有运行中的进程
   }
   
-  console.log('[MATLAB Bridge] Starting persistent bridge process...');
+  const startTime = Date.now();
+  const currentMatlabRoot = getMATLABRoot();
+  console.log(`[MATLAB Bridge] Starting persistent bridge process...`);
+  console.log(`[MATLAB Bridge] MATLAB_ROOT: ${currentMatlabRoot}`);
   
   bridgeProcess = spawn('python', [BRIDGE_SCRIPT, '--server'], {
     cwd: path.dirname(BRIDGE_SCRIPT),
     stdio: ['pipe', 'pipe', 'pipe'],
-    env: { ...process.env, PYTHONIOENCODING: 'utf-8', PYTHONUNBUFFERED: '1' }
+    env: { 
+      ...process.env, 
+      PYTHONIOENCODING: 'utf-8', 
+      PYTHONUNBUFFERED: '1',
+      MATLAB_ROOT: currentMatlabRoot,  // 传递 MATLAB_ROOT 给 Python Bridge
+    }
   });
+
+  // 桥接进程启动后的就绪信号
+  const readyTimeout = setTimeout(() => {
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    console.log(`[MATLAB Bridge] Bridge process running (${elapsed}s)`);
+  }, 1000);
   
   // 处理 stdout - JSON 行协议
   bridgeProcess.stdout!.on('data', (data: Buffer) => {
@@ -107,6 +243,7 @@ function ensureBridgeProcess(): void {
         const result = JSON.parse(line.trim()) as MATLABResult;
         if (pendingResolve) {
           if (pendingTimer) clearTimeout(pendingTimer);
+          if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
           const resolve = pendingResolve;
           pendingResolve = null;
           pendingReject = null;
@@ -133,6 +270,7 @@ function ensureBridgeProcess(): void {
       pendingResolve = null;
       pendingReject = null;
       pendingTimer = null;
+      if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
     }
   });
   
@@ -144,6 +282,7 @@ function ensureBridgeProcess(): void {
       pendingResolve = null;
       pendingReject = null;
       pendingTimer = null;
+      if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
     }
   });
 }
@@ -161,6 +300,7 @@ async function executeBridgeCommand(command: MATLABCommand): Promise<MATLABResul
   
   const timeout = getTimeout(command);
   const cmdLine = JSON.stringify(command) + '\n';
+  const startTime = Date.now();
   
   return new Promise<MATLABResult>((resolve, reject) => {
     // 设置超时
@@ -171,12 +311,61 @@ async function executeBridgeCommand(command: MATLABCommand): Promise<MATLABResul
       reject(new Error(`MATLAB 执行超时（${Math.round(timeout / 1000)}秒）`));
     }, timeout);
     
-    pendingResolve = resolve;
-    pendingReject = reject;
+    // 定期打印进度日志，让用户知道还在等
+    pendingProgressTimer = setInterval(() => {
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      const actionName = command.action === 'start' ? 'Engine 启动' : 
+                          command.action === 'check' ? '兼容性检测' : command.action;
+      console.log(`[MATLAB Bridge] ⏳ ${actionName} 执行中... 已等待 ${elapsed}秒`);
+    }, PROGRESS_CHECK_INTERVAL);
+    
+    // 包装 resolve，清理进度定时器
+    const originalResolve = resolve;
+    const originalReject = reject;
+    
+    pendingResolve = (result: MATLABResult) => {
+      if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
+      originalResolve(result);
+    };
+    pendingReject = (error: Error) => {
+      if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
+      originalReject(error);
+    };
     
     // 发送命令
     bridgeProcess!.stdin!.write(cmdLine, 'utf-8');
   });
+}
+
+/** 重启桥接进程（切换 MATLAB 版本时使用） */
+export async function restartBridge(): Promise<MATLABResult> {
+  console.log('[MATLAB Bridge] Restarting bridge with new MATLAB_ROOT...');
+  
+  // 先停止现有进程
+  if (bridgeProcess && !bridgeProcess.killed) {
+    try {
+      await executeBridgeCommand({ action: 'stop', params: {} });
+    } catch {
+      // 忽略停止错误
+    }
+    try {
+      bridgeProcess.kill();
+    } catch {
+      // 忽略 kill 错误
+    }
+    bridgeProcess = null;
+  }
+  
+  // 清理状态
+  responseBuffer = '';
+  pendingResolve = null;
+  pendingReject = null;
+  if (pendingTimer) clearTimeout(pendingTimer);
+  pendingTimer = null;
+  if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
+  
+  // 重新启动（ensureBridgeProcess 会自动启动新进程，并传递新的 MATLAB_ROOT）
+  return startMATLAB();
 }
 
 // ============= 基础操作 =============
@@ -190,24 +379,28 @@ export async function stopMATLAB(): Promise<MATLABResult> {
 }
 
 export function checkMATLABFiles(): Record<string, any> {
+  const root = getMATLABRoot();
+  const defaultWorkspace = getDefaultWorkspace();
   return {
-    status: fs.existsSync(MATLAB_ROOT) ? 'installed' : 'not_found',
-    matlab_root: MATLAB_ROOT,
-    matlab_exe_exists: fs.existsSync(MATLAB_BIN),
+    status: fs.existsSync(root) ? 'installed' : 'not_configured',
+    matlab_root: root,
+    matlab_exe_exists: fs.existsSync(path.join(root, 'bin', 'matlab.exe')),
     bridge_script_exists: fs.existsSync(BRIDGE_SCRIPT),
-    workspace_exists: fs.existsSync(DEFAULT_WORKSPACE),
-    default_workspace: DEFAULT_WORKSPACE
+    workspace_exists: fs.existsSync(defaultWorkspace),
+    default_workspace: defaultWorkspace,
   };
 }
 
 export async function checkMATLABInstallation(): Promise<MATLABResult & Record<string, any>> {
+  const root = getMATLABRoot();
+  const defaultWorkspace = getDefaultWorkspace();
   const checks = {
-    matlab_root_exists: fs.existsSync(MATLAB_ROOT),
-    matlab_exe_exists: fs.existsSync(MATLAB_BIN),
+    matlab_root_exists: fs.existsSync(root),
+    matlab_exe_exists: fs.existsSync(path.join(root, 'bin', 'matlab.exe')),
     bridge_script_exists: fs.existsSync(BRIDGE_SCRIPT),
-    workspace_exists: fs.existsSync(DEFAULT_WORKSPACE),
-    matlab_root: MATLAB_ROOT,
-    default_workspace: DEFAULT_WORKSPACE
+    workspace_exists: fs.existsSync(defaultWorkspace),
+    matlab_root: root,
+    default_workspace: defaultWorkspace,
   };
   
   try {
@@ -216,6 +409,22 @@ export async function checkMATLABInstallation(): Promise<MATLABResult & Record<s
   } catch (error: any) {
     return { ...checks, status: 'warning', engine_importable: false, engine_error: error.message };
   }
+}
+
+/** 获取 MATLAB 配置信息 */
+export function getMATLABConfig(): Record<string, any> {
+  const root = getMATLABRoot();
+  const rootSource = !root ? 'none' : 
+    (process.env.MATLAB_ROOT && fs.existsSync(process.env.MATLAB_ROOT) ? 'env' : 
+    (_configuredMatlabRoot ? 'config' : 'none'));
+  return {
+    matlab_root: root,
+    matlab_root_source: rootSource,
+    matlab_available: isMATLABAvailable(),
+    matlab_exe_exists: root ? fs.existsSync(path.join(root, 'bin', 'matlab.exe')) : false,
+    default_workspace: getDefaultWorkspace(),
+    bridge_script_exists: fs.existsSync(BRIDGE_SCRIPT),
+  };
 }
 
 // ============= 项目管理 =============
@@ -321,7 +530,7 @@ export async function closeAllFigures(): Promise<MATLABResult> {
 // ============= 辅助函数 =============
 
 export function ensureWorkspace(workDir?: string): string {
-  const dir = workDir || DEFAULT_WORKSPACE;
+  const dir = workDir || getDefaultWorkspace();
   if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
   return dir;
 }
@@ -373,7 +582,7 @@ export function parseMATLABError(output: string): {
   const suggestionMap: Record<string, string[]> = {
     undefined: ['检查函数名拼写', '确认 .m 文件已添加到 MATLAB 路径', '使用 addpath() 添加依赖目录'],
     index: ['检查数组索引是否超出范围', 'MATLAB 数组索引从 1 开始'],
-    dimension: ['使用 size() 检查矩阵维度', '考虑使用转置 或 reshape()'],
+    dimension: ['使用 size() 检查矩阵维度', '考虑使用转置或 reshape()'],
     args: ['使用 nargin 检查参数数量', '确认函数签名与调用方式一致'],
     simulink: ['检查模块参数设置', '确认信号维度在各模块间一致'],
   };

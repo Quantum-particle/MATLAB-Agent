@@ -3,15 +3,29 @@ node_modules/
 
 # Build output
 dist/
-.vite/
 
-# Database
-data/
-*.db
-*.sqlite
+# Runtime data (generated on first run)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.log
+data/matlab-config.json
 
-# Benchmarks
-bench_*
+# Keep the data directory structure
+!data/.gitkeep
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
 
 # Logs
 *.log
@@ -19,23 +33,3 @@ bench_*
 # Python cache
 __pycache__/
 *.pyc
-*.pyo
-.engine_info.json
-
-# MATLAB generated
-*.asv
-*.slxc
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Environment
-.env
-.env.local

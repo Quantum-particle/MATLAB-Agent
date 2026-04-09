@@ -10,6 +10,7 @@ import { Bot } from 'lucide-react';
 import { APP_CONFIG } from '../config';
 import { Model, Session, Agent, Theme } from '../types';
 import { ICON_MAP } from '../utils/iconMap';
+import { MATLABStatusBar } from './MATLABStatusBar';
 
 interface HeaderProps {
   isSettingsPage: boolean;

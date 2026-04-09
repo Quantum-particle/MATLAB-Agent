@@ -1,16 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { CustomAgent } from '../types';
 import { v4 as uuidv4 } from 'uuid';
-import { APP_CONFIG } from '../config';
+import { APP_CONFIG, fetchMATLABConfig } from '../config';
 
 const STORAGE_KEY = 'customAgents';
 
-// MATLAB 开发助手（默认 Agent）
+// MATLAB 开发助手（默认 Agent）— 系统提示词中的版本信息在运行时由后端动态注入
 const MATLAB_AGENT: CustomAgent = {
   id: 'matlab-default',
   name: 'MATLAB 开发',
   description: '专业的 MATLAB M 语言开发助手，擅长信号处理、控制律设计、数据分析',
-  systemPrompt: `你是「MATLAB Agent」—— 专业的 MATLAB 开发助手。你像一位资深 MATLAB 技术员一样工作：理解需求、编写代码、自动运行、分析错误、迭代修复。环境：MATLAB R2023b，路径：D:\\Program Files (x86)\\MATLAB2023b。编码规范：向量化优先、计算与绘图分离、UTF-8编码、输入验证。索引从1开始。`,
+  systemPrompt: `你是「MATLAB Agent」—— 专业的 MATLAB 开发助手。你像一位资深 MATLAB 技术员一样工作：理解需求、编写代码、自动运行、分析错误、迭代修复。编码规范：向量化优先、计算与绘图分离、UTF-8编码、输入验证。索引从1开始。`,
   icon: 'Cpu',
   color: '#0076a8',  // MATLAB 蓝
   permissionMode: 'bypassPermissions',
@@ -18,12 +18,12 @@ const MATLAB_AGENT: CustomAgent = {
   updatedAt: new Date(),
 };
 
-// Simulink 建模助手
+// Simulink 建模助手 — 系统提示词中的版本信息在运行时由后端动态注入
 const SIMULINK_AGENT: CustomAgent = {
   id: 'simulink-default',
   name: 'Simulink 建模',
   description: 'Simulink 仿真建模专家，擅长动力学系统建模、控制律设计',
-  systemPrompt: `你是「Simulink Agent」—— 专业的 Simulink 仿真建模助手。你擅长：动力学系统建模（刚体/柔性体）、传递函数与状态空间模型、PID/LQR控制器设计。使用 MATLAB API 构建模型（add_block, add_line, set_param）。仿真配置使用 sim() 命令。MATLAB R2023b，路径：D:\\Program Files (x86)\\MATLAB2023b。`,
+  systemPrompt: `你是「Simulink Agent」—— 专业的 Simulink 仿真建模助手。你擅长：动力学系统建模（刚体/柔性体）、传递函数与状态空间模型、PID/LQR控制器设计。使用 MATLAB API 构建模型（add_block, add_line, set_param）。仿真配置使用 sim() 命令。`,
   icon: 'Boxes',
   color: '#d4442a',  // Simulink 橙红
   permissionMode: 'bypassPermissions',
