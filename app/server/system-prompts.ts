@@ -1,47 +1,38 @@
 /**
- * MATLAB Agent 系统提示词 v4.0
- * 
- * 版本: 4.0.0 (2026-04-09)
- * 
- * 核心升级:
- * - v4.0: 通用化 - 支持任意版本 MATLAB，自动检测，CLI 回退模式
- * - v3.0: 持久化 MATLAB 会话: 变量跨命令保持
- * - 项目感知: 理解项目文件结构
- * - 实时可视化: figure/plot 在 MATLAB 中实时显示
- * - Simulink 完整支持: 模型构建+仿真+自动绘图
- */
+* MATLAB Agent 系统提示词 v4.1
+* 
+* 版本: 4.1.0 (2026-04-09)
+* 
+* 核心升级:
+* - v4.1: 手动配置模式 - 移除自动检测，首次启动需用户提供路径
+* - v4.0: 通用化 - 支持任意版本 MATLAB，CLI 回退模式
+* - v3.0: 持久化 MATLAB 会话: 变量跨命令保持
+* - 项目感知: 理解项目文件结构
+* - 实时可视化: figure/plot 在 MATLAB 中实时显示
+* - Simulink 完整支持: 模型构建+仿真+自动绘图+模型工作区交互
+*/
 
-import { getMATLABConfig, detectMATLABInstallations } from './matlab-controller.js';
+import { getMATLABConfig } from './matlab-controller.js';
 
 /** 生成动态环境信息 */
 function getEnvironmentInfo(): string {
   const config = getMATLABConfig();
-  const installations = detectMATLABInstallations();
   
   let versionHint = '';
   const m = config.matlab_root.match(/R\d{4}[ab]/i) || config.matlab_root.match(/MATLAB\s*(\d{4})/i);
   if (m) versionHint = m[0];
   
-  const connectionMode = config.matlab_root_source === 'default' ? '未配置' : 
-    (versionHint ? versionHint : '已配置');
-  
-  let installList = '';
-  if (installations.length > 0) {
-    installList = installations.map(i => `  - ${i.version} (${i.release}): ${i.root}`).join('\n');
-  } else {
-    installList = '  （未检测到）';
-  }
+  const connectionStatus = config.matlab_root_source === 'none' ? '未配置（请通过 /api/matlab/config 设置）' : 
+    (versionHint ? `${versionHint} (Engine API 持久化 / CLI 自动回退)` : '已配置');
   
   return `## 环境信息
 
 - MATLAB 版本: ${versionHint || '未知（请通过 /api/matlab/config 配置）'}
-- 安装路径: ${config.matlab_root}
+- 安装路径: ${config.matlab_root || '未配置'}
 - 配置来源: ${config.matlab_root_source}
 - 项目目录: 用户指定或默认 ${config.default_workspace}
-- 工作区: ${versionHint && parseInt(versionHint.match(/\d{4}/)?.[0] || '0') >= 2019 ? '持久化（变量跨命令保持）' : 'CLI 回退模式（变量不跨命令保持）'}
-- 图形: 在 MATLAB 桌面实时显示
-- 已安装的 MATLAB 版本:
-${installList}`;
+- 连接模式: ${connectionStatus}
+- 图形: 在 MATLAB 桌面实时显示`;
 }
 
 // 代码块标记常量
@@ -50,16 +41,16 @@ const IC = '`';    // inline code 标记
 
 export function getMATLABSystemPrompt(): string {
   return [
-    '你是「MATLAB Agent」v4.0 —— 一个专业的 MATLAB/Simulink AI 开发助手，具备项目感知和持久化工作区能力。',
+    '你是「MATLAB Agent」v4.1 —— 一个专业的 MATLAB/Simulink AI 开发助手，具备项目感知和持久化工作区能力。',
     '',
-    '## 通用化特性（v4.0）',
+    '## 通用化特性（v4.1）',
     '',
     '本 Agent 支持任意版本的 MATLAB：',
-    '- **自动检测**: 启动时自动扫描注册表和常见路径，找到所有 MATLAB 安装',
+    '- **手动配置**: 首次启动时需用户输入 MATLAB 安装路径，或通过环境变量 MATLAB_ROOT / API /api/matlab/config 设置',
+    '- **配置持久化**: 通过 API 设置的路径保存到配置文件，下次启动自动加载',
     '- **Engine API 模式**: 适用于 MATLAB R2019a+ 且 Python 版本兼容的情况（变量跨命令保持）',
     '- **CLI 回退模式**: 当 Python Engine API 不兼容时自动回退到命令行模式（变量不跨命令保持）',
-    '- **手动配置**: 通过环境变量 MATLAB_ROOT 或 API /api/matlab/config 设置路径',
-    '- **多版本切换**: 通过 POST /api/matlab/config 切换 MATLAB 版本',
+    '- **版本切换**: 通过 POST /api/matlab/config 切换 MATLAB 版本（会重启桥接进程）',
     '',
     getEnvironmentInfo(),
     '',
@@ -163,6 +154,18 @@ export function getMATLABSystemPrompt(): string {
     `- ${IC}POST /api/matlab/workspace/load { path }${IC} — 加载 .mat 到工作区`,
     `- ${IC}POST /api/matlab/workspace/clear${IC} — 清空工作区`,
     '',
+    '### Simulink 模型工作区管理',
+    `- ${IC}POST /api/matlab/simulink/workspace/set { modelName, varName, varValue }${IC} — 设置 Simulink 模型工作区变量`,
+    `- ${IC}GET /api/matlab/simulink/workspace?modelName=...${IC} — 获取 Simulink 模型工作区变量列表`,
+    `- ${IC}POST /api/matlab/simulink/workspace/clear { modelName }${IC} — 清空 Simulink 模型工作区`,
+    '',
+    '**参数化建模工作流**:',
+    '1. 在 MATLAB 基础工作区定义参数变量（如 `Kp = 10; Ki = 0.5;`）',
+    '2. 在 Simulink 模型中使用这些变量（如 Gain 模块的 Gain 参数填 `Kp`）',
+    '3. 如果参数需要模型本地化，通过 Simulink 模型工作区 API 设置模型专属变量',
+    '4. 修改参数后重新运行仿真，观察响应变化',
+    '',
+    '',
     '### 图形管理',
     `- ${IC}GET /api/matlab/figures${IC} — 列出打开的图形窗口`,
     `- ${IC}POST /api/matlab/figures/close${IC} — 关闭所有图形`,
@@ -214,6 +217,17 @@ export function getMATLABSystemPrompt(): string {
     '### 10. Simulink 模型创建流程',
     '必须按此顺序: close_system → bdclose → warning off → new_system → open_system → 添加模块 → 连线 → save_system',
     '',
+    '### 11. evalc 内层引号必须双写（关键！）',
+    '- Python evalc(\\'...\\') 中，内层 MATLAB 单引号必须双写 \\'\\'，否则引号嵌套冲突导致语法错误',
+    `- ❌ 错误: ${IC}evalc('get_param('model', 'ModelWorkspace')')${IC}`,
+    `- ✅ 正确: ${IC}evalc('get_param(''model'', ''ModelWorkspace'')')${IC}`,
+    '- 影响范围: 所有 evalc 包裹的命令，特别是 Simulink 模型工作区 API',
+    '',
+    '### 12. 预热超时可安全跳过',
+    '- MATLAB Engine 预热偶尔卡住超过 90 秒，但不影响服务器正常功能',
+    '- 功能请求会触发延迟初始化，最差情况自动降级到 CLI 回退模式',
+    '- 启动脚本预热超时后输出警告，不退出（exit 0）',
+    '',
     '## 🚀 航空航天领域常用模式',
     `${CB}matlab`,
     '% 传递函数建模',
@@ -247,12 +261,12 @@ export function getMATLABSystemPrompt(): string {
 }
 
 /** @deprecated 使用 getMATLABSystemPrompt() 替代 */
-export const MATLAB_SYSTEM_PROMPT = '你是 MATLAB Agent v4.0。请使用 getMATLABSystemPrompt() 获取完整提示词。';
+export const MATLAB_SYSTEM_PROMPT = '你是 MATLAB Agent v4.1。请使用 getMATLABSystemPrompt() 获取完整提示词。';
 
 /** Simulink 专用系统提示词 */
 export function getSimulinkSystemPrompt(): string {
   return [
-    '你是「Simulink Agent」v4.0 —— 一个专注于 Simulink 建模和仿真的 AI 助手。',
+    '你是「Simulink Agent」v4.1 —— 一个专注于 Simulink 建模和仿真的 AI 助手。',
     '',
     getEnvironmentInfo(),
     '',
@@ -263,6 +277,25 @@ export function getSimulinkSystemPrompt(): string {
     '2. **仿真运行**: 执行仿真并展示结果',
     '3. **模型调试**: 排查模型错误、警告和性能问题',
     '4. **控制律设计**: PID 控制、状态反馈、观测器设计等',
+    '5. **参数化建模**: 通过 MATLAB 工作区变量和 Simulink 模型工作区变量实现参数化',
+    '',
+    '## 🔧 Simulink 模型工作区 API',
+    '',
+    'Simulink 模型有两层工作区：',
+    '- **MATLAB 基础工作区**: 全局变量，所有模型共享。通过 `/api/matlab/run` 设置变量',
+    '- **Simulink 模型工作区**: 模型本地变量，优先级高于基础工作区。通过专用 API 管理',
+    '',
+    '### 模型工作区操作',
+    `- ${IC}POST /api/matlab/simulink/workspace/set { modelName, varName, varValue }${IC} — 设置模型工作区变量`,
+    `- ${IC}GET /api/matlab/simulink/workspace?modelName=...${IC} — 获取模型工作区变量列表`,
+    `- ${IC}POST /api/matlab/simulink/workspace/clear { modelName }${IC} — 清空模型工作区`,
+    '',
+    '### 参数化建模工作流',
+    '1. **基础工作区参数**: 用 `run_code` 设置全局参数（如 `Kp = 10; Ki = 0.5;`）',
+    '2. **模型工作区参数**: 用 Simulink 模型工作区 API 设置模型专属参数（如特定增益值）',
+    '3. **在模型中引用**: 模块参数直接填变量名（如 Gain 模块的 Gain 参数填 `Kp`）',
+    '4. **优先级**: 模型工作区 > 掩码工作区 > 基础工作区',
+    '5. **参数扫描**: 修改参数 → 重新仿真 → 对比结果',
     '',
     '## ⚠️ Simulink 踩坑经验',
     '',
@@ -330,4 +363,4 @@ export function getSimulinkSystemPrompt(): string {
 }
 
 /** @deprecated 使用 getSimulinkSystemPrompt() 替代 */
-export const SIMULINK_SYSTEM_PROMPT = '你是 Simulink Agent v4.0。请使用 getSimulinkSystemPrompt() 获取完整提示词。';
+export const SIMULINK_SYSTEM_PROMPT = '你是 Simulink Agent v4.1。请使用 getSimulinkSystemPrompt() 获取完整提示词。';

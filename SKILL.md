@@ -27,7 +27,7 @@
 4. **工作区管理**: 获取/保存/加载/清空工作区变量
 5. **Simulink**: 创建/打开/运行 Simulink 模型
 6. **图形管理**: 列出/关闭图形窗口
-7. **配置管理**: 获取/设置 MATLAB 版本，列出安装版本，重新检测
+7. **配置管理**: 获取/设置 MATLAB 路径，配置持久化
 
 ## 使用方式
 
@@ -49,7 +49,7 @@ if ($old) { $old -match '\d+$' | ForEach-Object { Stop-Process -Id $Matches[0] -
 cd "$env:USERPROFILE\.workbuddy\skills\matlab-agent\app"
 cmd /c "start /B npx tsx server/index.ts > $env:TEMP\matlab-agent-out.log 2>&1"
 
-# 3. 轮询健康检查，等待 MATLAB Engine 预热完成（最多 120 秒）
+# 3. 轮询健康检查（预热超时不是致命错误，服务器仍可用）
 $maxWait = 120; $elapsed = 0
 while ($elapsed -lt $maxWait) {
   Start-Sleep -Seconds 5; $elapsed += 5
@@ -60,6 +60,7 @@ while ($elapsed -lt $maxWait) {
     Write-Host "Waiting... warmup=$($j.matlab.warmup) ($elapsed s)"
   } catch { Write-Host "Server not up yet... ($elapsed s)" }
 }
+# 预热超时不影响功能，跳过即可
 ```
 
 #### 方式 B：使用启动脚本（一键启动）
@@ -116,6 +117,9 @@ curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: applicati
 | POST | `/api/matlab/simulink/create` | 创建 Simulink 模型 |
 | POST | `/api/matlab/simulink/run` | 运行仿真 |
 | POST | `/api/matlab/simulink/open` | 打开模型 |
+| POST | `/api/matlab/simulink/workspace/set` | 设置模型工作区变量 |
+| GET | `/api/matlab/simulink/workspace?modelName=...` | 获取模型工作区变量 |
+| POST | `/api/matlab/simulink/workspace/clear` | 清空模型工作区 |
 | GET | `/api/matlab/figures` | 列出图形 |
 | POST | `/api/matlab/figures/close` | 关闭所有图形 |
 
@@ -196,6 +200,39 @@ curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: applicati
 - **端口冲突**: 启动前先 `netstat -ano | findstr ":3000" | findstr "LISTENING"` 检查，有则 kill
 - **一键脚本**: `start-matlab-agent.ps1` 封装了完整流程
 
+### 15. 预热超时可安全跳过 (v4.1 经验)
+- **现象**: MATLAB Engine 预热偶尔卡在 `warming_engine` 超过 90 秒仍未 `ready`
+- **根因**: Engine 启动受系统负载、MATLAB 版本、Python 兼容性等影响，预热时间不可控
+- **策略**: 预热超时后**不退出脚本**（exit 0），服务器仍在运行，功能请求会触发延迟初始化
+- **启动脚本**: `start-matlab-agent.ps1` 预热超时后输出黄色警告，但 `exit 0`
+- **API 层**: Node.js `index.ts` 预热超时标记 `warmupStatus = 'failed'`，但服务器继续运行
+- **Python 层**: `matlab_bridge.py` 的 `get_engine()` 带线程超时，超时自动切换到 CLI 回退模式
+- **结论**: 预热卡住不影响智能体正常功能，最差情况自动降级到 CLI 模式
+
+### 16. evalc 内层引号必须双写 (v4.1 血泪教训)
+- **问题**: `evalc('get_param('model', 'ModelWorkspace')')` 导致 MATLAB 语法错误
+- **根因**: Python `evalc('...')` 中内层 MATLAB 单引号会被 Python 识别为字符串结束，导致引号嵌套冲突
+- **修复**: 内层所有 MATLAB 单引号必须双写 `''`
+  - ❌ 错误：`evalc('get_param('model', 'ModelWorkspace')')`
+  - ✅ 正确：`evalc('get_param(''model'', ''ModelWorkspace'')')`
+  - Python 看到的是 `evalc('get_param(''model'', ''ModelWorkspace'')')`
+  - MATLAB 看到的是 `get_param('model', 'ModelWorkspace')`
+- **影响范围**: 所有使用 evalc 包裹的 MATLAB 命令，特别是 Simulink 模型工作区 API
+- **防御性处理**: model_name 中可能包含单引号的情况也需要双写：`mn = model_name.replace("'", "''")`
+
+### 17. POST /api/matlab/config 不能阻塞式重启桥接 (v4.1 修复)
+- **问题**: 二次调用 `POST /api/matlab/config` 同一路径返回 500
+- **根因**: `restartBridge()` 被直接 `await`，Engine 已在运行时重启耗时 30+ 秒，导致 HTTP 响应超时
+- **修复**: `restartBridge()` 改为后台异步 `.catch()`，不阻塞 HTTP 响应
+  - ❌ 旧代码：`await matlab.restartBridge();`
+  - ✅ 新代码：`matlab.restartBridge().catch(err => console.warn(...))`
+- **注意**: `restartBridge()` 为后台异步操作，二次调用同一路径不会重启（因为路径未变）
+
+### 18. PowerShell 向 API 发送中文路径需 UTF-8 编码 (v4.1 注意点)
+- **问题**: PowerShell `Invoke-RestMethod` 默认编码可能导致中文路径乱码
+- **修复**: 使用 `[System.Text.Encoding]::UTF8.GetBytes($json)` 发送 body
+- **路径含括号**: `D:\Program Files(x86)\...` 中 `(x86)` 可能被 PowerShell 解释为表达式，需用引号包裹
+
 ## 性能指标
 
 | 操作 | 耗时 | 说明 |
@@ -215,8 +252,8 @@ matlab-agent/
 ├── app/                        # 完整应用源码
 │   ├── server/
 │   │   ├── index.ts            # Express 服务器入口（含 v4.0 config API）
-│   │   ├── matlab-controller.ts # MATLAB 控制器（手动配置 + 常驻桥接）
-│   │   ├── system-prompts.ts   # AI 系统提示词（动态环境信息注入）
+│   │   ├── matlab-controller.ts # MATLAB 控制器（手动配置 + 常驻桥接 + 命令队列）
+│   │   ├── system-prompts.ts   # AI 系统提示词（动态环境信息 + Simulink 工作区指导）
 │   │   └── db.ts               # SQLite 数据库
 │   ├── matlab-bridge/
 │   │   └── matlab_bridge.py    # Python-MATLAB 桥接（Engine + CLI 双模式）

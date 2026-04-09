@@ -26,6 +26,10 @@
 16. [Python Engine 版本不兼容](#16-python-engine-版本不兼容)
 17. [MATLAB 路径未配置](#17-matlab-路径未配置)
 18. [阻塞式启动导致超时](#18-阻塞式启动导致超时)
+19. [evalc 内层引号未双写导致语法错误](#19-evalc-内层引号未双写导致语法错误)
+20. [预热超时但不影响功能](#20-预热超时但不影响功能)
+21. [POST /api/matlab/config 二次调用返回 500](#21-post-apimatlabconfig-二次调用返回-500)
+22. [PowerShell 发送中文路径 API 请求乱码](#22-powershell-发送中文路径-api-请求乱码)
 
 ---
 
@@ -426,3 +430,83 @@ cmd /c "start /B npx tsx server/index.ts"
 6. ✅ 脚本文件路径是否含中文？
 7. ✅ 函数名是否以下划线开头？
 8. ✅ 查看 `/api/health` 中 `warmup` 字段是否为 `ready`
+
+---
+
+## 19. evalc 内层引号未双写导致语法错误 (v4.1 血泪教训)
+
+### 症状
+```json
+{"status":"error","message":"MATLAB 执行错误: Error: Expected end of expression."}
+```
+Simulink 模型工作区 API（get/set/clear）调用返回 MATLAB 语法错误。
+
+### 根因
+Python `evalc('...')` 中，内层 MATLAB 单引号会被 Python 识别为字符串结束符，导致引号嵌套冲突。
+- ❌ 错误：`evalc('get_param('model', 'ModelWorkspace')')` → MATLAB 看到引号提前闭合
+- ✅ 正确：`evalc('get_param(''model'', ''ModelWorkspace'')')` → MATLAB 看到 `get_param('model', 'ModelWorkspace')`
+
+### 解决方案
+在 `matlab_bridge.py` 中，所有 evalc 包裹的命令，内层单引号必须双写 `''`：
+- model_name 中可能包含单引号时也需要双写：`mn = model_name.replace("'", "''")`
+- 字符串字面量如 `'ModelWorkspace'` 写成 `''ModelWorkspace''`
+
+### 影响
+v4.1 的 Simulink 模型工作区 API（`get_simulink_workspace_vars`、`set_simulink_workspace_var`）已修复此问题。
+
+---
+
+## 20. 预热超时但不影响功能 (v4.1 经验)
+
+### 症状
+启动脚本显示 `⚠️ Warmup timeout after 120s`，但 `warmup` 状态仍为 `warming_engine`。
+
+### 根因
+MATLAB Engine 启动受系统负载、MATLAB 版本、Python 兼容性等影响，预热时间不可控。
+
+### 解决方案
+- **预热超时不是致命错误**：服务器仍在运行，功能请求会触发延迟初始化
+- **启动脚本**：`start-matlab-agent.ps1` 预热超时后输出黄色警告，`exit 0`
+- **API 层**：Node.js 预热超时标记 `warmupStatus = 'failed'`，但服务器继续运行
+- **Python 层**：`get_engine()` 带线程超时，超时自动切换到 CLI 回退模式
+- **最差情况**：自动降级到 CLI 模式（变量不跨命令保持）
+
+---
+
+## 21. POST /api/matlab/config 二次调用返回 500 (v4.1 修复)
+
+### 症状
+首次调用 `POST /api/matlab/config` 成功，但再次调用同一路径返回 500 错误。
+
+### 根因
+`restartBridge()` 被直接 `await`，Engine 已在运行时重启耗时 30+ 秒，导致 HTTP 响应超时。
+
+### 解决方案
+`restartBridge()` 改为后台异步 `.catch()`，不阻塞 HTTP 响应：
+```typescript
+// ❌ 旧代码
+await matlab.restartBridge();
+// ✅ 新代码
+matlab.restartBridge().catch(err => console.warn(...));
+```
+
+### 注意
+二次调用同一路径不会重启桥接（因为路径未变），restartBridge 是幂等的。
+
+---
+
+## 22. PowerShell 发送中文路径 API 请求乱码 (v4.1 注意点)
+
+### 症状
+通过 PowerShell `Invoke-RestMethod` 发送含中文或特殊字符（如 `(x86)`）的路径时，MATLAB 配置 API 接收到的路径乱码。
+
+### 解决方案
+使用 `[System.Text.Encoding]::UTF8.GetBytes($json)` 发送 body：
+```powershell
+$body = @{ matlabRoot = $path } | ConvertTo-Json -Compress
+Invoke-RestMethod -Uri "http://localhost:3000/api/matlab/config" `
+  -Method Post -ContentType "application/json" `
+  -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```
+
+路径含 `(x86)` 时需注意 PowerShell 可能将括号解释为表达式，确保路径用引号包裹。

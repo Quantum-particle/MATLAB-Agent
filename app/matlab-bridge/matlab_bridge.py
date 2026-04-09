@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-MATLAB Bridge v4.0 - 通用化 MATLAB 会话服务
+MATLAB Bridge v4.1 - 通用化 MATLAB 会话服务
 
 运行模式: 作为常驻进程运行，通过 stdin/stdout JSON 行协议通信。
 Node.js 启动此进程后保持运行，通过管道发送命令、接收结果。
@@ -13,13 +13,16 @@ Node.js 启动此进程后保持运行，通过管道发送命令、接收结果
   输入: {"action": "run_code", "params": {"code": "x = 42;"}}
   输出: {"status": "ok", "stdout": "x = 42", "open_figures": 0}
 
+v4.1 变更:
+  - 移除自动检测逻辑（注册表扫描 + 常见路径扫描）
+  - MATLAB_ROOT 仅从环境变量读取（由 Node.js 端传入）
+  - 与 Node.js 端 v4.1 行为一致：手动配置优先
+
 v4.0 通用化升级:
-  - MATLAB_ROOT 不再硬编码，支持环境变量/注册表/常见路径自动检测
-  - CLI 回退模式：当 Python Engine API 不兼容时（如 R2016a + Python 3.11），
-    自动切换到 matlab -batch / matlab -r 命令行模式
+  - CLI 回退模式：当 Python Engine API 不兼容时，自动切换到 matlab -batch / matlab -r
   - 多版本 MATLAB 支持（通过 MATLAB_ROOT 环境变量动态选择）
 
-版本: 4.0.0 (2026-04-09)
+版本: 4.1.0 (2026-04-09)
 """
 
 import sys
@@ -45,141 +48,18 @@ if sys.stderr.encoding != 'utf-8':
     except: pass
 
 
-# ============= MATLAB_ROOT 自动检测 =============
+# ============= MATLAB_ROOT 配置（v4.1: 仅从环境变量读取）============
 
-def _detect_matlab_root():
-    """自动检测 MATLAB 安装路径
+def _get_matlab_root():
+    """获取 MATLAB_ROOT（v4.1: 仅从环境变量读取，不再自动检测）
     
-    优先级:
+    MATLAB_ROOT 由 Node.js 端通过环境变量传入，优先级：
     1. 环境变量 MATLAB_ROOT（由 Node.js 传入或用户手动设置）
-    2. Windows 注册表扫描
-    3. 常见安装路径扫描
+    2. 通过 set_matlab_root 命令动态设置
     """
-    # 1. 环境变量
     env_root = os.environ.get('MATLAB_ROOT', '')
     if env_root and os.path.exists(env_root):
         return env_root
-    
-    # 2. Windows 注册表扫描
-    if sys.platform == 'win32':
-        try:
-            import winreg
-            # 扫描 HKLM\SOFTWARE\MathWorks\MATLAB\<version>\<release>
-            key_path = r"SOFTWARE\MathWorks\MATLAB"
-            access_flag = winreg.KEY_READ | winreg.KEY_WOW64_64KEY
-            
-            try:
-                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, access_flag)
-            except FileNotFoundError:
-                # 尝试 32-bit 注册表视图
-                try:
-                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_READ)
-                except FileNotFoundError:
-                    key = None
-            
-            if key:
-                installations = []
-                i = 0
-                while True:
-                    try:
-                        version_name = winreg.EnumKey(key, i)
-                        i += 1
-                        # 每个 version_name 类似 "23.2" 或 "9.0"
-                        try:
-                            version_key = winreg.OpenKey(key, version_name, 0, access_flag)
-                            j = 0
-                            while True:
-                                try:
-                                    release_name = winreg.EnumKey(version_key, j)
-                                    j += 1
-                                    try:
-                                        release_key = winreg.OpenKey(version_key, release_name, 0, access_flag)
-                                        try:
-                                            matlab_root, _ = winreg.QueryValueEx(release_key, "MATLABROOT")
-                                            if matlab_root and os.path.exists(matlab_root):
-                                                exe_path = os.path.join(matlab_root, 'bin', 'matlab.exe')
-                                                if os.path.exists(exe_path):
-                                                    installations.append({
-                                                        'version': version_name,
-                                                        'release': release_name,
-                                                        'root': matlab_root
-                                                    })
-                                        except FileNotFoundError:
-                                            pass
-                                        finally:
-                                            winreg.CloseKey(release_key)
-                                    except:
-                                        pass
-                                except OSError:
-                                    break
-                            winreg.CloseKey(version_key)
-                        except:
-                            pass
-                    except OSError:
-                        break
-                
-                winreg.CloseKey(key)
-                
-                if installations:
-                    # 选择最新版本（version 数字越大越新）
-                    installations.sort(key=lambda x: float(x['version']) if x['version'].replace('.', '').isdigit() else 0, reverse=True)
-                    return installations[0]['root']
-        except ImportError:
-            pass  # winreg 不可用（非 Windows）
-    
-    # 3. 常见安装路径扫描
-    common_roots = [
-        'C:\\Program Files\\MATLAB',
-        'C:\\Program Files (x86)\\MATLAB',
-        'D:\\Program Files\\MATLAB',
-        'D:\\Program Files (x86)\\MATLAB',
-        'C:\\MATLAB',
-        'D:\\MATLAB',
-        # 非标准路径（括号前无空格）
-        'C:\\Program Files(x86)\\MATLAB',
-        'D:\\Program Files(x86)\\MATLAB',
-    ]
-    
-    # 非标准父目录，只匹配 MATLAB 开头的子目录
-    non_standard_parents = [
-        'C:\\Program Files(x86)',
-        'D:\\Program Files(x86)',
-    ]
-    
-    def _is_matlab_dirname(name):
-        """判断目录名是否像 MATLAB 版本目录"""
-        return bool(re.match(r'^R\d{4}[ab]$', name, re.IGNORECASE) or
-                   re.match(r'^MATLAB\s*\d{4}[ab]?$', name, re.IGNORECASE))
-    
-    for root in common_roots:
-        if not os.path.exists(root):
-            continue
-        try:
-            entries = os.listdir(root)
-            # 匹配 R20XXx 格式或 MATLAB+年份 格式，优先选最新
-            matlab_dirs = []
-            for entry in entries:
-                full_path = os.path.join(root, entry)
-                exe_path = os.path.join(full_path, 'bin', 'matlab.exe')
-                if os.path.isdir(full_path) and os.path.exists(exe_path):
-                    if _is_matlab_dirname(entry) or re.match(r'^MATLAB$', entry, re.IGNORECASE):
-                        matlab_dirs.append(entry)
-            
-            if matlab_dirs:
-                # 排序：R20XXb > R20XXa，数字越大越新
-                def sort_key(name):
-                    m = re.match(r'R?(\d{4})([ab])', name, re.IGNORECASE)
-                    if m:
-                        return int(m.group(1)) * 10 + (1 if m.group(2).lower() == 'b' else 0)
-                    m2 = re.match(r'MATLAB\s*(\d{4})', name, re.IGNORECASE)
-                    if m2:
-                        return int(m2.group(1)) * 10
-                    return 0
-                matlab_dirs.sort(key=sort_key, reverse=True)
-                return os.path.join(root, matlab_dirs[0])
-        except:
-            pass
-    
     return None
 
 
@@ -189,7 +69,7 @@ def _detect_matlab_root():
 _connection_mode = None  # 'engine' | 'cli'
 _engine_compatible = None  # 是否已测试过 Engine 兼容性
 
-MATLAB_ROOT = _detect_matlab_root()  # 不再硬编码回退路径；None 表示未检测到
+MATLAB_ROOT = _get_matlab_root()  # v4.1: 仅从环境变量读取，None 表示未配置
 _project_dir = None
 _matlab_engine = None
 _matlab_version = None  # 缓存 MATLAB 版本号
@@ -506,7 +386,7 @@ def set_project_dir(dir_path):
 
 
 def get_project_dir():
-    return _project_dir or os.environ.get('MATLAB_WORKSPACE', 'd:/MATLAB_Workspace/work1')
+    return _project_dir or os.environ.get('MATLAB_WORKSPACE', '')
 
 
 # ============= 项目扫描 =============
@@ -951,6 +831,154 @@ def open_simulink_model(model_name):
         return {"status": "ok", "message": f"CLI 模式下无法打开 Simulink GUI 窗口。模型 '{model_name}' 可通过 run_simulink 执行仿真。", "connection_mode": "cli"}
 
 
+# ============= Simulink 模型工作区（v4.1 新增）=============
+
+def set_simulink_workspace_var(model_name, var_name, var_value):
+    """设置 Simulink 模型工作区变量
+    
+    通过 MATLAB Engine 的 assignin 实现。
+    模型工作区变量优先级高于 MATLAB 基础工作区。
+    注意：MATLAB 引号规则 — Python evalc('...') 中内层单引号需双写 ''
+    """
+    mode = _detect_connection_mode()
+    
+    if mode == 'engine':
+        eng = get_engine()
+        try:
+            # 确保模型已加载
+            try:
+                eng.eval(f"load_system('{model_name}');", nargout=0)
+            except:
+                pass
+            
+            # 使用 evalc 包裹，内层单引号双写避免嵌套冲突
+            # Python: evalc('...') → MATLAB 看到单引号对
+            # 内层 get_param(''model_name'', ...) → MATLAB 看到 get_param('model_name', ...)
+            var_value_safe = str(var_value).replace("'", "''")
+            # 先设置到基础工作区
+            eng.eval(f"assignin('base', '{var_name}', {var_value_safe});", nargout=0)
+            # 再尝试设置到模型工作区
+            try:
+                cmd = (
+                    "evalc('"
+                    f"try, "
+                    f"modelWorkspace = get_param(''{model_name}'', ''ModelWorkspace''); "
+                    f"modelWorkspace.assignin(''{var_name}'', {var_value_safe}); "
+                    f"catch, "
+                    f"end"
+                    "')"
+                )
+                eng.eval(cmd, nargout=0)
+                return {"status": "ok", "message": f"模型 '{model_name}' 工作区变量 '{var_name}' 已设置为 {var_value}", "connection_mode": "engine"}
+            except Exception:
+                return {"status": "ok", "message": f"基础工作区变量 '{var_name}' 已设置为 {var_value}（模型工作区设置失败，已回退到基础工作区）", "connection_mode": "engine"}
+        except Exception as e:
+            return {"status": "error", "message": f"设置变量失败: {str(e)}"}
+    else:
+        # CLI 模式
+        var_value_safe = str(var_value).replace("'", "''")
+        code = f"load_system('{model_name}'); assignin('base', '{var_name}', {var_value_safe}); try, modelWorkspace = get_param('{model_name}', 'ModelWorkspace'); modelWorkspace.assignin('{var_name}', {var_value_safe}); catch, end; close_system('{model_name}', 0);"
+        result = _run_cli_command(code, timeout=60)
+        if result['status'] == 'ok':
+            result['message'] = f"变量 '{var_name}' 已设置为 {var_value}"
+            result['connection_mode'] = 'cli'
+        return result
+
+
+def get_simulink_workspace_vars(model_name):
+    """获取 Simulink 模型工作区变量列表
+    
+    注意：MATLAB 引号规则 — Python evalc('...') 中内层单引号需双写 ''
+    """
+    mode = _detect_connection_mode()
+    
+    if mode == 'engine':
+        eng = get_engine()
+        try:
+            # 确保模型已加载
+            try:
+                eng.eval(f"load_system('{model_name}');", nargout=0)
+            except:
+                pass
+            
+            # 获取模型工作区变量
+            # evalc 内层所有单引号必须双写：''ModelWorkspace'' → MATLAB 看到 'ModelWorkspace'
+            # model_name 中的单引号也双写（防御性处理）
+            mn = model_name.replace("'", "''")
+            cmd = ("evalc('"
+                   "try, "
+                   f"ws = get_param(''{mn}'', ''ModelWorkspace''); "
+                   "vars = ws.whos; "
+                   "for i = 1:length(vars), "
+                   "  fprintf(''%s|%s|%s\\n'', vars(i).name, vars(i).class, mat2str(vars(i).size)); "
+                   "end, "
+                   "catch ME, "
+                   "  fprintf(''Error: %s\\n'', ME.message); "
+                   "end"
+                   "')")
+            output = eng.eval(cmd, nargout=1)
+            variables = []
+            if output:
+                for line in str(output).strip().split('\n'):
+                    line = line.strip()
+                    if line.startswith('Error:'):
+                        return {"status": "error", "message": line}
+                    if '|' in line:
+                        parts = line.split('|')
+                        if len(parts) >= 3:
+                            variables.append({"name": parts[0].strip(), "class": parts[1].strip(), "size": parts[2].strip()})
+            return {"status": "ok", "model_name": model_name, "variables": variables, "connection_mode": "engine"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    else:
+        # CLI 模式
+        code = (
+            f"load_system('{model_name}'); "
+            f"try, ws = get_param('{model_name}', 'ModelWorkspace'); vars = ws.whos; "
+            f"for i = 1:length(vars), fprintf('%s|%s|%s\\n', vars(i).name, vars(i).class, mat2str(vars(i).size)); end, "
+            f"catch ME, fprintf('Error: %s\\n', ME.message); end; "
+            f"close_system('{model_name}', 0);"
+        )
+        result = _run_cli_command(code, timeout=60)
+        if result['status'] == 'ok':
+            variables = []
+            for line in result['stdout'].strip().split('\n'):
+                line = line.strip()
+                if line.startswith('Error:'):
+                    return {"status": "error", "message": line}
+                if '|' in line:
+                    parts = line.split('|')
+                    if len(parts) >= 3:
+                        variables.append({"name": parts[0].strip(), "class": parts[1].strip(), "size": parts[2].strip()})
+            return {"status": "ok", "model_name": model_name, "variables": variables, "connection_mode": "cli"}
+        return result
+
+
+def clear_simulink_workspace(model_name):
+    """清空 Simulink 模型工作区"""
+    mode = _detect_connection_mode()
+    
+    if mode == 'engine':
+        eng = get_engine()
+        try:
+            try:
+                eng.eval(f"load_system('{model_name}');", nargout=0)
+            except:
+                pass
+            
+            eng.eval(f"ws = get_param('{model_name}', 'ModelWorkspace'); ws.clear;", nargout=0)
+            return {"status": "ok", "message": f"模型 '{model_name}' 工作区已清空", "connection_mode": "engine"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    else:
+        code = f"load_system('{model_name}'); try, ws = get_param('{model_name}', 'ModelWorkspace'); ws.clear; catch, end; close_system('{model_name}', 0);"
+        result = _run_cli_command(code, timeout=60)
+        if result['status'] == 'ok':
+            result['message'] = f"模型 '{model_name}' 工作区已清空"
+            result['connection_mode'] = 'cli'
+        return result
+
+
 # ============= 图形 =============
 def list_figures():
     mode = _detect_connection_mode()
@@ -985,16 +1013,15 @@ def close_all_figures():
 def check_installation():
     matlab_exe = _get_matlab_exe()
     checks = {
-        "matlab_root_exists": os.path.exists(MATLAB_ROOT),
-        "matlab_exe_exists": os.path.exists(matlab_exe),
-        "engine_path_exists": os.path.exists(os.path.join(MATLAB_ROOT, "extern", "engines", "python")),
+        "matlab_root_exists": os.path.exists(MATLAB_ROOT) if MATLAB_ROOT else False,
+        "matlab_exe_exists": os.path.exists(matlab_exe) if MATLAB_ROOT else False,
+        "engine_path_exists": os.path.exists(os.path.join(MATLAB_ROOT, "extern", "engines", "python")) if MATLAB_ROOT else False,
         "python_version": sys.version,
         "matlab_root": MATLAB_ROOT,
         "matlab_exe": matlab_exe,
         "project_dir": _project_dir,
         "engine_active": _matlab_engine is not None,
         "connection_mode": _connection_mode or "unknown",
-        "detected_installations": _get_detected_installations(),
     }
     
     # 测试 Engine API 兼容性
@@ -1013,96 +1040,6 @@ def check_installation():
     checks["status"] = "ok" if all_ok else "warning"
     return checks
 
-
-def _get_detected_installations():
-    """扫描所有已安装的 MATLAB 版本"""
-    installations = []
-    
-    # 注册表扫描
-    if sys.platform == 'win32':
-        try:
-            import winreg
-            key_path = r"SOFTWARE\MathWorks\MATLAB"
-            access_flag = winreg.KEY_READ | winreg.KEY_WOW64_64KEY
-            
-            try:
-                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, access_flag)
-            except FileNotFoundError:
-                try:
-                    key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path, 0, winreg.KEY_READ)
-                except FileNotFoundError:
-                    key = None
-            
-            if key:
-                i = 0
-                while True:
-                    try:
-                        version_name = winreg.EnumKey(key, i)
-                        i += 1
-                        try:
-                            version_key = winreg.OpenKey(key, version_name, 0, access_flag)
-                            j = 0
-                            while True:
-                                try:
-                                    release_name = winreg.EnumKey(version_key, j)
-                                    j += 1
-                                    try:
-                                        release_key = winreg.OpenKey(version_key, release_name, 0, access_flag)
-                                        try:
-                                            matlab_root, _ = winreg.QueryValueEx(release_key, "MATLABROOT")
-                                            if matlab_root and os.path.exists(matlab_root):
-                                                installations.append({
-                                                    'version': version_name,
-                                                    'release': release_name,
-                                                    'root': matlab_root,
-                                                    'exe_exists': os.path.exists(os.path.join(matlab_root, 'bin', 'matlab.exe'))
-                                                })
-                                        except FileNotFoundError:
-                                            pass
-                                        finally:
-                                            winreg.CloseKey(release_key)
-                                    except:
-                                        pass
-                                except OSError:
-                                    break
-                            winreg.CloseKey(version_key)
-                        except:
-                            pass
-                    except OSError:
-                        break
-                winreg.CloseKey(key)
-        except ImportError:
-            pass
-    
-    # 常见路径扫描
-    common_roots = [
-        'C:\\Program Files\\MATLAB',
-        'C:\\Program Files (x86)\\MATLAB',
-        'D:\\Program Files\\MATLAB',
-        'D:\\Program Files (x86)\\MATLAB',
-        'C:\\MATLAB',
-        'D:\\MATLAB',
-    ]
-    
-    for root in common_roots:
-        if not os.path.exists(root):
-            continue
-        try:
-            for entry in os.listdir(root):
-                full_path = os.path.join(root, entry)
-                exe_path = os.path.join(full_path, 'bin', 'matlab.exe')
-                if os.path.isdir(full_path) and os.path.exists(exe_path):
-                    if not any(inst['root'] == full_path for inst in installations):
-                        installations.append({
-                            'version': entry,
-                            'release': entry,
-                            'root': full_path,
-                            'exe_exists': True
-                        })
-        except:
-            pass
-    
-    return installations
 
 
 # ============= 命令分发 =============
@@ -1128,17 +1065,18 @@ def handle_command(cmd_data: dict):
         "create_simulink": lambda: create_simulink_model(params.get("model_name", ""), params.get("model_path")),
         "run_simulink": lambda: run_simulink(params.get("model_name", ""), params.get("stop_time", "10")),
         "open_simulink": lambda: open_simulink_model(params.get("model_name", "")),
+        "set_simulink_workspace": lambda: set_simulink_workspace_var(params.get("model_name", ""), params.get("var_name", ""), params.get("var_value", "")),
+        "get_simulink_workspace": lambda: get_simulink_workspace_vars(params.get("model_name", "")),
+        "clear_simulink_workspace": lambda: clear_simulink_workspace(params.get("model_name", "")),
         "list_figures": lambda: list_figures(),
         "close_figures": lambda: close_all_figures(),
         "get_config": lambda: _get_config(),
         "set_matlab_root": lambda: _set_matlab_root(params.get("root", "")),
-        "detect_installations": lambda: detect_matlab_installations(),
     }
     
     # 这些命令不需要 MATLAB 就能运行
     NO_MATLAB_NEEDED = {"check", "set_project", "scan_project", "read_m_file", 
-                         "read_mat_file", "read_simulink", "get_config", "set_matlab_root",
-                         "detect_installations"}
+                         "read_mat_file", "read_simulink", "get_config", "set_matlab_root"}
     
     # 如果 MATLAB 不可用，只允许不需要 MATLAB 的命令
     if action not in NO_MATLAB_NEEDED and action not in {"start", "stop"}:

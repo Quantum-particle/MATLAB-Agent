@@ -320,6 +320,46 @@ app.post("/api/matlab/simulink/open", async (req, res) => {
   }
 });
 
+// ============= Simulink 模型工作区 API（v4.1 新增）=============
+
+// 设置 Simulink 模型工作区变量
+app.post("/api/matlab/simulink/workspace/set", async (req, res) => {
+  const { modelName, varName, varValue } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供模型名称" });
+  if (!varName) return res.status(400).json({ error: "请提供变量名" });
+  if (varValue === undefined) return res.status(400).json({ error: "请提供变量值" });
+  try {
+    const result = await matlab.setSimulinkWorkspaceVar(modelName, varName, varValue);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 获取 Simulink 模型工作区变量列表
+app.get("/api/matlab/simulink/workspace", async (req, res) => {
+  const modelName = req.query.modelName as string;
+  if (!modelName) return res.status(400).json({ error: "请提供模型名称" });
+  try {
+    const result = await matlab.getSimulinkWorkspaceVars(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 清空 Simulink 模型工作区
+app.post("/api/matlab/simulink/workspace/clear", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供模型名称" });
+  try {
+    const result = await matlab.clearSimulinkWorkspace(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
 // ============= v4.0 通用化 API =============
 
 // 获取 MATLAB 配置
@@ -340,8 +380,10 @@ app.post("/api/matlab/config", async (req, res) => {
   try {
     const result = matlab.setMATLABRoot(matlabRoot);
     if (result.success) {
-      // 重启桥接进程以应用新的 MATLAB_ROOT
-      await matlab.restartBridge();
+      // 后台异步重启桥接进程，不阻塞响应
+      matlab.restartBridge().catch((err: any) => {
+        console.warn('[MATLAB Config] Bridge restart failed (will retry on next command):', err?.message || err);
+      });
     }
     res.json(result);
   } catch (error: any) {

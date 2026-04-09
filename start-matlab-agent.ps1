@@ -176,10 +176,11 @@ if ($matlabNotConfigured) {
 }
 
 if (-not $engineReady -and -not $matlabNotConfigured) {
-    Write-Host "[MATLAB Agent] ⚠️ Timeout after ${MaxWaitSeconds}s. Server may still be warming up." -ForegroundColor Red
-    Write-Host "[MATLAB Agent] Check log: $logFile" -ForegroundColor Yellow
-    Write-Host "[MATLAB Agent] Try: Invoke-WebRequest http://localhost:$Port/api/health" -ForegroundColor Yellow
-    exit 1
+    Write-Host "[MATLAB Agent] ⚠️ Warmup timeout after ${MaxWaitSeconds}s, but server is running and functional." -ForegroundColor Yellow
+    Write-Host "[MATLAB Agent] MATLAB Engine may still be starting in the background." -ForegroundColor Yellow
+    Write-Host "[MATLAB Agent] Check log: $logFile" -ForegroundColor DarkGray
+    Write-Host "[MATLAB Agent] Status: Invoke-WebRequest http://localhost:$Port/api/health" -ForegroundColor DarkGray
+    # 不 exit 1 — 预热超时不影响服务器正常功能，功能请求会触发延迟初始化
 }
 
 # 5. 输出连接信息

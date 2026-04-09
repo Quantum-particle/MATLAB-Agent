@@ -12,8 +12,19 @@ app/data/*.db-wal
 app/data/*.json
 app/data/logs/
 
+# Root-level data (local config with user paths)
+data/
+
 # Keep data directory structure
 !app/data/.gitkeep
+
+# Test fixtures (local only, not for distribution)
+app/matlab-bridge/test_ws_model.slx
+app/matlab-bridge/workspace.mat
+
+# Python cache
+__pycache__/
+*.pyc
 
 # Environment variables
 .env

@@ -16,7 +16,7 @@ export const APP_CONFIG = {
   description: 'AI 驱动的 MATLAB/Simulink 开发助手',
   
   /** 版本号 */
-  version: '4.0.0',
+  version: '4.1.0',
 
   /** MATLAB 版本（运行时动态获取，此处为默认值） */
   matlabVersion: '',

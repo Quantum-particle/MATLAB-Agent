@@ -140,6 +140,7 @@ export function useChat(options: UseChatOptions) {
           sessionId,
           message: messageContent,
           model: selectedModel,
+          agentId: currentAgentId,
           systemPrompt,
           cwd: currentCwd,
           permissionMode: currentPermissionMode,

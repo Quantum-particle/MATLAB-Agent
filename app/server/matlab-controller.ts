@@ -136,7 +136,7 @@ const BRIDGE_SCRIPT = path.join(__dirname, '..', 'matlab-bridge', 'matlab_bridge
 
 /** 获取默认工作空间（当前工作区目录） */
 function getDefaultWorkspace(): string {
-  return process.env.MATLAB_WORKSPACE || 'd:\\MATLAB_Workspace\\work1';
+  return process.env.MATLAB_WORKSPACE || process.cwd();
 }
 
 // 超时配置
@@ -194,10 +194,23 @@ function getTimeout(command: MATLABCommand): number {
 
 let bridgeProcess: ChildProcess | null = null;
 let responseBuffer = '';
-let pendingResolve: ((result: MATLABResult) => void) | null = null;
-let pendingReject: ((error: Error) => void) | null = null;
-let pendingTimer: NodeJS.Timeout | null = null;
-let pendingProgressTimer: NodeJS.Timeout | null = null;
+
+// v4.1: 命令队列 — 替代全局 pendingResolve/pendingReject，支持并发安全
+interface PendingCommand {
+  resolve: (result: MATLABResult) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+  progressTimer: NodeJS.Timeout | null;
+  startTime: number;
+  action: string;
+}
+
+const pendingCommands = new Map<string, PendingCommand>();
+let commandCounter = 0;
+
+// 串行命令队列 — 同一时刻只发一条命令给 Python Bridge
+const commandQueue: Array<{ command: MATLABCommand; id: string }> = [];
+let isProcessingCommand = false;
 
 /**
  * 确保常驻 Python 桥接进程已启动
@@ -240,15 +253,25 @@ function ensureBridgeProcess(): void {
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
-        const result = JSON.parse(line.trim()) as MATLABResult;
-        if (pendingResolve) {
-          if (pendingTimer) clearTimeout(pendingTimer);
-          if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
-          const resolve = pendingResolve;
-          pendingResolve = null;
-          pendingReject = null;
-          pendingTimer = null;
-          resolve(result);
+        const result = JSON.parse(line.trim()) as MATLABResult & { _requestId?: string };
+        // v4.1: 使用请求 ID 匹配回调
+        const requestId = result._requestId;
+        if (requestId && pendingCommands.has(requestId)) {
+          const pending = pendingCommands.get(requestId)!;
+          clearTimeout(pending.timer);
+          if (pending.progressTimer) clearInterval(pending.progressTimer);
+          pendingCommands.delete(requestId);
+          pending.resolve(result);
+        } else if (!requestId && pendingCommands.size > 0) {
+          // 兼容旧格式：没有 _requestId 时，取最早的一条
+          const firstKey = pendingCommands.keys().next().value;
+          if (firstKey) {
+            const pending = pendingCommands.get(firstKey)!;
+            clearTimeout(pending.timer);
+            if (pending.progressTimer) clearInterval(pending.progressTimer);
+            pendingCommands.delete(firstKey);
+            pending.resolve(result);
+          }
         }
       } catch {
         // 非 JSON 行，忽略
@@ -265,31 +288,36 @@ function ensureBridgeProcess(): void {
   bridgeProcess.on('close', (code) => {
     console.log(`[MATLAB Bridge] Process exited with code ${code}`);
     bridgeProcess = null;
-    if (pendingReject) {
-      pendingReject(new Error('Bridge process exited unexpectedly'));
-      pendingResolve = null;
-      pendingReject = null;
-      pendingTimer = null;
-      if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
+    // 清理所有待处理命令
+    for (const [id, pending] of pendingCommands) {
+      clearTimeout(pending.timer);
+      if (pending.progressTimer) clearInterval(pending.progressTimer);
+      pending.reject(new Error('Bridge process exited unexpectedly'));
     }
+    pendingCommands.clear();
+    commandQueue.length = 0;
+    isProcessingCommand = false;
   });
   
   bridgeProcess.on('error', (err) => {
     console.error('[MATLAB Bridge] Process error:', err.message);
     bridgeProcess = null;
-    if (pendingReject) {
-      pendingReject(err);
-      pendingResolve = null;
-      pendingReject = null;
-      pendingTimer = null;
-      if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
+    // 清理所有待处理命令
+    for (const [id, pending] of pendingCommands) {
+      clearTimeout(pending.timer);
+      if (pending.progressTimer) clearInterval(pending.progressTimer);
+      pending.reject(err);
     }
+    pendingCommands.clear();
+    commandQueue.length = 0;
+    isProcessingCommand = false;
   });
 }
 
 /**
- * 通过常驻桥接进程发送命令
+ * 通过常驻桥接进程发送命令（v4.1: 串行队列 + 请求 ID）
  * 使用 JSON 行协议：发送一行 JSON，接收一行 JSON 响应
+ * 命令串行执行（Python Bridge 是单线程的），但多个请求可以排队等待
  */
 async function executeBridgeCommand(command: MATLABCommand): Promise<MATLABResult> {
   ensureBridgeProcess();
@@ -299,42 +327,74 @@ async function executeBridgeCommand(command: MATLABCommand): Promise<MATLABResul
   }
   
   const timeout = getTimeout(command);
-  const cmdLine = JSON.stringify(command) + '\n';
+  const requestId = `cmd_${++commandCounter}_${Date.now()}`;
   const startTime = Date.now();
   
   return new Promise<MATLABResult>((resolve, reject) => {
-    // 设置超时
-    pendingTimer = setTimeout(() => {
-      pendingResolve = null;
-      pendingReject = null;
-      pendingTimer = null;
-      reject(new Error(`MATLAB 执行超时（${Math.round(timeout / 1000)}秒）`));
-    }, timeout);
-    
-    // 定期打印进度日志，让用户知道还在等
-    pendingProgressTimer = setInterval(() => {
-      const elapsed = Math.round((Date.now() - startTime) / 1000);
-      const actionName = command.action === 'start' ? 'Engine 启动' : 
-                          command.action === 'check' ? '兼容性检测' : command.action;
-      console.log(`[MATLAB Bridge] ⏳ ${actionName} 执行中... 已等待 ${elapsed}秒`);
-    }, PROGRESS_CHECK_INTERVAL);
-    
-    // 包装 resolve，清理进度定时器
-    const originalResolve = resolve;
-    const originalReject = reject;
-    
-    pendingResolve = (result: MATLABResult) => {
-      if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
-      originalResolve(result);
-    };
-    pendingReject = (error: Error) => {
-      if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
-      originalReject(error);
+    // 创建待处理命令
+    const pending: PendingCommand = {
+      resolve,
+      reject,
+      timer: setTimeout(() => {
+        pendingCommands.delete(requestId);
+        reject(new Error(`MATLAB 执行超时（${Math.round(timeout / 1000)}秒）`));
+      }, timeout),
+      progressTimer: setInterval(() => {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        const actionName = command.action === 'start' ? 'Engine 启动' : 
+                            command.action === 'check' ? '兼容性检测' : command.action;
+        console.log(`[MATLAB Bridge] ⏳ ${actionName} 执行中... 已等待 ${elapsed}秒`);
+      }, PROGRESS_CHECK_INTERVAL),
+      startTime,
+      action: command.action,
     };
     
-    // 发送命令
-    bridgeProcess!.stdin!.write(cmdLine, 'utf-8');
+    pendingCommands.set(requestId, pending);
+    
+    // 加入串行队列
+    commandQueue.push({ command, id: requestId });
+    processQueue();
   });
+}
+
+/** 处理命令队列 — 串行发送命令给 Python Bridge */
+function processQueue(): void {
+  if (isProcessingCommand || commandQueue.length === 0) return;
+  if (!bridgeProcess || bridgeProcess.killed) {
+    // 桥接进程不可用，拒绝所有排队命令
+    for (const item of commandQueue) {
+      const pending = pendingCommands.get(item.id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        if (pending.progressTimer) clearInterval(pending.progressTimer);
+        pendingCommands.delete(item.id);
+        pending.resolve({ status: 'error', message: '桥接进程不可用' });
+      }
+    }
+    commandQueue.length = 0;
+    return;
+  }
+  
+  isProcessingCommand = true;
+  const { command, id } = commandQueue.shift()!;
+  
+  // 注入 _requestId 到命令中，以便 Python Bridge 回传时能匹配
+  const commandWithId = { ...command, _requestId: id };
+  const cmdLine = JSON.stringify(commandWithId) + '\n';
+  
+  bridgeProcess.stdin!.write(cmdLine, 'utf-8');
+  
+  // 监听该命令的完成（当 pendingCommands 中该 id 被 resolve 时触发）
+  const checkDone = () => {
+    if (!pendingCommands.has(id)) {
+      // 命令已完成（被 resolve 或超时）
+      isProcessingCommand = false;
+      processQueue(); // 处理下一条
+    } else {
+      setTimeout(checkDone, 100); // 还在等
+    }
+  };
+  setTimeout(checkDone, 200);
 }
 
 /** 重启桥接进程（切换 MATLAB 版本时使用） */
@@ -358,11 +418,14 @@ export async function restartBridge(): Promise<MATLABResult> {
   
   // 清理状态
   responseBuffer = '';
-  pendingResolve = null;
-  pendingReject = null;
-  if (pendingTimer) clearTimeout(pendingTimer);
-  pendingTimer = null;
-  if (pendingProgressTimer) { clearInterval(pendingProgressTimer); pendingProgressTimer = null; }
+  for (const [id, pending] of pendingCommands) {
+    clearTimeout(pending.timer);
+    if (pending.progressTimer) clearInterval(pending.progressTimer);
+    pending.reject(new Error('Bridge restarting'));
+  }
+  pendingCommands.clear();
+  commandQueue.length = 0;
+  isProcessingCommand = false;
   
   // 重新启动（ensureBridgeProcess 会自动启动新进程，并传递新的 MATLAB_ROOT）
   return startMATLAB();
@@ -515,6 +578,20 @@ export async function runSimulinkSimulation(modelName: string, stopTime: string 
 
 export async function openSimulinkModel(modelName: string): Promise<MATLABResult> {
   return executeBridgeCommand({ action: 'open_simulink', params: { model_name: modelName } });
+}
+
+// ============= Simulink 模型工作区（v4.1 新增）=============
+
+export async function setSimulinkWorkspaceVar(modelName: string, varName: string, varValue: any): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'set_simulink_workspace', params: { model_name: modelName, var_name: varName, var_value: varValue } });
+}
+
+export async function getSimulinkWorkspaceVars(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'get_simulink_workspace', params: { model_name: modelName } });
+}
+
+export async function clearSimulinkWorkspace(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'clear_simulink_workspace', params: { model_name: modelName } });
 }
 
 // ============= 图形管理 =============
