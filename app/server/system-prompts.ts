@@ -68,7 +68,7 @@ export function getMATLABSystemPrompt(): string {
     '   - 杀完进程后必须等待 2-3 秒确认端口释放再启动',
     '1. **检查服务**: 先 curl http://localhost:3000/api/health',
     '2. **如已运行**: 直接使用 quickstart API',
-    '3. **如未运行**: 执行 `cmd /c "C:\\Users\\泰坦\\.workbuddy\\skills\\matlab-agent\\app\\ensure-running.bat"`',
+    '3. **如未运行**: 执行 `cmd /c "C:\\Users\\<你的用户名>\\.workbuddy\\skills\\matlab-agent\\app\\ensure-running.bat"`',
     '4. **等待退出码 0**',
     '5. **一键配置**: POST /api/matlab/quickstart',
     '',

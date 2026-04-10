@@ -9,7 +9,7 @@
 
 | 项目 | 路径 | 说明 |
 |------|------|------|
-| **Skill 目录**（唯一源码） | `C:\Users\泰坦\.workbuddy\skills\matlab-agent\` | MATLAB Agent 智能体的原始目录 |
+| **Skill 目录**（唯一源码） | `C:\Users\<你的用户名>\.workbuddy\skills\matlab-agent\` | MATLAB Agent 智能体的原始目录 |
 | **GitHub 仓库** | https://github.com/Quantum-particle/MATLAB-Agent | 公开源码仓库（文件全量相同，敏感字段脱敏） |
 | **本地 git** | Skill 目录内 `.git/` | 直接在 Skill 目录初始化 git，关联远程仓库 |
 
@@ -29,9 +29,9 @@
 
 | 文件 | 脱敏字段 | 本地保留 | GitHub 替换为 |
 |------|----------|----------|---------------|
-| `GITHUB.md` | Personal Access Token | `ghp_xxxx...` | `（已脱敏）` |
-| `GITHUB.md` | 邮箱 | `1696636393@qq.com` | `（已脱敏）` |
-| `GITHUB.md` | 本地用户路径 | `C:\Users\泰坦\...` | `C:\Users\<你的用户名>\...` |
+| `GITHUB.md` | Personal Access Token | （本地保留） | `（已脱敏）` |
+| `GITHUB.md` | 邮箱 | （本地保留） | `（已脱敏）` |
+| `GITHUB.md` | 本地用户路径 | `C:\Users\<你的用户名>\...` | `C:\Users\<你的用户名>\...` |
 
 ### 🟢 无需脱敏的文件（直接提交）
 
@@ -68,7 +68,7 @@
 
 ```powershell
 # ===== 在 Skill 目录直接操作 =====
-cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
+cd "C:\Users\<你的用户名>\.workbuddy\skills\matlab-agent"
 
 # 0. 确认远程仓库关联
 git remote -v
