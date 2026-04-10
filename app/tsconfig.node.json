@@ -7,5 +7,6 @@
     "allowSyntheticDefaultImports": true,
     "strict": true
   },
-  "include": ["vite.config.ts", "server/**/*.ts"]
+  "include": ["vite.config.ts", "server/**/*.ts"],
+  "_version": "5.1"
 }
