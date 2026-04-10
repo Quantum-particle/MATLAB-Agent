@@ -1,6 +1,6 @@
 # MATLAB Agent GitHub 仓库管理记录
 
-> 最后更新: 2026-04-09
+> 最后更新: 2026-04-10
 
 ---
 
@@ -46,6 +46,49 @@
 
 ## 更新历史
 
+### v5.1.0 — 2026-04-10 启动防弹 + Simulink 建模深坑固化
+
+- **核心改动**:
+  - `start.bat`: 增强端口清理 — 杀进程后轮询确认端口释放（最多10秒），二次确认干净再启动
+  - `ensure-running.bat`: 同步增强端口清理逻辑
+  - `system-prompts.ts`: 启动流程新增第0步"端口清理（最优先！）"，Simulink 建模深坑6条固化
+  - `SKILL.md`: 新增坑0"端口 3000 被旧进程占用"、§4.5"自动排版"、§22"Simulink 建模深坑大全"
+  - `TROUBLESHOOTING.md`: 0.4 章节大幅增强、新增 §23"Simulink 建模深坑大全"
+
+- **Bug 修复**:
+  - 端口 3000 残留进程导致启动失败 → 启动前自动清理 + 等待端口释放
+  - Simulink 新建 SubSystem 默认连线冲突 → delete_line 清除后再 add_line
+  - 复杂模型信号获取失败 → 使用 From/Goto 模式传递信号
+  - 模型构建后排版混乱 → 自动调用 arrangeSystem 排版
+
+- **踩坑经验固化**:
+  - 6 大 Simulink 建模深坑写入 SKILL.md + system-prompts.ts + troubleshooting.md
+  - 端口清理流程写入 start.bat + ensure-running.bat + system-prompts.ts + SKILL.md
+  - 自动排版规则写入所有文档
+
+### v5.0.0 — 2026-04-10 diary 输出捕获 + 一键启动
+
+- **核心改动**:
+  - `matlab_bridge.py`: diary() + eng.eval() 替代 evalc()，彻底解决引号双写、中文路径乱码
+  - `matlab-controller.ts`: 新增 quickstart API，相对路径基于 _cachedProjectDir 解析
+  - `index.ts`: 新增 POST /api/matlab/quickstart 端点
+  - `system-prompts.ts`: v5.0 系统提示词，大幅增强 Simulink 建模经验
+
+- **Bug 修复**:
+  - evalc 内层引号双写 → diary 替代 evalc，无需引号转义
+  - Name-Value 参数引号双写 → diary 替代 evalc
+  - 多行代码 evalc 报错 → eng.eval() 直接执行多行代码
+  - 中文路径编码乱码 → diary + UTF-8 stdout buffer
+  - execute API 相对路径错误 → 基于 _cachedProjectDir 解析
+  - 项目扫描中文乱码 → UTF-8 输出修复
+  - copyfile 中文路径失败 → diary 方式不再转义中文
+  - delete_block 默认端口报错 → set_param 重命名而非删除
+
+- **关键设计**:
+  - diary 输出捕获: diary(filename) → eng.eval(code) → 读取临时文件 → 返回输出
+  - quickstart API: 一步完成 MATLAB_ROOT + Engine 启动 + 项目目录
+  - UTF-8 输出: sys.stdout.buffer.write() + UTF-8 编码
+
 ### v4.1.0 — 2026-04-09 手动配置模式
 
 - **核心改动**:
@@ -57,6 +100,16 @@
   - `useAgents.ts`: 去掉硬编码的 MATLAB R2023b 路径
   - `start-matlab-agent.ps1`: 一键启动脚本，含交互式 MATLAB 路径配置
   - `SKILL.md`: 更新为 v4.1 文档
+
+- **Bug 修复**:
+  - `matlab_bridge.py`: evalc 内层 MATLAB 单引号必须双写 `''`，修复 Simulink 模型工作区 API 语法错误
+  - `index.ts`: POST /api/matlab/config 的 restartBridge 改为后台异步 `.catch()`，不再阻塞 HTTP 响应
+  - `start-matlab-agent.ps1`: 预热超时后不再 `exit 1`，服务器继续运行
+
+- **踩坑经验固化**:
+  - SKILL.md 新增 #15 预热超时跳过策略、#16 evalc 引号规则、#17 config API 不阻塞、#18 PowerShell UTF-8 编码
+  - system-prompts.ts 新增 #11 evalc 引号规则、#12 预热跳过策略
+  - TROUBLESHOOTING.md 新增 #19-#22 四个故障排除条目
 
 - **关键设计**:
   - MATLAB_ROOT 优先级: 环境变量 > 配置文件(data/matlab-config.json) > 未配置（提示用户输入）

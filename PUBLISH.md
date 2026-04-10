@@ -176,6 +176,20 @@ __pycache__/
 
 ## 版本历史
 
+### v5.1.0 — 2026-04-10 启动防弹 + Simulink 建模深坑固化
+
+- 新增 `start.bat` / `ensure-running.bat` 防弹级一键启动（端口自动清理 + 等待释放）
+- 6 大 Simulink 建模深坑写入底层（默认连线冲突、From/Goto 信号、自动排版等）
+- 端口清理流程写入所有关键文件
+- 模型构建后自动排版 `arrangeSystem` 规则写入所有文档
+
+### v5.0.0 — 2026-04-10 diary 输出捕获 + 一键启动
+
+- diary() 替代 evalc()，彻底解决引号双写和中文路径乱码
+- quickstart API 一键完成 MATLAB_ROOT + Engine 启动 + 项目目录
+- UTF-8 输出修复
+- 相对路径基于 _cachedProjectDir 解析
+
 ### v4.1.0 — 2026-04-09
 
 - 移除 CherryStudio 旧目录引用

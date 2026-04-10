@@ -1,6 +1,6 @@
 # MATLAB Agent 故障排除指南
 
-> 版本: 4.1.0 | 最后更新: 2026-04-09
+> 版本: 5.1.0 | 最后更新: 2026-04-10
 
 本文档汇总了 MATLAB Agent 开发和运行中遇到的所有问题及其解决方案。
 
@@ -8,6 +8,7 @@
 
 ## 目录
 
+0. [**Windows 启动踩坑大全（最优先！）**](#0-windows-启动踩坑大全)
 1. [MATLAB Engine 输出泄漏](#1-matlab-engine-输出泄漏)
 2. [JSON 解析失败](#2-json-解析失败)
 3. [中文乱码 (GBK)](#3-中文乱码-gbk)
@@ -30,6 +31,135 @@
 20. [预热超时但不影响功能](#20-预热超时但不影响功能)
 21. [POST /api/matlab/config 二次调用返回 500](#21-post-apimatlabconfig-二次调用返回-500)
 22. [PowerShell 发送中文路径 API 请求乱码](#22-powershell-发送中文路径-api-请求乱码)
+
+---
+
+## 0. Windows 启动踩坑大全
+
+> **启动不了就什么都干不了！这一节最优先！**
+
+### 0.1 node_modules 缺失导致启动失败
+
+**症状**: `npx tsx server/index.ts` 报 `Error: Cannot find module 'express'` 或直接静默退出无输出。
+
+**根因**: Skill 目录的 `app/node_modules/` 可能不存在（首次部署、git clone 后、清理后等）。
+
+**解决方案**: 启动前必须检查并安装：
+```bash
+cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app"
+if not exist "node_modules" npm install --production
+```
+一键脚本 `start.bat` 和 `ensure-running.bat` 已自动处理此步骤。
+
+### 0.2 Windows 下 npx 不是可执行文件
+
+**症状**: PowerShell 中 `Start-Process -FilePath "npx"` 报 "npx is not a valid Win32 application"。
+
+**根因**: Windows 下 `npx` 实际是 `npx.cmd` 批处理脚本，不是 .exe。`Start-Process` 不能直接执行 .cmd。
+
+**解决方案**: 
+- 在 `cmd /c` 中执行：`cmd /c "start /B npx tsx server/index.ts"`
+- 或用 PowerShell：`Start-Process cmd -ArgumentList "/c npx tsx server/index.ts" -WindowStyle Hidden`
+
+### 0.3 阻塞式启动导致 AI agent 超时
+
+**症状**: AI agent 执行 `npx tsx server/index.ts` 后命令永远不返回，超时卡死。
+
+**根因**: MATLAB Engine 预热需要 30-90 秒，在此期间 Node.js 进程阻塞终端。
+
+**解决方案**: 必须后台启动 + 轮询健康检查：
+```bash
+# 后台启动
+start /B cmd /c "npx tsx server/index.ts > %TEMP%\matlab-agent-out.log 2>&1"
+
+# 轮询等待
+:wait
+curl -s http://localhost:3000/api/health >nul 2>&1
+if %errorlevel% neq 0 timeout /t 2 >nul & goto wait
+```
+
+### 0.4 🔴 旧进程残留占端口 3000（启动失败首要原因！）
+
+> **这是启动失败最常见的原因！启动前必须确保端口 3000 干净无残留！**
+
+**症状**: 启动时 `EADDRINUSE: address already in use :::3000`，服务器启动失败。
+
+**根因**: 上次 MATLAB Agent 服务未正常关闭，Node.js 进程残留在端口 3000 上。Windows 的 TIME_WAIT 机制也会导致即使杀掉进程后端口仍暂时不可用。
+
+**完整解决方案**（启动前必须执行）：
+```cmd
+REM Step 1: 查找占用端口 3000 的所有进程
+netstat -ano | findstr ":3000" | findstr "LISTENING"
+
+REM Step 2: 逐个杀掉对应 PID
+for /f "tokens=5" %a in ('netstat -ano ^| findstr ":3000 " ^| findstr "LISTENING"') do taskkill /F /PID %a
+
+REM Step 3: ⚠️ 等待 2-3 秒确认端口释放（关键！不能省！）
+timeout /t 3
+
+REM Step 4: 再次确认端口已干净
+netstat -ano | findstr ":3000" | findstr "LISTENING"
+REM 如果仍有输出，说明端口尚未完全释放，再等几秒
+
+REM Step 5: 确认端口干净后再启动服务
+start /B cmd /c "npx tsx server/index.ts > %TEMP%\matlab-agent-out.log 2>&1"
+```
+
+**PowerShell 版本**：
+```powershell
+# 查找并杀掉端口 3000 的进程
+$old = netstat -ano | Select-String ":3000" | Select-String "LISTENING"
+if ($old) {
+    $old | ForEach-Object {
+        if ($_ -match '\d+$') { Stop-Process -Id $Matches[0] -Force -ErrorAction SilentlyContinue }
+    }
+    # ⚠️ 必须等待端口释放！
+    Start-Sleep -Seconds 3
+    # 确认端口已干净
+    $check = netstat -ano | Select-String ":3000" | Select-String "LISTENING"
+    if ($check) { Write-Warning "端口 3000 仍被占用！请等待后再试" }
+}
+```
+
+**⚠️ 关键提醒**：
+- 杀掉进程后 **不要立即启动新服务**！必须等待 2-3 秒让操作系统完全释放端口
+- Windows 的 TIME_WAIT 状态默认持续 2 分钟，但 LISTENING 端口杀掉进程后通常 1-3 秒即可释放
+- 如果多次杀进程后端口仍被占用，可能是系统级 TIME_WAIT，等待 30 秒后重试
+- **一键脚本已自动处理**: `start.bat` 和 `ensure-running.bat` 会自动杀进程 → 等待端口释放 → 确认干净 → 再启动
+
+### 0.5 含中文/空格/括号的路径问题
+
+**症状**: 路径如 `C:\Users\泰坦\` 或 `D:\Program Files(x86)\MATLAB2023b` 导致脚本失败。
+
+**解决方案**: 
+- CMD 脚本中用引号包裹路径：`cd /d "%~dp0"`（`%~dp0` 自动含引号处理）
+- PowerShell 中用 `Push-Location` / `Pop-Location`
+- API 调用中用 UTF-8 编码：`[System.Text.Encoding]::UTF8.GetBytes($json)`
+
+### 0.6 Python Bridge spawn 失败
+
+**症状**: `spawn('python', [...]) Error: spawn python ENOENT`。
+
+**根因**: Python 不在系统 PATH 中，或 Python 命令名不是 `python`。
+
+**解决方案**:
+- 确保 `python` 在 PATH 中：`where python`
+- 如果只有 `python3`，创建符号链接或添加 PATH
+- Node.js 端 `matlab-controller.ts` 使用 `spawn('python', ...)` — 需 `python` 在 PATH
+
+### 0.7 AI Agent 标准启动流程
+
+```
+0. 🔴 端口清理（最优先！启动前必须确保环境干净！）:
+   - ensure-running.bat 已自动处理（杀进程 → 等端口释放 → 确认干净 → 再启动）
+   - 手动: netstat -ano | findstr ":3000" | findstr "LISTENING" → taskkill /F /PID <pid> → 等2-3秒
+1. 检查服务是否已运行: curl http://localhost:3000/api/health
+2. 如已运行 → 直接使用 quickstart API
+3. 如未运行 → 执行: cmd /c "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
+4. 等待 ensure-running 返回退出码 0
+5. 使用 quickstart API: POST /api/matlab/quickstart
+   Body: {"matlabRoot":"D:\\Program Files(x86)\\MATLAB2023b","projectDir":"D:\\your_project"}
+```
 
 ---
 
@@ -227,13 +357,17 @@ Error: Unexpected MATLAB expression
 Error: listen EADDRINUSE: address already in use :::3000
 ```
 
-### 解决方案
+> ⚠️ 这是启动失败最常见的原因！完整解决方案见 [0.4 旧进程残留占端口 3000](#04-🔴-旧进程残留占端口-3000启动失败首要原因)
+
+### 快速解决方案
 ```powershell
 # 查找占用进程
 netstat -ano | findstr ":3000" | findstr "LISTENING"
 
 # 杀死进程
 taskkill /PID <PID> /F
+
+# ⚠️ 杀完后等 2-3 秒再启动！
 ```
 
 ---
@@ -422,14 +556,15 @@ cmd /c "start /B npx tsx server/index.ts"
 
 遇到问题时按此顺序排查：
 
-1. ✅ MATLAB 是否已安装？（通过 `/api/matlab/config` 检查配置路径）
-2. ✅ Python 是否可用？（`python --version`，CLI 模式不要求）
-3. ✅ MATLAB Engine API 是否已安装？（`python -c "import matlab.engine"`）
-4. ✅ 端口 3000 是否被占用？（`netstat -ano | findstr ":3000"`）
+1. 🔴 **端口 3000 是否被占用？**（最优先！`netstat -ano | findstr ":3000"`，如有则先杀进程并等待端口释放）
+2. ✅ MATLAB 是否已安装？（通过 `/api/matlab/config` 检查配置路径）
+3. ✅ Python 是否可用？（`python --version`，CLI 模式不要求）
+4. ✅ MATLAB Engine API 是否已安装？（`python -c "import matlab.engine"`）
 5. ✅ 是否用阻塞式启动？（必须后台启动 + 轮询）
 6. ✅ 脚本文件路径是否含中文？
 7. ✅ 函数名是否以下划线开头？
 8. ✅ 查看 `/api/health` 中 `warmup` 字段是否为 `ready`
+9. ✅ Simulink 建模：模块是否已排版？端口连线是否冲突？信号是否通过 From/Goto 传递？
 
 ---
 
@@ -510,3 +645,92 @@ Invoke-RestMethod -Uri "http://localhost:3000/api/matlab/config" `
 ```
 
 路径含 `(x86)` 时需注意 PowerShell 可能将括号解释为表达式，确保路径用引号包裹。
+
+---
+
+## 23. 🔴 Simulink 建模深坑大全 (v5.1 任务4 实测总结)
+
+> **Simulink 建模不是拿出模块库中已经封装好的模块并连接这么简单！**
+> **必须组成子系统，子系统再组成系统，注意模块输入输出端口的管理！**
+
+### 23.1 新建 SubSystem 的默认连线冲突
+
+**症状**: `add_line` 报 "目标端口已有信号线连接"
+
+**根因**: 新建 SubSystem 时，Simulink 自动在内部连接 In1→Out1，形成默认直通。外层 `add_line` 尝试连接子系统端口时，发现内部端口已有连线。
+
+**解决方案**: 先 `delete_line` 清除默认连线，再 `add_line`
+```matlab
+subsysPath = [modelName, '/MySubsystem'];
+delete_line(subsysPath, 'In1/1', 'Out1/1');  % 清除默认连线
+add_line(subsysPath, 'In1/1', 'MyBlock/1');  % 再添加自己的连线
+```
+
+### 23.2 复杂模型用 From/Goto 传递信号，不是直接连线
+
+**症状**: 尝试从 Inport 连线到子系统内部模块时失败，或信号无法到达目标
+
+**根因**: RL 训练模型等复杂模型中，子系统间通过 Goto/From 模块对广播信号，而不是通过 Inport 直接连线传递。
+
+**解决方案**: 在子系统内部添加 From 模块，通过 GotoTag 获取已有信号
+```matlab
+% 在子系统内部用 From 模块获取信号
+add_block('simulink/Signal Routing/From', [subsysPath, '/From_e_angle']);
+set_param([subsysPath, '/From_e_angle'], 'GotoTag', 'e_angle_t');
+
+% 输出信号用 Goto 模块广播
+add_block('simulink/Signal Routing/Goto', [subsysPath, '/Goto_reward']);
+set_param([subsysPath, '/Goto_reward'], 'GotoTag', 'Reward_exponential');
+```
+
+### 23.3 add_line 逐步执行，避免连锁失败
+
+**症状**: 多个 add_line 一次性执行时，中间某行失败导致后续全部不执行
+
+**解决方案**: 用 try-catch 包裹每个 `add_line`
+```matlab
+lines = {'obs_inner/1', 'MySubsystem/1'; 'MySubsystem/1', 'Goto1/1'};
+for i = 1:size(lines, 1)
+    try
+        add_line(modelName, lines{i,1}, lines{i,2});
+        fprintf('OK: %s -> %s\n', lines{i,1}, lines{i,2});
+    catch e
+        fprintf('FAIL: %s -> %s: %s\n', lines{i,1}, lines{i,2}, e.message);
+    end
+end
+```
+
+### 23.4 中文路径下 Simulink 操作必须用 dir()+fullfile()
+
+**症状**: `load_system('D:\RL\UH-60_contoller\UH-60_contoller_ptp_final_整理\model.slx')` 因中文乱码失败
+
+**解决方案**: 先 cd 到不含中文的父目录，用 dir() 找索引，再用 fullfile() 构建
+```matlab
+cd('D:\RL\UH-60_contoller');
+dirs = dir;
+targetDir = fullfile('D:\RL\UH-60_contoller', dirs(6).name);  % 用索引避开中文
+cd(targetDir);
+load_system('model_name');  % 用相对路径，无中文问题
+```
+
+### 23.5 🔴 模型构建完成后必须自动排版
+
+**症状**: 脚本化建模后用户打开模型，所有模块叠在一起，无法看清
+
+**解决方案**: 所有模块和连线完成后，调用 Simulink 自动排版
+```matlab
+% 排版顶层模型
+Simulink.BlockDiagram.arrangeSystem(modelName);
+
+% 排版所有子系统
+subs = find_system(modelName, 'LookUnderMasks', 'all', 'BlockType', 'SubSystem');
+for i = 1:length(subs)
+    try
+        Simulink.BlockDiagram.arrangeSystem(subs{i});
+    catch
+        % 某些子系统可能无法排版（如库链接），跳过
+    end
+end
+
+save_system(modelName);
+```

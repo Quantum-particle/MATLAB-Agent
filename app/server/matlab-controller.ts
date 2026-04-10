@@ -1,10 +1,15 @@
 /**
-* MATLAB Controller v4.1 - 通用化后端 MATLAB 控制器
+* MATLAB Controller v5.0 - 通用化后端 MATLAB 控制器
 * 
 * 核心架构: 使用常驻 Python 桥接进程（--server 模式）
 * - Python 进程保持运行，MATLAB Engine 持久化
 * - 变量跨命令保持，图形窗口实时显示
 * - 通过 stdin/stdout JSON 行协议通信
+* 
+* v5.0 变更（2026-04-10）:
+* - 修复 executeMATLABScript 相对路径解析（基于项目目录而非 CWD）
+* - 添加项目目录缓存 getProjectDir()
+* - 与 Python Bridge v5.0 diary 重构配合
 * 
 * v4.1 变更:
 * - 移除自动检测逻辑，首次启动需用户手动输入 MATLAB 安装路径
@@ -139,18 +144,19 @@ function getDefaultWorkspace(): string {
   return process.env.MATLAB_WORKSPACE || process.cwd();
 }
 
-// 超时配置
+// 超时配置（毫秒）
+// 注意：RL训练、仿真等任务可能需要很长时间，超时过短会导致Engine被锁死
 const TIMEOUTS = {
-  script: 120_000,
-  simulinkCreate: 120_000,
-  simulinkRun: 300_000,
-  check: 60_000,
-  projectScan: 30_000,
-  fileRead: 60_000,
-  runCode: 120_000,
-  engineStart: 90_000,    // Engine 启动超时（含兼容性检测）
+  script: 1800_000,        // 30分钟 — 训练脚本等长时间任务
+  simulinkCreate: 120_000,  // 2分钟
+  simulinkRun: 1800_000,    // 30分钟 — Simulink仿真可能很长
+  check: 60_000,            // 1分钟
+  projectScan: 30_000,      // 30秒
+  fileRead: 60_000,         // 1分钟
+  runCode: 1800_000,        // 30分钟 — 代码执行可能包含训练/仿真
+  engineStart: 90_000,      // Engine 启动超时（含兼容性检测）
   engineCompatTest: 45_000, // Engine 兼容性测试超时
-  default: 300_000,
+  default: 1800_000,        // 30分钟
 };
 
 // 命令执行进度检测间隔（毫秒）
@@ -194,6 +200,9 @@ function getTimeout(command: MATLABCommand): number {
 
 let bridgeProcess: ChildProcess | null = null;
 let responseBuffer = '';
+
+// v5.0: Node.js 侧缓存项目目录，用于相对路径解析
+let _cachedProjectDir: string | null = null;
 
 // v4.1: 命令队列 — 替代全局 pendingResolve/pendingReject，支持并发安全
 interface PendingCommand {
@@ -337,7 +346,10 @@ async function executeBridgeCommand(command: MATLABCommand): Promise<MATLABResul
       reject,
       timer: setTimeout(() => {
         pendingCommands.delete(requestId);
-        reject(new Error(`MATLAB 执行超时（${Math.round(timeout / 1000)}秒）`));
+        // 超时后重启桥接进程，否则Engine被锁死会导致后续所有命令都无法执行
+        console.log(`[MATLAB Bridge] ⚠️ 命令 ${command.action} 超时（${Math.round(timeout / 1000)}秒），重启桥接进程...`);
+        restartBridge().catch(err => console.error('[MATLAB Bridge] 重启桥接失败:', err.message));
+        reject(new Error(`MATLAB 执行超时（${Math.round(timeout / 1000)}秒），桥接进程已自动重启`));
       }, timeout),
       progressTimer: setInterval(() => {
         const elapsed = Math.round((Date.now() - startTime) / 1000);
@@ -493,7 +505,13 @@ export function getMATLABConfig(): Record<string, any> {
 // ============= 项目管理 =============
 
 export async function setProjectDir(dirPath: string): Promise<MATLABResult> {
+  _cachedProjectDir = dirPath;  // v5.0: 缓存项目目录到 Node.js 侧
   return executeBridgeCommand({ action: 'set_project', params: { dir: dirPath } });
+}
+
+/** 获取当前项目目录（Node.js 侧缓存） */
+export function getProjectDir(): string | null {
+  return _cachedProjectDir;
 }
 
 export async function scanProjectFiles(dirPath?: string): Promise<MATLABResult> {
@@ -522,13 +540,22 @@ export async function executeMATLABScript(
 ): Promise<MATLABResult> {
   console.log(`[MATLAB] 执行脚本: ${scriptPath}`);
   
-  if (!fs.existsSync(scriptPath)) {
-    return { status: 'error', message: `脚本文件不存在: ${scriptPath}` };
+  // v5.0: 修复相对路径问题 — 相对路径应基于项目目录解析，而非 Node.js CWD
+  let resolvedPath = scriptPath;
+  if (!path.isAbsolute(scriptPath)) {
+    const projectDir = getProjectDir();
+    if (projectDir) {
+      resolvedPath = path.join(projectDir, scriptPath);
+    }
+  }
+  
+  if (!fs.existsSync(resolvedPath)) {
+    return { status: 'error', message: `脚本文件不存在: ${resolvedPath}（原始路径: ${scriptPath}）` };
   }
   
   return executeBridgeCommand({
     action: 'execute_script',
-    params: { script_path: scriptPath, output_dir: options?.outputDir }
+    params: { script_path: resolvedPath, output_dir: options?.outputDir }
   });
 }
 
@@ -602,6 +629,78 @@ export async function listFigures(): Promise<MATLABResult> {
 
 export async function closeAllFigures(): Promise<MATLABResult> {
   return executeBridgeCommand({ action: 'close_figures', params: {} });
+}
+
+// ============= Quickstart API（v5.0 新增）=============
+
+/**
+ * 一键快速启动 MATLAB 开发环境
+ * 
+ * 合并以下步骤为一次调用：
+ * 1. 检查/设置 MATLAB_ROOT
+ * 2. 启动 MATLAB Engine（如未启动）
+ * 3. 设置项目工作目录
+ * 
+ * 返回完整状态信息，让 AI 一步到位进入 MATLAB 开发状态。
+ */
+export async function quickstartMATLAB(options: {
+  matlabRoot?: string;
+  projectDir?: string;
+}): Promise<MATLABResult & {
+  matlab_root?: string;
+  project_dir?: string;
+  connection_mode?: string;
+  steps?: string[];
+}> {
+  const steps: string[] = [];
+  
+  // Step 1: 检查/设置 MATLAB_ROOT
+  let currentRoot = getMATLABRoot();
+  if (options.matlabRoot && options.matlabRoot !== currentRoot) {
+    const setResult = setMATLABRoot(options.matlabRoot);
+    if (!setResult.success) {
+      return { status: 'error', message: `MATLAB_ROOT 设置失败: ${setResult.message}`, steps };
+    }
+    currentRoot = options.matlabRoot;
+    steps.push(`MATLAB_ROOT 已设置为: ${currentRoot}`);
+  } else if (currentRoot) {
+    steps.push(`MATLAB_ROOT 已配置: ${currentRoot}`);
+  } else {
+    return { status: 'error', message: 'MATLAB_ROOT 未配置。请提供 matlabRoot 参数或通过 /api/matlab/config 设置。', steps };
+  }
+  
+  // Step 2: 启动 MATLAB Engine
+  try {
+    const startResult = await startMATLAB();
+    steps.push(`MATLAB Engine: ${startResult.message || startResult.status}`);
+    
+    if (startResult.status === 'error') {
+      return { status: 'warning', message: 'MATLAB 启动异常，但部分配置已就绪', 
+               matlab_root: currentRoot, steps, connection_mode: startResult.connection_mode };
+    }
+  } catch (err: any) {
+    steps.push(`MATLAB 启动异常: ${err.message}`);
+  }
+  
+  // Step 3: 设置项目目录
+  let projectDir = options.projectDir || _cachedProjectDir || getDefaultWorkspace();
+  if (projectDir) {
+    try {
+      const setResult = await setProjectDir(projectDir);
+      steps.push(`项目目录: ${setResult.project_dir || projectDir} (${setResult.connection_mode || 'unknown'})`);
+      projectDir = setResult.project_dir || projectDir;
+    } catch (err: any) {
+      steps.push(`设置项目目录失败: ${err.message}`);
+    }
+  }
+  
+  return { 
+    status: 'ok', 
+    message: 'MATLAB 环境已就绪',
+    matlab_root: currentRoot, 
+    project_dir: projectDir,
+    steps 
+  };
 }
 
 // ============= 辅助函数 =============

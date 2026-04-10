@@ -1,6 +1,6 @@
 # MATLAB Agent 二次开发指南
 
-> 版本: 4.1.0 | 最后更新: 2026-04-09
+> 版本: 5.1.0 | 最后更新: 2026-04-10
 
 本文档面向希望在 MATLAB Agent 基础上进行二次开发的开发者，涵盖架构详解、核心模块、定制场景和调试技巧。
 
@@ -41,44 +41,32 @@
 ```
 matlab-agent/
 ├── server/                          # 后端服务
-│   ├── index.ts                     # Express 服务器入口 + Agent SDK 集成
-│   ├── matlab-controller.ts         # MATLAB 控制器（手动配置 + 常驻桥接）
-│   ├── system-prompts.ts            # AI 系统提示词（动态环境信息注入）
+│   ├── index.ts                     # Express 服务器入口 + quickstart API
+│   ├── matlab-controller.ts         # MATLAB 控制器（v5.0: diary + 相对路径修复）
+│   ├── system-prompts.ts            # AI 系统提示词（v5.1: Simulink 建模经验固化）
 │   ├── db.ts                        # SQLite 数据库操作
 │   └── index.d.ts                   # TypeScript 类型定义
 ├── matlab-bridge/
-│   └── matlab_bridge.py             # Python-MATLAB 桥接（Engine + CLI 双模式）
+│   └── matlab_bridge.py             # Python-MATLAB 桥接（v5.0: diary + UTF-8 输出）
 ├── src/                             # React 前端
 │   ├── components/                  # React 组件
 │   │   ├── MATLABStatusBar.tsx      # MATLAB 状态栏（动态版本显示）
 │   │   ├── ChatMessages.tsx         # 消息列表
 │   │   ├── ChatInput.tsx            # 输入框
-│   │   ├── AgentConfigDialog.tsx    # Agent 配置
-│   │   ├── ToolCallsCollapse.tsx    # 工具调用展示
-│   │   ├── PermissionDialog.tsx     # 权限弹窗
-│   │   ├── InlinePermissionCard.tsx # 内联权限卡片
-│   │   ├── NewChatDialog.tsx        # 新建聊天对话框
-│   │   ├── NewChatView.tsx          # 新建聊天视图
-│   │   ├── SettingsPage.tsx         # 设置页面
-│   │   ├── Sidebar.tsx              # 侧边栏
-│   │   └── Header.tsx               # 顶部栏
+│   │   └── ...
 │   ├── hooks/                       # 自定义 Hooks
 │   │   ├── useChat.ts              # 聊天逻辑（SSE 流式处理）
-│   │   ├── useSessions.ts          # 会话管理
-│   │   ├── useModels.ts            # 模型管理
-│   │   ├── useAgents.ts            # Agent 管理（无硬编码路径）
-│   │   └── useTheme.ts             # 主题管理
-│   ├── pages/
-│   │   └── ChatPage.tsx            # 聊天页面
-│   ├── utils/
-│   │   └── iconMap.ts              # 图标映射
+│   │   ├── useAgents.ts            # Agent 管理
+│   │   └── ...
 │   ├── types.ts                     # TypeScript 类型定义
-│   ├── config.ts                    # 动态配置（运行时获取 MATLAB 信息）
+│   ├── config.ts                    # 动态配置
 │   ├── App.tsx                      # 应用入口
 │   └── main.tsx                     # React 入口
 ├── data/                            # 运行时数据（git 忽略）
 │   └── .gitkeep
-├── start-matlab-agent.ps1           # 一键启动脚本
+├── start.bat                        # ⭐ 一键启动脚本（最可靠）
+├── ensure-running.bat               # AI Agent 专用确保运行脚本
+├── start-matlab-agent.ps1           # PowerShell 启动脚本
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts
@@ -218,7 +206,10 @@ const customAgent: CustomAgent = {
 1. 在 `matlab_bridge.py` 的 `simulink_create()` / `simulink_run()` 中扩展
 2. 注意 Simulink Position 格式: `[left, bottom, right, top]`（不是 width/height）
 3. 创建前必须 `close_system + bdclose` 避免遮蔽警告
-4. 输出用 `evalc` 捕获，配合正则清理 HTML 标签
+4. v5.0 用 diary 替代 evalc，输出通过 `diary(filename)` 捕获
+5. **v5.1 新增**: 模型构建完成后必须调用 `Simulink.BlockDiagram.arrangeSystem(modelName)` 自动排版
+6. **v5.1 新增**: 新建 SubSystem 时注意默认连线冲突，先 `delete_line` 再 `add_line`
+7. **v5.1 新增**: 复杂模型用 From/Goto 传递信号，不是直接连线
 
 ### 场景 5: 修改前端主题
 

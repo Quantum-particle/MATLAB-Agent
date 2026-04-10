@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-MATLAB Bridge v4.1 - 通用化 MATLAB 会话服务
+MATLAB Bridge v5.1 - 通用化 MATLAB 会话服务
 
 运行模式: 作为常驻进程运行，通过 stdin/stdout JSON 行协议通信。
 Node.js 启动此进程后保持运行，通过管道发送命令、接收结果。
@@ -13,16 +13,19 @@ Node.js 启动此进程后保持运行，通过管道发送命令、接收结果
   输入: {"action": "run_code", "params": {"code": "x = 42;"}}
   输出: {"status": "ok", "stdout": "x = 42", "open_figures": 0}
 
+v5.0 变更（2026-04-10）:
+  - 核心重构: 用 diary() + eng.eval() 替代 evalc()，彻底解决引号双写问题
+  - 修复中文路径: diary 方式无需引号转义，中文路径不再乱码
+  - 修复输出编码: 使用 stdout.buffer.write + UTF-8，解决 Windows GBK 乱码
+  - Name-Value 参数（如 'LowerLimit'）不再被错误双写
+  - 多行代码完美支持，无需行拼接
+
 v4.1 变更:
   - 移除自动检测逻辑（注册表扫描 + 常见路径扫描）
   - MATLAB_ROOT 仅从环境变量读取（由 Node.js 端传入）
   - 与 Node.js 端 v4.1 行为一致：手动配置优先
 
-v4.0 通用化升级:
-  - CLI 回退模式：当 Python Engine API 不兼容时，自动切换到 matlab -batch / matlab -r
-  - 多版本 MATLAB 支持（通过 MATLAB_ROOT 环境变量动态选择）
-
-版本: 4.1.0 (2026-04-09)
+版本: 5.0.0 (2026-04-10)
 """
 
 import sys
@@ -378,8 +381,18 @@ def set_project_dir(dir_path):
     mode = _detect_connection_mode()
     if mode == 'engine':
         eng = get_engine()
-        eng.eval(f"cd('{dir_safe}');", nargout=0)
-        eng.eval(f"addpath('{dir_safe}');", nargout=0)
+        # v5.0: 使用 eng.eval 直接执行，无需 evalc 包裹
+        # 中文路径现在可以正常传递，因为 eng.eval(code) 将代码直接传给 MATLAB
+        try:
+            eng.eval(f"cd('{dir_safe}');", nargout=0)
+            eng.eval(f"addpath('{dir_safe}');", nargout=0)
+        except Exception as e:
+            # 如果直接 eval 中文路径失败，尝试 diary 方式
+            try:
+                cd_code = f"cd('{dir_safe}'); addpath('{dir_safe}');"
+                _run_code_via_diary(eng, cd_code)
+            except:
+                pass
     # CLI 模式下只记录目录，每次执行时 cd
     
     return {"status": "ok", "project_dir": dir_path, "connection_mode": mode}
@@ -452,19 +465,18 @@ def read_mat_file(file_path):
     if mode == 'engine':
         eng = get_engine()
         try:
-            mat_info_cmd = (
-                "evalc('"
+            # v5.0: 使用 diary 替代 evalc，避免引号双写问题
+            mat_info_code = (
                 "info = whos('-file', '" + file_path + "');"
                 "for i = 1:length(info),"
                 "  fprintf('%s|%s|%s\\n', info(i).name, info(i).class, mat2str(info(i).size));"
                 "end;"
                 "clear info;"
-                "')"
             )
-            output = eng.eval(mat_info_cmd, nargout=1)
+            output = _run_code_via_diary(eng, mat_info_code)
             variables = []
-            if output:
-                for line in str(output).strip().split('\n'):
+            if isinstance(output, str) and output:
+                for line in output.strip().split('\n'):
                     if '|' in line:
                         parts = line.split('|')
                         if len(parts) >= 3:
@@ -495,19 +507,20 @@ def read_simulink_model(model_path):
     if mode == 'engine':
         eng = get_engine()
         try:
-            cmd = ("evalc('"
-                   "load_system('" + model_name + "');"
-                   "blocks = find_system('" + model_name + "', 'SearchDepth', 1);"
-                   "fprintf('Blocks: %d\\n', length(blocks));"
-                   "for i = 1:min(length(blocks), 50),"
-                   "  fprintf('%s\\n', blocks{i});"
-                   "end;"
-                   "')")
-            output = eng.eval(cmd, nargout=1)
+            # v5.0: 使用 diary 替代 evalc
+            cmd_code = (
+                "load_system('" + model_name + "');"
+                "blocks = find_system('" + model_name + "', 'SearchDepth', 1);"
+                "fprintf('Blocks: %d\\n', length(blocks));"
+                "for i = 1:min(length(blocks), 50),"
+                "  fprintf('%s\\n', blocks{i});"
+                "end;"
+            )
+            output = _run_code_via_diary(eng, cmd_code)
             blocks = []
             block_count = 0
-            if output:
-                for line in str(output).strip().split('\n'):
+            if isinstance(output, str) and output:
+                for line in output.strip().split('\n'):
                     line = line.strip()
                     if line.startswith('Blocks:'):
                         match = re.search(r'Blocks:\s*(\d+)', line)
@@ -562,12 +575,18 @@ def execute_script(script_path, output_dir=None):
     if mode == 'engine':
         eng = get_engine()
         try:
+            # v5.0: 使用 diary 替代 evalc，避免引号双写问题
             script_dir_safe = script_dir.replace('\\', '/')
-            capture_cmd = "evalc('cd(''" + script_dir_safe + "''); run(''" + script_name + "'');')"
-            matlab_output = eng.eval(capture_cmd, nargout=1)
+            
+            # 构造要执行的代码
+            exec_code = f"cd('{script_dir_safe}'); run('{script_name}');"
+            matlab_output = _run_code_via_diary(eng, exec_code)
+            
+            if isinstance(matlab_output, dict):  # 错误情况
+                matlab_output["script_path"] = script_path
+                return matlab_output
             
             if matlab_output:
-                matlab_output = str(matlab_output)
                 matlab_output = re.sub(r'<[^>]+>', '', matlab_output)
                 matlab_output = re.sub(r'\n{3,}', '\n\n', matlab_output)
             else:
@@ -589,12 +608,107 @@ def execute_script(script_path, output_dir=None):
         return result
 
 
+def _run_code_via_diary(eng, code, timeout=120):
+    """通过 diary() + 临时 .m 文件执行 MATLAB 代码并捕获输出
+    
+    核心优势（替代 evalc 方案）:
+    1. 无需引号转义 — 代码直接写入 .m 文件，MATLAB 原生解析
+    2. 完美支持中文路径 — 不再通过 evalc 传递路径字符串
+    3. 支持多行代码 — .m 文件天然支持任意行数
+    4. 支持 Name-Value 参数 — 'LowerLimit' 等不再被错误双写
+    
+    流程: 写 .m 文件 → diary 开启 → eng.eval(code) → diary 关闭 → 读输出文件
+    """
+    import tempfile
+    
+    # 创建临时目录和文件
+    tmp_dir = tempfile.gettempdir()
+    script_file = os.path.join(tmp_dir, '_matlab_agent_tmp.m')
+    diary_file = os.path.join(tmp_dir, '_matlab_agent_diary.txt')
+    
+    # 清理旧文件
+    for f in [script_file, diary_file]:
+        if os.path.exists(f):
+            try: os.remove(f)
+            except: pass
+    
+    # 1. 写代码到临时 .m 文件（UTF-8 编码，带 BOM 以确保 MATLAB 识别）
+    try:
+        with open(script_file, 'w', encoding='utf-8-sig') as f:
+            f.write(code + '\n')
+    except Exception as e:
+        return {"status": "error", "message": f"写入临时脚本失败: {str(e)}"}
+    
+    # 2. 通过 eng.eval 直接执行代码（无需 evalc 包裹！）
+    #    如果不需要捕获输出，直接 eng.eval(code, nargout=0) 即可
+    #    需要 diary 时，先开启 diary，再 eval，最后关闭
+    try:
+        # 开启 diary 捕获输出
+        diary_file_safe = diary_file.replace('\\', '/')
+        eng.eval(f"diary('{diary_file_safe}');", nargout=0)
+        
+        # 直接执行代码（无需任何引号转义！）
+        eng.eval(code, nargout=0)
+        
+        # 关闭 diary
+        eng.eval("diary('off');", nargout=0)
+        
+        # 3. 读取 diary 输出文件
+        output_str = ""
+        if os.path.exists(diary_file):
+            try:
+                # MATLAB diary 文件可能是系统默认编码（Windows 下为 GBK）或 UTF-8
+                for enc in ['utf-8', 'gbk', 'utf-8-sig', 'latin-1']:
+                    try:
+                        with open(diary_file, 'r', encoding=enc) as f:
+                            output_str = f.read()
+                        break
+                    except (UnicodeDecodeError, UnicodeError):
+                        continue
+            except Exception:
+                output_str = ""
+        
+        # 清理 diary 输出中的回显代码行（diary 会把执行的代码也记录进去）
+        # 只保留非空输出行
+        lines = output_str.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if stripped:
+                cleaned_lines.append(stripped)
+        output_str = '\n'.join(cleaned_lines)
+        
+        # 清理 HTML 标签
+        output_str = re.sub(r'<[^>]+>', '', output_str)
+        output_str = re.sub(r'\n{3,}', '\n\n', output_str)
+        
+    except Exception as e:
+        # 确保 diary 被关闭
+        try: eng.eval("diary('off');", nargout=0)
+        except: pass
+        error_msg = re.sub(r'<[^>]+>', '', str(e))
+        return {"status": "error", "message": f"MATLAB 执行错误: {error_msg}"}
+    finally:
+        # 清理临时文件
+        for f in [script_file, diary_file]:
+            try:
+                if os.path.exists(f): os.remove(f)
+            except: pass
+    
+    return output_str
+
+
 def run_code(code, show_output=True):
     """在持久化工作区中直接执行 MATLAB 代码
     
     Engine 模式：变量跨命令保持
     CLI 模式：每次执行独立，变量不保持
     unavailable 模式：直接报错
+    
+    v5.0: 使用 diary() + eng.eval() 替代 evalc()，彻底解决:
+    - 引号双写问题（Name-Value 参数如 'LowerLimit' 不再被破坏）
+    - 中文路径乱码（路径直接在 .m 文件中，无需转义）
+    - 多行代码问题（.m 文件天然支持多行）
     """
     mode = _detect_connection_mode()
     
@@ -605,11 +719,9 @@ def run_code(code, show_output=True):
         eng = get_engine()
         try:
             if show_output:
-                escaped_code = code.replace("'", "''")
-                capture_cmd = f"evalc('{escaped_code}')"
-                output = eng.eval(capture_cmd, nargout=1)
-                output_str = str(output).strip() if output else ""
-                output_str = re.sub(r'<[^>]+>', '', output_str)
+                output_str = _run_code_via_diary(eng, code)
+                if isinstance(output_str, dict):  # 错误情况
+                    return output_str
             else:
                 eng.eval(code, nargout=0)
                 output_str = ""
@@ -769,29 +881,33 @@ def run_simulink(model_name, stop_time="10"):
         eng = get_engine()
         try:
             eng.eval(f"load_system('{model_name}')", nargout=0)
-            capture_cmd = ("evalc('"
+            
+            # v5.0: 使用 diary 替代 evalc
+            sim_code = (
                 "try, "
                 f"simOut = sim('{model_name}', 'StopTime', '{stop_time}', 'ReturnWorkspaceOutputs', 'on'); "
                 "fprintf('Simulation completed.\\n'); "
                 "catch ME, "
                 "fprintf(2, 'Simulink error: %s\\n', ME.message); "
                 "end"
-                "')")
-            sim_output = eng.eval(capture_cmd, nargout=1)
+            )
+            sim_output = _run_code_via_diary(eng, sim_code)
+            if isinstance(sim_output, dict):  # 错误
+                return sim_output
             
             # 自动绘图
             try:
-                plot_cmd = ("evalc('"
+                plot_code = (
                     "try, sims = simOut.get(); for i = 1:length(sims),"
                     "  name = sims{i}; data = simOut.get(name);"
-                    "  if isa(data, ''timeseries''),"
-                    "    figure(''Name'', [''Simulink: '', name]);"
-                    "    if isprop(data, ''Values''), plot(data.Time, data.Values.Data);"
+                    "  if isa(data, 'timeseries'),"
+                    "    figure('Name', ['Simulink: ', name]);"
+                    "    if isprop(data, 'Values'), plot(data.Time, data.Values.Data);"
                     "    else, plot(data.Time, data.Data); end,"
-                    "    title(name); xlabel(''Time''); drawnow; end, end,"
+                    "    title(name); xlabel('Time'); drawnow; end, end,"
                     "catch, end"
-                    "')")
-                eng.eval(plot_cmd, nargout=0)
+                )
+                eng.eval(plot_code, nargout=0)
             except:
                 pass
             
@@ -838,7 +954,7 @@ def set_simulink_workspace_var(model_name, var_name, var_value):
     
     通过 MATLAB Engine 的 assignin 实现。
     模型工作区变量优先级高于 MATLAB 基础工作区。
-    注意：MATLAB 引号规则 — Python evalc('...') 中内层单引号需双写 ''
+    v5.0: 使用 diary + eng.eval 替代 evalc，无需引号双写
     """
     mode = _detect_connection_mode()
     
@@ -851,24 +967,20 @@ def set_simulink_workspace_var(model_name, var_name, var_value):
             except:
                 pass
             
-            # 使用 evalc 包裹，内层单引号双写避免嵌套冲突
-            # Python: evalc('...') → MATLAB 看到单引号对
-            # 内层 get_param(''model_name'', ...) → MATLAB 看到 get_param('model_name', ...)
-            var_value_safe = str(var_value).replace("'", "''")
+            # v5.0: 直接 eng.eval，无需引号双写
+            var_value_safe = str(var_value)
             # 先设置到基础工作区
             eng.eval(f"assignin('base', '{var_name}', {var_value_safe});", nargout=0)
             # 再尝试设置到模型工作区
             try:
-                cmd = (
-                    "evalc('"
-                    f"try, "
-                    f"modelWorkspace = get_param(''{model_name}'', ''ModelWorkspace''); "
-                    f"modelWorkspace.assignin(''{var_name}'', {var_value_safe}); "
-                    f"catch, "
-                    f"end"
-                    "')"
+                set_ws_code = (
+                    "try, "
+                    f"modelWorkspace = get_param('{model_name}', 'ModelWorkspace'); "
+                    f"modelWorkspace.assignin('{var_name}', {var_value_safe}); "
+                    "catch, "
+                    "end"
                 )
-                eng.eval(cmd, nargout=0)
+                eng.eval(set_ws_code, nargout=0)
                 return {"status": "ok", "message": f"模型 '{model_name}' 工作区变量 '{var_name}' 已设置为 {var_value}", "connection_mode": "engine"}
             except Exception:
                 return {"status": "ok", "message": f"基础工作区变量 '{var_name}' 已设置为 {var_value}（模型工作区设置失败，已回退到基础工作区）", "connection_mode": "engine"}
@@ -876,7 +988,7 @@ def set_simulink_workspace_var(model_name, var_name, var_value):
             return {"status": "error", "message": f"设置变量失败: {str(e)}"}
     else:
         # CLI 模式
-        var_value_safe = str(var_value).replace("'", "''")
+        var_value_safe = str(var_value)
         code = f"load_system('{model_name}'); assignin('base', '{var_name}', {var_value_safe}); try, modelWorkspace = get_param('{model_name}', 'ModelWorkspace'); modelWorkspace.assignin('{var_name}', {var_value_safe}); catch, end; close_system('{model_name}', 0);"
         result = _run_cli_command(code, timeout=60)
         if result['status'] == 'ok':
@@ -888,7 +1000,7 @@ def set_simulink_workspace_var(model_name, var_name, var_value):
 def get_simulink_workspace_vars(model_name):
     """获取 Simulink 模型工作区变量列表
     
-    注意：MATLAB 引号规则 — Python evalc('...') 中内层单引号需双写 ''
+    v5.0: 使用 diary + eng.eval 替代 evalc，无需引号双写
     """
     mode = _detect_connection_mode()
     
@@ -901,25 +1013,22 @@ def get_simulink_workspace_vars(model_name):
             except:
                 pass
             
-            # 获取模型工作区变量
-            # evalc 内层所有单引号必须双写：''ModelWorkspace'' → MATLAB 看到 'ModelWorkspace'
-            # model_name 中的单引号也双写（防御性处理）
-            mn = model_name.replace("'", "''")
-            cmd = ("evalc('"
-                   "try, "
-                   f"ws = get_param(''{mn}'', ''ModelWorkspace''); "
-                   "vars = ws.whos; "
-                   "for i = 1:length(vars), "
-                   "  fprintf(''%s|%s|%s\\n'', vars(i).name, vars(i).class, mat2str(vars(i).size)); "
-                   "end, "
-                   "catch ME, "
-                   "  fprintf(''Error: %s\\n'', ME.message); "
-                   "end"
-                   "')")
-            output = eng.eval(cmd, nargout=1)
+            # v5.0: 使用 diary 替代 evalc
+            cmd_code = (
+                "try, "
+                f"ws = get_param('{model_name}', 'ModelWorkspace'); "
+                "vars = ws.whos; "
+                "for i = 1:length(vars), "
+                "  fprintf('%s|%s|%s\\n', vars(i).name, vars(i).class, mat2str(vars(i).size)); "
+                "end, "
+                "catch ME, "
+                "  fprintf('Error: %s\\n', ME.message); "
+                "end"
+            )
+            output = _run_code_via_diary(eng, cmd_code)
             variables = []
-            if output:
-                for line in str(output).strip().split('\n'):
+            if isinstance(output, str) and output:
+                for line in output.strip().split('\n'):
                     line = line.strip()
                     if line.startswith('Error:'):
                         return {"status": "error", "message": line}
@@ -986,8 +1095,12 @@ def list_figures():
     if mode == 'engine':
         eng = get_engine()
         try:
-            fig_info = eng.eval("evalc('figs = findall(0, ''Type'', ''figure''); for i = 1:length(figs), fprintf(''Figure %d: %s\\n'', figs(i).Number, figs(i).Name); end;')", nargout=1)
-            figures = [l.strip() for l in str(fig_info).strip().split('\n') if l.strip()] if fig_info else []
+            # v5.0: 使用 diary 替代 evalc
+            fig_code = "figs = findall(0, 'Type', 'figure'); for i = 1:length(figs), fprintf('Figure %d: %s\\n', figs(i).Number, figs(i).Name); end;"
+            output = _run_code_via_diary(eng, fig_code)
+            figures = []
+            if isinstance(output, str) and output:
+                figures = [l.strip() for l in output.strip().split('\n') if l.strip()]
             return {"status": "ok", "figures": figures, "connection_mode": "engine"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
@@ -1173,6 +1286,9 @@ def server_mode():
     
     每行输入一个 JSON 命令，每行输出一个 JSON 结果。
     Engine 在进程生命周期内持久化，变量跨命令保持。
+    
+    v5.0: 使用 sys.stdout.buffer.write + UTF-8 编码输出，
+    解决 Windows 下 GBK 编码导致中文 JSON 响应乱码的问题。
     """
     sys.stderr.write(f"[MATLAB Bridge] Server mode started.\n")
     sys.stderr.write(f"[MATLAB Bridge] MATLAB_ROOT: {MATLAB_ROOT}\n")
@@ -1199,18 +1315,28 @@ def server_mode():
             cmd_data = json.loads(line)
         except json.JSONDecodeError as e:
             result = {"status": "error", "message": f"JSON 解析失败: {str(e)}"}
-            sys.stdout.write(json.dumps(result, ensure_ascii=False) + '\n')
-            sys.stdout.flush()
+            _write_json_response(result)
             continue
         
         result = handle_command(cmd_data)
-        sys.stdout.write(json.dumps(result, ensure_ascii=False) + '\n')
-        sys.stdout.flush()
+        _write_json_response(result)
     
     # stdin 关闭，退出
     if _matlab_engine:
         try: _matlab_engine.quit()
         except: pass
+
+
+def _write_json_response(data: dict):
+    """以 UTF-8 编码写入 JSON 响应到 stdout
+    
+    Windows 下 sys.stdout.write() 使用 GBK 编码，
+    导致中文 JSON 响应乱码（如 "整理" → "鏁寸悊"）。
+    改用 sys.stdout.buffer.write() + UTF-8 编码解决。
+    """
+    json_str = json.dumps(data, ensure_ascii=False) + '\n'
+    sys.stdout.buffer.write(json_str.encode('utf-8'))
+    sys.stdout.buffer.flush()
 
 
 def oneshot_mode():

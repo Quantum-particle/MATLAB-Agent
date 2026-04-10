@@ -1,17 +1,39 @@
 # MATLAB Agent
 
-> AI 驱动的 MATLAB/Simulink 开发助手 | 版本 4.1.0
+> AI 驱动的 MATLAB/Simulink 开发助手 | 版本 5.1.0
 
 打通 AI 智能体与 MATLAB 闭园开发环境的隔阂，让 AI 能像开发 Python、C 一样在 MATLAB 中高效工作。特别面向航空航天领域的动力学建模、控制律设计和信号处理。
+
+## v5.1 核心升级
+
+### v5.1 — 启动防弹 + Simulink 建模深坑固化
+- 🔴 **端口 3000 自动清理**: 启动前自动杀残留进程 → 等待端口释放 → 确认干净 → 再启动
+- **一键启动脚本**: `start.bat` / `ensure-running.bat` 防弹级启动，AI Agent 一行命令搞定
+- **Simulink 建模深坑固化**: 默认连线冲突、From/Goto 信号传递、自动排版等 6 大坑写入底层
+- **模型构建后自动排版**: `Simulink.BlockDiagram.arrangeSystem()` 确保用户看到整齐布局
+
+### v5.0 — diary 输出捕获 + 一键启动
+- **diary 替代 evalc**: 彻底解决 Name-Value 参数引号双写、中文路径乱码、多行代码拼接三大顽疾
+- **一键 quickstart API**: `POST /api/matlab/quickstart` 一步完成 MATLAB_ROOT + Engine 启动 + 项目目录
+- **UTF-8 输出修复**: Python Bridge 使用 `sys.stdout.buffer.write()` + UTF-8，解决 Windows GBK 乱码
+- **相对路径修复**: execute API 基于 `_cachedProjectDir` 解析，不再依赖 Node.js CWD
+
+### v4.1 — 手动配置 + 踩坑固化
+- 移除自动检测，改为手动配置 + 环境变量 + 配置文件优先级
+- 踩坑经验固化到 SKILL.md、system-prompts.ts、TROUBLESHOOTING.md
+
+### v4.0 — 通用化
+- 双连接模式: Engine API（R2019a+）+ CLI 回退（老版本）
+- Python Bridge 常驻进程 + JSON 行协议
 
 ## 架构
 
 ```
-用户 (React 前端)
+用户 (React 前端 / AI Agent)
   │
   ├─ SSE ─→ Express Server (TypeScript)
   │            │
-  │            ├─ CodeBuddy Agent SDK ─→ AI 模型 (Claude)
+  │            ├─ CodeBuddy Agent SDK ─→ AI 模型
   │            │
   │            └─ spawn ─→ Python Bridge (matlab_bridge.py --server)
   │                          │
@@ -29,7 +51,7 @@
 ### 前置条件
 - **MATLAB** 任意版本安装在系统上（首次启动时需手动输入安装路径）
 - **Python 3.9+**（Engine API 模式需要，CLI 回退模式不要求）
-- **Node.js 18+**
+- **Node.js 18+**（Windows 下 `npx.cmd` 必须在 PATH 中）
 - **CodeBuddy CLI**（已登录）
 
 ### 安装
@@ -54,33 +76,28 @@ python -m pip install matlabengine
 > ⚠️ **绝对不能用** `npx tsx server/index.ts` 或 `npm run dev` 阻塞式启动！
 > MATLAB Engine 预热需要 30-90 秒，阻塞式启动会导致超时卡死。
 
-**正确方式：后台启动 + 轮询健康检查**
+#### 方式 A：一键启动脚本（⭐ 强烈推荐）
 
-#### 方式 A：使用启动脚本（推荐）
-
-```powershell
-& "$env:USERPROFILE\.workbuddy\skills\matlab-agent\app\start-matlab-agent.ps1"
+```bash
+# 一键启动（自动清理端口、安装依赖、后台启动、轮询健康检查）
+cmd /c "start.bat"
 ```
 
-#### 方式 B：手动后台启动
+#### 方式 B：AI Agent 专用 — ensure-running
 
-```powershell
-# 1. 检查端口冲突
-netstat -ano | findstr ":3000" | findstr "LISTENING"
+```bash
+# AI Agent 只需一行命令确保服务运行
+cmd /c "ensure-running.bat"
+# 返回码 0 = 服务可用
+```
 
-# 2. 后台启动
-cmd /c "start /B npx tsx server/index.ts"
+#### 方式 C：一键 quickstart API（v5.0 推荐）
 
-# 3. 轮询健康检查（最多等 120 秒）
-while ($true) {
-  try {
-    $r = Invoke-WebRequest -Uri "http://localhost:3000/api/health" -UseBasicParsing -TimeoutSec 5
-    $j = $r.Content | ConvertFrom-Json
-    if ($j.matlab.ready -eq $true) { Write-Host "Ready!"; break }
-    Write-Host "Waiting... warmup=$($j.matlab.warmup)"
-  } catch { Write-Host "Server not up yet..." }
-  Start-Sleep -Seconds 5
-}
+```bash
+# 一步完成 MATLAB_ROOT 配置 + Engine 启动 + 项目目录设置
+curl -X POST http://localhost:3000/api/matlab/quickstart \
+  -H "Content-Type: application/json" \
+  -d '{"matlabRoot":"D:\\Program Files\\MATLAB\\R2023b", "projectDir":"D:\\my_project"}'
 ```
 
 ### 配置 MATLAB 路径
@@ -92,7 +109,14 @@ while ($true) {
 set MATLAB_ROOT=D:\Program Files\MATLAB\R2023b
 
 # 方法2: API 配置（路径会持久化到配置文件）
-curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: application/json" -d "{\"matlabRoot\":\"D:\\\\Program Files\\\\MATLAB\\\\R2023b\"}"
+curl -X POST http://localhost:3000/api/matlab/config \
+  -H "Content-Type: application/json" \
+  -d '{"matlabRoot":"D:\\Program Files\\MATLAB\\R2023b"}'
+
+# 方法3: 一键快速启动（v5.0 推荐）
+curl -X POST http://localhost:3000/api/matlab/quickstart \
+  -H "Content-Type: application/json" \
+  -d '{"matlabRoot":"D:\\Program Files\\MATLAB\\R2023b", "projectDir":"D:\\my_project"}'
 ```
 
 **优先级**: 环境变量 `MATLAB_ROOT` > 配置文件 `data/matlab-config.json` > 未配置（提示用户输入）
@@ -107,6 +131,7 @@ curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: applicati
 | GET | `/api/matlab/status?quick=false` | MATLAB 完整检查（含 Engine） |
 | GET | `/api/matlab/config` | 获取 MATLAB 配置 |
 | POST | `/api/matlab/config` | 设置 MATLAB 根目录（持久化） |
+| **POST** | **`/api/matlab/quickstart`** | **一键快速启动（v5.0）** |
 
 ### 项目操作
 | 方法 | 路径 | 说明 |
@@ -124,8 +149,8 @@ curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: applicati
 ### 代码执行
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/matlab/run` | 持久化工作区执行代码（Engine 模式） |
-| POST | `/api/matlab/execute` | 执行 .m 脚本 |
+| POST | `/api/matlab/run` | 持久化工作区执行代码（v5.0 diary 输出捕获） |
+| POST | `/api/matlab/execute` | 执行 .m 脚本（v5.0 相对路径修复） |
 
 ### 工作区管理
 | 方法 | 路径 | 说明 |
@@ -141,6 +166,9 @@ curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: applicati
 | POST | `/api/matlab/simulink/create` | 创建 Simulink 模型 |
 | POST | `/api/matlab/simulink/run` | 运行 Simulink 仿真 |
 | POST | `/api/matlab/simulink/open` | 打开模型 |
+| POST | `/api/matlab/simulink/workspace/set` | 设置模型工作区变量 |
+| GET | `/api/matlab/simulink/workspace?modelName=...` | 获取模型工作区变量 |
+| POST | `/api/matlab/simulink/workspace/clear` | 清空模型工作区 |
 
 ### 图形管理
 | 方法 | 路径 | 说明 |
@@ -159,37 +187,55 @@ curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: applicati
 ## 预设 Agent
 
 1. **MATLAB 开发** (`matlab-default`): M 语言开发，信号处理/控制律/数据分析
-2. **Simulink 建模** (`simulink-default`): Simulink 模型构建和仿真
+2. **Simulink 建模** (`simulink-default`): Simulink 模型构建和仿真（含深坑经验固化）
 3. **通用助手** (`default`): 通用 AI 助手
+
+## ⚠️ 关键踩坑经验（固化到 AI 底层）
+
+### 启动踩坑
+- 🔴 **端口 3000 被旧进程占用**: 启动前必须杀掉残留进程，确认端口干净再启动
+- **node_modules 缺失**: 首次使用必须 `npm install --production`
+- **npx 在 Windows 是 .cmd**: 必须用 `cmd /c "npx tsx ..."`
+- **绝对不能阻塞式启动**: 必须 `start /B` 后台启动 + 轮询
+
+### Simulink 建模踩坑（v5.1 固化）
+- **新建 SubSystem 默认连线冲突**: 先 `delete_line` 清除默认连线，再 `add_line`
+- **复杂模型用 From/Goto 传递信号**: 不是直接连线，在子系统内部用 From 模块获取信号
+- **模型构建后必须排版**: `Simulink.BlockDiagram.arrangeSystem(modelName)`
+- **中文路径用 dir()+fullfile()**: 不能在代码字符串中直接写中文路径
+- **add_line 逐步执行**: 用 try-catch 包裹每个 `add_line`，避免连锁失败
+
+### 输出捕获（v5.0 diary 替代 evalc）
+- Name-Value 参数（如 `'LowerLimit'`）不再需要引号双写
+- 中文路径和中文输出正常传递
+- 多行代码无需手动拼接
 
 ## 项目结构
 
 ```
 matlab-agent/
 ├── server/
-│   ├── index.ts              # Express 服务器入口（含 config API）
-│   ├── matlab-controller.ts  # MATLAB 控制器（手动配置 + 常驻桥接）
-│   ├── system-prompts.ts     # AI 系统提示词（动态环境信息注入）
+│   ├── index.ts              # Express 服务器入口（含 quickstart API）
+│   ├── matlab-controller.ts  # MATLAB 控制器（v5.0: diary + 相对路径修复）
+│   ├── system-prompts.ts     # AI 系统提示词（v5.1: Simulink 建模经验固化）
 │   ├── db.ts                 # SQLite 数据库
 │   └── index.d.ts            # TypeScript 类型定义
 ├── matlab-bridge/
-│   └── matlab_bridge.py      # Python-MATLAB 桥接（Engine + CLI 双模式）
+│   └── matlab_bridge.py      # Python-MATLAB 桥接（v5.0: diary + UTF-8 输出）
 ├── src/                      # React 前端
 │   ├── App.tsx
 │   ├── components/
 │   │   ├── MATLABStatusBar.tsx    # 动态版本显示
-│   │   ├── ChatInput.tsx
-│   │   ├── ChatMessages.tsx
 │   │   └── ...
 │   ├── hooks/
-│   │   ├── useAgents.ts           # Agent 管理（无硬编码路径）
-│   │   ├── useChat.ts
+│   │   ├── useAgents.ts           # Agent 管理
 │   │   └── ...
-│   ├── config.ts                  # 动态配置（运行时获取 MATLAB 信息）
-│   └── types.ts
+│   └── config.ts                  # 动态配置
 ├── data/                     # 运行时数据（git 忽略）
 │   └── .gitkeep
-├── start-matlab-agent.ps1    # 一键启动脚本（后台+轮询+首次引导配置）
+├── start.bat                 # ⭐ 一键启动脚本（最可靠）
+├── ensure-running.bat        # AI Agent 专用确保运行脚本
+├── start-matlab-agent.ps1    # PowerShell 启动脚本
 ├── package.json
 ├── tsconfig.json
 └── vite.config.ts
@@ -221,13 +267,13 @@ matlab-agent/
 ## 已知限制
 
 - CLI 模式下变量不跨命令保持
-- 中文路径不支持 MATLAB `run()`（自动 cd 兜底）
+- 中文路径需用 `dir()` + `fullfile()` 间接操作
 - MATLAB 函数名不能以下划线开头
 - Engine 首次启动 ~8s（固有开销）
 
 ## 文档
 
-- [故障排除指南](./TROUBLESHOOTING.md) — 所有已知问题及解决方案
+- [故障排除指南](./TROUBLESHOOTING.md) — 所有已知问题及解决方案（含 v5.1 Simulink 建模深坑）
 - [二次开发指南](./DEVELOPMENT.md) — MATLAB Agent 架构与定制
 - [GitHub 发布流程](../PUBLISH.md) — 从 Skill 目录同步到 GitHub
 

@@ -1,6 +1,6 @@
 {
   "name": "matlab-agent",
-  "version": "1.0.0",
+  "version": "5.1.0",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",

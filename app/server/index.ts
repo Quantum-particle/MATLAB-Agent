@@ -421,6 +421,17 @@ app.post("/api/matlab/start", async (req, res) => {
   }
 });
 
+// 一键快速启动（v5.0 新增）
+app.post("/api/matlab/quickstart", async (req, res) => {
+  const { matlabRoot, projectDir } = req.body;
+  try {
+    const result = await matlab.quickstartMATLAB({ matlabRoot, projectDir });
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
 // 停止 MATLAB Engine
 app.post("/api/matlab/stop", async (req, res) => {
   try {
