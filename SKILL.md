@@ -1,6 +1,18 @@
-﻿# MATLAB Agent Skill
+# MATLAB Agent Skill
 
 > AI 驱动的 MATLAB/Simulink 开发助手，打通 AI 智能体与 MATLAB 闭园开发环境的隔阂。
+
+## 🎯 一句话介绍
+
+**MATLAB-Agent** 是一个让 AI 直接操控 MATLAB 引擎的智能体——它能执行 M 脚本、读写工作区变量、构建和运行 Simulink 模型，就像你坐在 MATLAB 命令行前一样。通过常驻 Python 桥接进程 + MATLAB Engine API，实现代码执行、变量持久化、仿真控制全链路打通，告别"AI 写代码你复制粘贴"的割裂体验。
+
+## ✨ 核心亮点
+
+- 🔄 **MATLAB 工作区直连**：执行代码后变量持久保留，像真实 MATLAB 会话一样逐步操作
+- 🚁 **Simulink 建模**：从零创建模型、添加模块、连线、排版、运行仿真，全流程自动化
+- 📊 **数据交互**：读取 .m/.mat/.slx 文件，管理工作区变量，导出分析结果
+- 🔧 **双模引擎**：Engine API（推荐）+ CLI 回退（兼容老版本 MATLAB），自动检测切换
+- ⚡ **一键启动**：`quickstart` API 一步完成环境配置 + Engine 启动 + 项目目录设定
 
 ## 触发条件
 
