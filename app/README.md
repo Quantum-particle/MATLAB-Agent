@@ -95,9 +95,8 @@ cmd /c "ensure-running.bat"
 
 ```bash
 # 一步完成 MATLAB_ROOT 配置 + Engine 启动 + 项目目录设置
-curl -X POST http://localhost:3000/api/matlab/quickstart \
-  -H "Content-Type: application/json" \
-  -d '{"matlabRoot":"D:\\Program Files\\MATLAB\\R2023b", "projectDir":"D:\\my_project"}'
+# Windows 下用 PowerShell — 必须用 ConvertTo-Json 变量构造法，避免 $ 变量被展开吞噬
+powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectDir='D:\my_project'} | ConvertTo-Json -Compress; Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/quickstart' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))"
 ```
 
 ### 配置 MATLAB 路径
@@ -108,15 +107,11 @@ curl -X POST http://localhost:3000/api/matlab/quickstart \
 # 方法1: 环境变量
 set MATLAB_ROOT=D:\Program Files\MATLAB\R2023b
 
-# 方法2: API 配置（路径会持久化到配置文件）
-curl -X POST http://localhost:3000/api/matlab/config \
-  -H "Content-Type: application/json" \
-  -d '{"matlabRoot":"D:\\Program Files\\MATLAB\\R2023b"}'
+# 方法2: API 配置（路径会持久化到配置文件）— 必须用 ConvertTo-Json 变量构造法
+powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b'} | ConvertTo-Json -Compress; Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/config' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))"
 
-# 方法3: 一键快速启动（v5.0 推荐）
-curl -X POST http://localhost:3000/api/matlab/quickstart \
-  -H "Content-Type: application/json" \
-  -d '{"matlabRoot":"D:\\Program Files\\MATLAB\\R2023b", "projectDir":"D:\\my_project"}'
+# 方法3: 一键快速启动（v5.0 推荐）— 必须用 ConvertTo-Json 变量构造法
+powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectDir='D:\my_project'} | ConvertTo-Json -Compress; Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/quickstart' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))"
 ```
 
 **优先级**: 环境变量 `MATLAB_ROOT` > 配置文件 `data/matlab-config.json` > 未配置（提示用户输入）

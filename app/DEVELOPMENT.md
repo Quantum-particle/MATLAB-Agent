@@ -255,14 +255,15 @@ console.log("[Bridge] Received:", result);
 ### 3. 健康检查
 
 ```bash
-curl http://localhost:3000/api/health
+# Windows 下用 PowerShell 替代 curl（避免输入重定向问题）
+powershell -Command "Invoke-RestMethod -Uri 'http://localhost:3000/api/health' -TimeoutSec 5"
 # 返回: { matlab: { warmup: "ready"|"warming_*"|"failed", ready: true/false } }
 ```
 
 ### 4. 查看 MATLAB 配置
 
 ```bash
-curl http://localhost:3000/api/matlab/config
+powershell -Command "Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/config' -TimeoutSec 5"
 # 返回: { matlabRoot: "...", connectionMode: "engine"|"cli", matlabVersion: "R2023b" }
 ```
 

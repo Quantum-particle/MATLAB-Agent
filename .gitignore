@@ -42,3 +42,7 @@ Thumbs.db
 *.log
 
 # v5.1
+
+# Local backup / temp scripts (never push)
+_backup_*/
+_desensitize.ps1

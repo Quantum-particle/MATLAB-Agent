@@ -126,9 +126,10 @@ if %errorlevel% neq 0 (
     echo     D:\Program Files(x86)\MATLAB2023b
     echo     C:\Program Files\MATLAB\R2024a
     echo.
-    echo   Configure via quickstart API:
+    echo   Configure via quickstart API (use ConvertTo-Json):
     echo     POST http://localhost:3000/api/matlab/quickstart
-    echo     Body: {"matlabRoot":"YOUR_PATH","projectDir":"YOUR_PROJECT"}
+    echo     $b = @{matlabRoot='YOUR_PATH';projectDir='YOUR_PROJECT'} ^| ConvertTo-Json -Compress
+    echo     Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/quickstart' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))
     echo ============================================================
     echo.
     goto show_status
@@ -172,9 +173,10 @@ echo     Health:  http://localhost:3000/api/health
 echo     Config:  http://localhost:3000/api/matlab/config
 echo     Log:     %TEMP%\matlab-agent-out.log
 echo.
-echo   Quick Start API (recommended for AI agents):
+echo   Quick Start API (use ConvertTo-Json, do NOT inline JSON in -Body):
 echo     POST http://localhost:3000/api/matlab/quickstart
-echo     Body: {"matlabRoot":"D:\\Program Files(x86)\\MATLAB2023b","projectDir":"D:\\your_project"}
+echo     $b = @{matlabRoot='YOUR_PATH';projectDir='YOUR_PROJECT'} ^| ConvertTo-Json -Compress
+echo     Invoke-RestMethod -Uri '...' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))
 echo ============================================================
 echo.
 echo Server running in background. Closing this window won't stop it.

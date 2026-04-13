@@ -1,4 +1,4 @@
-# MATLAB Agent Skill
+﻿# MATLAB Agent Skill
 
 > AI 驱动的 MATLAB/Simulink 开发助手，打通 AI 智能体与 MATLAB 闭园开发环境的隔阂。
 
@@ -44,7 +44,7 @@
 
 ```bash
 # 双击运行或在命令行执行：
-cmd /c "C:\Users\<你的用户名>\.workbuddy\skills\matlab-agent\app\start.bat"
+cmd /c "C:\Users\<USERNAME>\.workbuddy\skills\matlab-agent\app\start.bat"
 ```
 
 此脚本自动完成：
@@ -60,7 +60,7 @@ cmd /c "C:\Users\<你的用户名>\.workbuddy\skills\matlab-agent\app\start.bat"
 
 ```bash
 # AI agent 只需一行命令确保服务运行：
-cmd /c "C:\Users\<你的用户名>\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
+cmd /c "C:\Users\<USERNAME>\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
 # 返回码 0 = 服务可用, 1 = 不可用
 ```
 
@@ -113,11 +113,11 @@ while ($elapsed -lt $maxWait) {
 # 方法1: 环境变量
 set MATLAB_ROOT=D:\Program Files\MATLAB\R2023b
 
-# 方法2: API 配置（路径会持久化到配置文件）
-curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: application/json" -d "{\"matlabRoot\":\"D:\\\\Program Files\\\\MATLAB\\\\R2023b\"}"
+# 方法2: API 配置（路径会持久化到配置文件）— 用 PowerShell 变量构造法避免 $ 变量展开和转义地狱
+powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b'} | ConvertTo-Json -Compress; Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/config' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))"
 
 # 方法3: 一键快速启动（v5.0 推荐，AI agent 专用）
-curl -X POST http://localhost:3000/api/matlab/quickstart -H "Content-Type: application/json" -d "{\"matlabRoot\":\"D:\\\\Program Files\\\\MATLAB\\\\R2023b\", \"projectDir\":\"D:\\\\RL\\\\my_project\"}"
+powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectDir='D:\RL\my_project'} | ConvertTo-Json -Compress; Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/quickstart' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))"
 ```
 
 ### 3. API 速查
@@ -197,7 +197,7 @@ curl -X POST http://localhost:3000/api/matlab/quickstart -H "Content-Type: appli
 - **坑4: 旧进程残留占端口 3000（已合并到坑0）**
   - 见上方 **坑0**
 
-- **坑5: 含中文/空格/括号的路径（用户目录 `<你的用户名>`、`Program Files(x86)`）**
+- **坑5: 含中文/空格/括号的路径（用户目录 `<USERNAME>`、`Program Files(x86)`）**
   - 症状：PowerShell 中 `cd` 到含中文路径可能失败
   - 修复：用 `cmd /c` 包裹命令，或用 `Push-Location`/`Pop-Location`
 
@@ -214,9 +214,9 @@ curl -X POST http://localhost:3000/api/matlab/quickstart -H "Content-Type: appli
 0. 🔴 端口清理（最优先！启动前必须确保环境干净！）:
    - ensure-running.bat 已自动处理（杀进程 → 等端口释放 → 确认干净 → 再启动）
    - 手动: netstat -ano | findstr ":3000" | findstr "LISTENING" → taskkill /F /PID <pid> → 等2-3秒
-1. 检查服务: curl http://localhost:3000/api/health
+1. 检查服务: powershell -Command "try { Invoke-RestMethod -Uri 'http://localhost:3000/api/health' -TimeoutSec 5; Write-Host 'OK' } catch { Write-Host 'FAIL' }"
 2. 如已运行 → 直接使用
-3. 如未运行 → 执行: cmd /c "C:\Users\<你的用户名>\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
+3. 如未运行 → 执行: cmd /c "C:\Users\<USERNAME>\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
 4. 等待 ensure-running 返回 0
 5. 使用 quickstart API 一步到位: POST /api/matlab/quickstart
 ```
@@ -328,8 +328,11 @@ curl -X POST http://localhost:3000/api/matlab/quickstart -H "Content-Type: appli
 ### 20. POST /api/matlab/config 不能阻塞式重启桥接
 - **修复**: `restartBridge()` 改为后台异步 `.catch()`
 
-### 21. PowerShell 向 API 发送中文路径需 UTF-8 编码
-- 使用 `[System.Text.Encoding]::UTF8.GetBytes($json)` 发送 body
+### 21. 🔴 PowerShell 向 API 发送 POST 请求必须用 ConvertTo-Json 变量构造法
+- **根因**: PowerShell 双引号字符串中 `$` 是变量前缀，内联 JSON 中的 `$matlabRoot` 等会被展开为空字符串
+- **绝对不要在 -Body 参数中直接内联 JSON 字符串！**
+- **正确做法**: 用哈希表构造 + `ConvertTo-Json -Compress` + `[System.Text.Encoding]::UTF8.GetBytes()`
+- 详细模板见 TROUBLESHOOTING.md §22
 
 ### 22. 🔴 Simulink 建模深坑大全（v5.1 固化 — 任务4 实测总结）
 
@@ -398,6 +401,64 @@ curl -X POST http://localhost:3000/api/matlab/quickstart -H "Content-Type: appli
   - 脚本化建模时，所有模块按 Position 参数放置，如果不精心计算位置，模块会叠在一起
   - **必须在所有模块和连线完成后调用排版**: `Simulink.BlockDiagram.arrangeSystem(modelName)`
   - 顶层模型和每个子系统都需要排版（见 4.5 节）
+
+### 23. 🔴 封装子系统（Masked Subsystem）解析规范（v5.1 固化 — 黑鹰模型实测总结）
+
+> **遇到 `find_system` 只返回自身1个块的 SubSystem？这多半是封装模块！**
+
+**问题本质**：Simulink 模型中存在多层嵌套的封装子系统，其特点是：
+- `find_system(path)` 不带 SearchDepth 时对封装子系统只返回自身
+- `get_param(block, 'Mask')` 返回 `on`（数值可能是 111 或 110）
+- 不能用 `get_param(block, 'Children')` —— 会报错"SubSystem block (mask) 没有名为 'Children' 的参数"
+- 不能直接用绝对路径访问内部块 —— 会报错"在系统中找不到模块"
+
+**解析流程**：
+1. 检查 Mask 属性确认是封装模块：`get_param(path, 'Mask')`
+2. 读取 MaskPrompts 和 MaskVariables 了解封装参数语义
+3. 用 `find_system(blockPath, 'SearchDepth', 1)` 逐层深入
+4. 对每层重复上述步骤直到没有嵌套 SubSystem
+5. 读取 MaskValues 获取参数值
+
+```matlab
+% ====== 封装子系统逐层解析标准流程 ======
+
+% 步骤1：检查封装属性
+get_param(blockPath, 'Mask')          % 返回 'on' 确认是封装模块
+get_param(blockPath, 'MaskType')      % 封装类型名
+get_param(blockPath, 'MaskPrompts')   % 封装参数提示文字
+get_param(blockPath, 'MaskVariables') % 封装变量名（如 Omega=@1;R=@2;...）
+
+% 步骤2：逐层用 find_system 深入
+% 第一层：父容器的直接子块
+blks1 = find_system('Rotor  Model', 'SearchDepth', 1);
+
+% 第二层：继续深入嵌套子系统
+blks2 = find_system('Rotor  Model/Rotor Model', 'SearchDepth', 1);
+% 结果：成功读到 34 个内部块！
+
+% 第三层：进入更深的子系统
+blks3 = find_system('Rotor  Model/Rotor Model/Blade Aeroloads Model1', 'SearchDepth', 1);
+% 结果：939 个块！完全展开
+
+% 步骤3：读取封装参数值
+get_param(blockPath, 'MaskValues')     % 获取所有封装参数的值
+get_param(blockPath, 'MaskEnables')    % 哪些参数启用
+```
+
+**关键 API**：
+- `get_param(path, 'Mask')` — 检查是否有封装（返回 'on' 或数值 111/110）
+- `get_param(path, 'MaskType')` — 封装类型名（如 'Rotor Model'）
+- `get_param(path, 'MaskPrompts')` — 封装参数的中文/英文提示
+- `get_param(path, 'MaskVariables')` — 封装变量名和序号（如 `Omega=@1;R=@2`）
+- `get_param(path, 'MaskValues')` — 封装参数当前值
+- `find_system(path, 'SearchDepth', 1)` — 只看一层子块
+
+**避坑**：
+- ❌ 不要用 `get_param(path, 'Children')` — 封装子系统无此属性，会报错
+- ❌ 不要直接拼绝对路径访问内部块 — 会报错找不到模块
+- ❌ `find_system(path)` 不带 SearchDepth — 对封装子系统只返回自身
+- ✅ 必须逐层用 `find_system` + `SearchDepth=1` 深入
+- ✅ 封装变量名中的 `@数字` 表示参数序号，如 `Omega=@1` 表示第1个参数
 
 ## 性能指标
 
