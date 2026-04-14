@@ -46,6 +46,21 @@
 
 ## 更新历史
 
+### v5.4.0 — 2026-04-14 工作空间隔离 + 自动清理
+
+- **核心改动**:
+  - `matlab_bridge.py`: 新增 `init_agent_workspace()`、`route_file_path()`、`cleanup_agent_workspace()` 三个隔离函数
+  - `matlab_bridge.py`: `set_project_dir()` 自动调用 `init_agent_workspace()` 初始化隔离子文件夹
+  - `matlab-controller.ts`: 新增 `initAgentWorkspace()`、`routeFilePath()`、`cleanupAgentWorkspace()` 封装
+  - `index.ts`: 新增 3 个 API 端点（init/route/cleanup）
+  - `system-prompts.ts`: v5.4 工作流规范 — 文件分类规则 + 自动化流程 + 收尾清理 + API 文档
+
+- **设计决策**:
+  - 隔离目录名: `.matlab_agent_tmp`（点开头表示隐藏/临时目录）
+  - 用户源文件（.m/.slx/.mat/.fig）留在工作目录，中间文件（.json/.c/.h/.dll/.exe 等）进隔离子目录
+  - 未知扩展名保守隔离，宁可隔离也不污染
+  - 清理分两级: keepResults=true 保留结果文件，false 全删
+
 ### v5.1.0 — 2026-04-10 启动防弹 + Simulink 建模深坑固化
 
 - **核心改动**:

@@ -1,4 +1,4 @@
-# MATLAB-Agent v5.2
+# MATLAB-Agent v5.4
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
@@ -26,6 +26,8 @@
 | **常驻 Python 桥接** | Node.js ↔ Python ↔ MATLAB Engine，stdin/stdout JSON 行协议通信 |
 | **一键启动** | `quickstart` API 一步完成环境配置 + Engine 启动 + 项目目录设定 |
 | **配置自检 & 自修复** | 启动时自动检测双目录配置冲突并迁移；`/api/matlab/config/diagnose` 诊断配置状态 |
+| **工作空间隔离**（v5.4） | 中间执行文件自动隔离到 `.matlab_agent_tmp/`，用户项目目录保持干净 |
+| **自动清理**（v5.4） | 任务完成后自动清理中间文件，支持保留结果文件 |
 | **变量持久化** | Engine 模式下变量跨命令保持，像真实 MATLAB 会话一样逐步操作 |
 | **UTF-8 输出** | `sys.stdout.buffer.write()` + UTF-8 编码，解决 Windows GBK 乱码 |
 | **Simulink 全流程** | 创建模型、添加模块/子系统、连线、自动排版、运行仿真 |
@@ -121,6 +123,9 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 | GET | `/api/matlab/workspace` | 获取工作区变量 |
 | POST | `/api/matlab/simulink/create` | 创建 Simulink 模型 |
 | POST | `/api/matlab/simulink/run` | 运行仿真 |
+| POST | `/api/matlab/workspace/isolation/init` | 初始化工作空间隔离（v5.4） |
+| POST | `/api/matlab/workspace/isolation/route` | 文件路径路由（v5.4） |
+| POST | `/api/matlab/workspace/isolation/cleanup` | 清理中间文件（v5.4） |
 
 > 完整 API 列表见 [SKILL.md](./SKILL.md)
 
@@ -147,6 +152,7 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 7. **双 data/ 目录配置不同步**（v5.2 自动修复）：`ensureDataDirSync()` 启动自检 + 自动迁移
 8. **`>nul 2>&1` 在 `cmd /c` 嵌套调用报错**（v5.2 修复）：改用 `2>nul` + `-NoProfile`
 9. **bat 路径含括号 `(x86)` 导致脚本中断**（v5.2 修复）：用 `^(` `^)` 转义
+10. **中间执行文件污染用户项目目录**（v5.4 修复）：自动隔离到 `.matlab_agent_tmp/`，任务完成自动清理
 
 > 详细踩坑记录见 [SKILL.md](./SKILL.md) 和 [app/TROUBLESHOOTING.md](./app/TROUBLESHOOTING.md)
 
@@ -154,6 +160,7 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 
 | 版本 | 日期 | 核心改动 |
 |------|------|---------|
+| v5.4 | 2026-04-14 | 工作空间隔离（.matlab_agent_tmp/）、中间文件自动清理、3 个新 API |
 | v5.2 | 2026-04-14 | 4 Bug 修复（双目录同步/重定向报错/空 bat/PowerShell 慢）、ensureDataDirSync 自检、config diagnose API、DELETE config API |
 | v5.1 | 2026-04-10 | 启动防弹、端口清理、Simulink 建模深坑固化、封装子系统解析规范 |
 | v5.0 | 2026-04-10 | diary 替代 evalc、quickstart API、UTF-8 输出修复 |

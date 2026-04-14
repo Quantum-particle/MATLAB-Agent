@@ -57,7 +57,7 @@
 
 ```bash
 # 双击运行或在命令行执行：
-cmd /c "C:\Users\<USERNAME>\.workbuddy\skills\matlab-agent\app\start.bat"
+cmd /c "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\start.bat"
 ```
 
 此脚本自动完成：
@@ -73,7 +73,7 @@ cmd /c "C:\Users\<USERNAME>\.workbuddy\skills\matlab-agent\app\start.bat"
 
 ```bash
 # AI agent 只需一行命令确保服务运行：
-cmd /c "C:\Users\<USERNAME>\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
+cmd /c "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
 # 返回码 0 = 服务可用, 1 = 不可用
 ```
 
@@ -219,7 +219,7 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 - **坑4: 旧进程残留占端口 3000（已合并到坑0）**
   - 见上方 **坑0**
 
-- **坑5: 含中文/空格/括号的路径（用户目录 `<USERNAME>`、`Program Files(x86)`）**
+- **坑5: 含中文/空格/括号的路径（用户目录 `泰坦`、`Program Files(x86)`）**
   - 症状：PowerShell 中 `cd` 到含中文路径可能失败
   - 修复：用 `cmd /c` 包裹命令，或用 `Push-Location`/`Pop-Location`
 
@@ -238,7 +238,7 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
    - 手动: netstat -ano | findstr ":3000" | findstr "LISTENING" → taskkill /F /PID <pid> → 等2-3秒
 1. 检查服务: powershell -Command "try { Invoke-RestMethod -Uri 'http://localhost:3000/api/health' -TimeoutSec 5; Write-Host 'OK' } catch { Write-Host 'FAIL' }"
 2. 如已运行 → 直接使用
-3. 如未运行 → 执行: cmd /c "C:\Users\<USERNAME>\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
+3. 如未运行 → 执行: cmd /c "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
 4. 等待 ensure-running 返回 0
 5. 使用 quickstart API 一步到位: POST /api/matlab/quickstart
 ```

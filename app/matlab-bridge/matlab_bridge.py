@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-MATLAB Bridge v5.1 - 通用化 MATLAB 会话服务
+MATLAB Bridge v5.4 - 通用化 MATLAB 会话服务
 
 运行模式: 作为常驻进程运行，通过 stdin/stdout JSON 行协议通信。
 Node.js 启动此进程后保持运行，通过管道发送命令、接收结果。
@@ -12,6 +12,20 @@ Node.js 启动此进程后保持运行，通过管道发送命令、接收结果
   每行一个 JSON 对象，输入为命令，输出为结果。
   输入: {"action": "run_code", "params": {"code": "x = 42;"}}
   输出: {"status": "ok", "stdout": "x = 42", "open_figures": 0}
+
+v5.4 变更（2026-04-14）:
+  - 新增 workspace isolation: 中间执行文件自动隔离到 .matlab_agent_tmp/ 子文件夹
+  - 新增 init_agent_workspace(): 初始化隔离子文件夹
+  - 新增 route_file_path(): 根据文件类型自动路由到工作目录或隔离目录
+  - 新增 cleanup_agent_workspace(): 任务完成后清理中间文件
+  - 文件分类: .m/.slx/.mdl/.mat/.fig 留在工作目录，其余执行文件入隔离目录
+
+v5.3 变更（2026-04-14）:
+  - 修复 _detect_matlab_version_cli() 添加 -r 回退（R2016a-R2018b 不支持 -batch）
+  - 修复 CLI 模式 exit 拼接：加换行符防止注释行吞掉 exit
+  - 优化 _test_engine_compatibility() 增加 Engine 路径预检查
+  - 统一 API 参数名（scan 兼容 dirPath 和 dir）
+  - 补充中文路径 API 调用文档
 
 v5.0 变更（2026-04-10）:
   - 核心重构: 用 diary() + eng.eval() 替代 evalc()，彻底解决引号双写问题
@@ -25,7 +39,7 @@ v4.1 变更:
   - MATLAB_ROOT 仅从环境变量读取（由 Node.js 端传入）
   - 与 Node.js 端 v4.1 行为一致：手动配置优先
 
-版本: 5.0.0 (2026-04-10)
+版本: 5.4.0 (2026-04-14)
 """
 
 import sys
@@ -77,6 +91,176 @@ _project_dir = None
 _matlab_engine = None
 _matlab_version = None  # 缓存 MATLAB 版本号
 
+# ============= Workspace Isolation（v5.4）============
+# 中间执行文件隔离到 .matlab_agent_tmp/ 子文件夹，避免污染用户工作目录
+
+_AGENT_TMP_DIR_NAME = '.matlab_agent_tmp'
+
+# 允许留在工作目录的文件扩展名（用户项目原生文件）
+_KEEP_IN_WORKSPACE_EXTS = {'.m', '.slx', '.mdl', '.mat', '.fig', '.xlsx', '.xls', '.csv', '.docx', '.pdf'}
+
+# 需要隔离到子文件夹的文件扩展名（中间执行文件）
+_ISOLATE_EXTS = {'.json', '.c', '.h', '.cpp', '.hpp', '.obj', '.o', '.dll', '.lib', '.exp',
+                 '.exe', '.bat', '.py', '.js', '.ts', '.def', '.tlc', '.tlh', '.xml',
+                 '.html', '.css', '.log', '.bak', '.tmp', '.txt', '.rpt', '.mk'}
+
+_agent_workspace_initialized = False  # 是否已初始化隔离子目录
+
+
+def _get_agent_tmp_dir():
+    """获取隔离子目录的绝对路径"""
+    if not _project_dir:
+        return None
+    return os.path.join(_project_dir, _AGENT_TMP_DIR_NAME)
+
+
+def init_agent_workspace():
+    """初始化 Agent 工作空间隔离子目录
+    
+    在项目目录下创建 .matlab_agent_tmp/ 子文件夹，
+    并在 MATLAB 中 addpath 该目录（确保隔离目录中的 .m 文件也能被找到）。
+    """
+    global _agent_workspace_initialized
+    
+    if not _project_dir:
+        return {"status": "error", "message": "项目目录未设置，无法初始化隔离工作空间"}
+    
+    tmp_dir = _get_agent_tmp_dir()
+    if not tmp_dir:
+        return {"status": "error", "message": "无法确定隔离目录路径"}
+    
+    # 创建隔离目录
+    try:
+        os.makedirs(tmp_dir, exist_ok=True)
+    except Exception as e:
+        return {"status": "error", "message": f"创建隔离目录失败: {str(e)}"}
+    
+    # 在 MATLAB 中 addpath 隔离目录（确保隔离目录中的 .m 文件也能被找到）
+    mode = _detect_connection_mode()
+    if mode == 'engine':
+        eng = get_engine()
+        if eng:
+            try:
+                tmp_dir_safe = tmp_dir.replace('\\', '/')
+                eng.eval(f"addpath('{tmp_dir_safe}');", nargout=0)
+            except:
+                pass
+    
+    _agent_workspace_initialized = True
+    return {"status": "ok", "message": f"隔离工作空间已初始化: {tmp_dir}", "tmp_dir": tmp_dir}
+
+
+def route_file_path(filename, force_workspace=False):
+    """根据文件类型路由文件路径
+    
+    将用户项目原生文件（.m/.slx/.mat 等）保留在工作目录，
+    将中间执行文件（.json/.c/.dll 等）路由到隔离子目录。
+    
+    参数:
+        filename: 文件名或相对路径（不含工作目录前缀）
+        force_workspace: 强制放在工作目录（如用户明确要求）
+    
+    返回:
+        完整的文件路径（已路由到正确目录）
+    """
+    if not _project_dir:
+        return filename  # 没有项目目录，原样返回
+    
+    if force_workspace:
+        return os.path.join(_project_dir, filename)
+    
+    # 判断文件扩展名
+    _, ext = os.path.splitext(filename)
+    ext = ext.lower()
+    
+    if ext in _KEEP_IN_WORKSPACE_EXTS:
+        # 用户项目原生文件 → 留在工作目录
+        return os.path.join(_project_dir, filename)
+    elif ext in _ISOLATE_EXTS:
+        # 中间执行文件 → 隔离到子目录
+        tmp_dir = _get_agent_tmp_dir()
+        if tmp_dir:
+            # 确保隔离目录存在
+            os.makedirs(tmp_dir, exist_ok=True)
+            return os.path.join(tmp_dir, filename)
+        return os.path.join(_project_dir, filename)
+    else:
+        # 未知扩展名 → 隔离到子目录（保守策略：宁可隔离也不污染）
+        tmp_dir = _get_agent_tmp_dir()
+        if tmp_dir:
+            os.makedirs(tmp_dir, exist_ok=True)
+            return os.path.join(tmp_dir, filename)
+        return os.path.join(_project_dir, filename)
+
+
+def cleanup_agent_workspace(keep_results=True):
+    """清理 Agent 工作空间中的中间执行文件
+    
+    参数:
+        keep_results: 是否保留结果文件（.txt, .dll, .exe 等），
+                      默认 True（只删除真正的中间文件）
+    
+    删除规则:
+        - 始终删除: .obj, .o, .tmp, .log, .bak, .def, .tlc, .tlh, .xml, .rpt, .mk
+        - 保留（如果 keep_results=True）: .c, .h, .dll, .lib, .exp, .exe, .txt, .json
+        - 不删除: .m, .slx, .mdl, .mat, .fig 等（这些不会出现在隔离目录中）
+    """
+    global _agent_workspace_initialized
+    
+    tmp_dir = _get_agent_tmp_dir()
+    if not tmp_dir or not os.path.exists(tmp_dir):
+        return {"status": "ok", "message": "隔离目录不存在，无需清理"}
+    
+    # 始终删除的中间文件扩展名
+    always_delete_exts = {'.obj', '.o', '.tmp', '.log', '.bak', '.def', '.tlc', '.tlh', '.xml', '.rpt', '.mk'}
+    
+    # 结果文件扩展名（keep_results=True 时保留）
+    result_exts = {'.c', '.h', '.cpp', '.hpp', '.dll', '.lib', '.exp', '.exe', '.txt', '.json', '.bat', '.py', '.js', '.ts'}
+    
+    deleted_files = []
+    kept_files = []
+    
+    for fname in os.listdir(tmp_dir):
+        fpath = os.path.join(tmp_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        
+        _, ext = os.path.splitext(fname)
+        ext = ext.lower()
+        
+        if ext in always_delete_exts:
+            try:
+                os.remove(fpath)
+                deleted_files.append(fname)
+            except:
+                pass
+        elif ext in result_exts:
+            if keep_results:
+                kept_files.append(fname)
+            else:
+                try:
+                    os.remove(fpath)
+                    deleted_files.append(fname)
+                except:
+                    pass
+    
+    # 如果隔离目录为空，删除目录本身
+    remaining = os.listdir(tmp_dir)
+    if not remaining:
+        try:
+            os.rmdir(tmp_dir)
+            _agent_workspace_initialized = False
+        except:
+            pass
+    
+    return {
+        "status": "ok",
+        "message": f"已清理 {len(deleted_files)} 个中间文件" + (f"，保留 {len(kept_files)} 个结果文件" if kept_files else ""),
+        "deleted": deleted_files,
+        "kept": kept_files if keep_results else [],
+        "tmp_dir_removed": not os.path.exists(tmp_dir) if not remaining else False
+    }
+
 
 def _is_matlab_available():
     """检查 MATLAB 是否可用（MATLAB_ROOT 有效且 matlab.exe 存在）"""
@@ -113,21 +297,26 @@ def _get_matlab_version_from_path():
 
 
 def _detect_matlab_version_cli():
-    """通过命令行检测 MATLAB 版本"""
+    """通过命令行检测 MATLAB 版本
+
+    优先使用 -batch（R2019a+），失败后回退到 -r（R2016a+）。
+    最终兜底使用路径名推测。
+    """
     global _matlab_version
     matlab_exe = _get_matlab_exe()
     if not os.path.exists(matlab_exe):
         return _matlab_version
-    
+
+    version_from_path = _get_matlab_version_from_path()
+
+    # 方式1: -batch 模式（R2019a+）
     try:
-        # R2019a+ 支持 -batch
         result = subprocess.run(
             [matlab_exe, '-batch', 'disp(version);exit;'],
             capture_output=True, text=True, timeout=30,
             encoding='utf-8', errors='replace'
         )
         output = result.stdout.strip()
-        # 提取版本号
         for line in output.split('\n'):
             line = line.strip()
             if line:
@@ -135,7 +324,28 @@ def _detect_matlab_version_cli():
                 return _matlab_version
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
-    
+
+    # 方式2: -r 回退模式（R2016a-R2018b，-batch 不支持时回退到此）
+    if _matlab_version is None:
+        try:
+            result = subprocess.run(
+                [matlab_exe, '-r', 'disp(version);exit;', '-nosplash', '-nodesktop', '-wait'],
+                capture_output=True, text=True, timeout=30,
+                encoding='utf-8', errors='replace'
+            )
+            output = result.stdout.strip()
+            for line in output.split('\n'):
+                line = line.strip()
+                if line:
+                    _matlab_version = line
+                    return _matlab_version
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+    # 方式3: CLI 检测也失败，用路径推测作为兜底
+    if _matlab_version is None and version_from_path:
+        _matlab_version = version_from_path
+
     return _matlab_version
 
 
@@ -145,6 +355,7 @@ def _test_engine_compatibility():
     返回: True = 兼容可用, False = 不兼容需 CLI 回退
     
     使用线程超时机制防止 start_matlab() 永远卡住（最多等 30 秒）。
+    v5.3: 增加 Engine 路径预检查，路径不存在时直接跳过测试避免不必要延迟。
     """
     global _engine_compatible
     if _engine_compatible is not None:
@@ -152,12 +363,19 @@ def _test_engine_compatibility():
     
     ENGINE_TEST_TIMEOUT = 30  # Engine 兼容性测试超时（秒）
     
+    # v5.3: 快速检查 Engine 路径是否存在，避免无意义等待
+    engine_path = os.path.join(MATLAB_ROOT, "extern", "engines", "python")
+    if not os.path.exists(engine_path):
+        sys.stderr.write("[MATLAB Bridge] Engine 路径不存在，跳过 Engine 测试，使用 CLI 模式\n")
+        sys.stderr.flush()
+        _engine_compatible = False
+        return _engine_compatible
+    
     _result = {'compatible': None}
     
     def _do_test():
         try:
-            engine_path = os.path.join(MATLAB_ROOT, "extern", "engines", "python")
-            if os.path.exists(engine_path) and engine_path not in sys.path:
+            if engine_path not in sys.path:
                 sys.path.insert(0, engine_path)
             import matlab.engine
             # 尝试快速启动 Engine
@@ -344,7 +562,8 @@ def _run_cli_command(code, timeout=120):
         else:
             # R2016a-R2018b 模式: matlab -r "code;exit;" -nosplash -nodesktop
             # 注意: 此模式下 MATLAB 会打开一个窗口然后退出
-            full_code = clean_code + ';exit;'
+            # v5.3: 加换行符，防止代码末尾是注释时吞掉 exit
+            full_code = clean_code + '\nexit;'
             cmd = [matlab_exe, '-r', full_code, '-nosplash', '-nodesktop', '-wait']
             result = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
@@ -395,7 +614,11 @@ def set_project_dir(dir_path):
                 pass
     # CLI 模式下只记录目录，每次执行时 cd
     
-    return {"status": "ok", "project_dir": dir_path, "connection_mode": mode}
+    # v5.4: 自动初始化隔离工作空间
+    init_result = init_agent_workspace()
+    
+    return {"status": "ok", "project_dir": dir_path, "connection_mode": mode, 
+            "workspace_isolation": init_result.get("tmp_dir", "")}
 
 
 def get_project_dir():
@@ -1185,11 +1408,16 @@ def handle_command(cmd_data: dict):
         "close_figures": lambda: close_all_figures(),
         "get_config": lambda: _get_config(),
         "set_matlab_root": lambda: _set_matlab_root(params.get("root", "")),
+        # v5.4: workspace isolation
+        "init_workspace": lambda: init_agent_workspace(),
+        "route_file": lambda: {"status": "ok", "routed_path": route_file_path(params.get("filename", ""), params.get("force_workspace", False)), "tmp_dir": _get_agent_tmp_dir()},
+        "cleanup_workspace": lambda: cleanup_agent_workspace(params.get("keep_results", True)),
     }
     
     # 这些命令不需要 MATLAB 就能运行
     NO_MATLAB_NEEDED = {"check", "set_project", "scan_project", "read_m_file", 
-                         "read_mat_file", "read_simulink", "get_config", "set_matlab_root"}
+                         "read_mat_file", "read_simulink", "get_config", "set_matlab_root",
+                         "init_workspace", "route_file", "cleanup_workspace"}
     
     # 如果 MATLAB 不可用，只允许不需要 MATLAB 的命令
     if action not in NO_MATLAB_NEEDED and action not in {"start", "stop"}:

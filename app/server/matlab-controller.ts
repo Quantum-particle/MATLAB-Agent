@@ -753,6 +753,33 @@ export async function closeAllFigures(): Promise<MATLABResult> {
   return executeBridgeCommand({ action: 'close_figures', params: {} });
 }
 
+// ============= Workspace Isolation（v5.4 新增）============
+
+/**
+ * 初始化 Agent 工作空间隔离子目录
+ * 在项目目录下创建 .matlab_agent_tmp/ 子文件夹用于存放中间执行文件
+ */
+export async function initAgentWorkspace(): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'init_workspace', params: {} });
+}
+
+/**
+ * 根据文件类型路由文件路径
+ * 用户项目原生文件（.m/.slx/.mat 等）留在工作目录，
+ * 中间执行文件（.json/.c/.dll 等）路由到隔离子目录
+ */
+export async function routeFilePath(filename: string, forceWorkspace: boolean = false): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'route_file', params: { filename, force_workspace: forceWorkspace } });
+}
+
+/**
+ * 清理 Agent 工作空间中的中间执行文件
+ * 默认保留结果文件（.c/.h/.dll/.exe/.txt/.json），只删除真正的中间文件（.obj/.log/.bak 等）
+ */
+export async function cleanupAgentWorkspace(keepResults: boolean = true): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'cleanup_workspace', params: { keep_results: keepResults } });
+}
+
 // ============= Quickstart API（v5.0 新增）=============
 
 /**

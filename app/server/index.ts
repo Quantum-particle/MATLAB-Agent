@@ -204,7 +204,8 @@ app.post("/api/matlab/project/set", async (req, res) => {
 // 扫描项目文件
 app.get("/api/matlab/project/scan", async (req, res) => {
   try {
-    const dirPath = req.query.dir as string | undefined;
+    // 兼容 dirPath（推荐）和 dir（旧）两种查询参数名
+    const dirPath = (req.query.dirPath || req.query.dir) as string | undefined;
     const result = await matlab.scanProjectFiles(dirPath);
     res.json(result);
   } catch (error: any) {
@@ -455,6 +456,43 @@ app.get("/api/matlab/figures", async (req, res) => {
 app.post("/api/matlab/figures/close", async (req, res) => {
   try {
     const result = await matlab.closeAllFigures();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// ============= Workspace Isolation（v5.4 新增）=============
+
+// 初始化隔离子目录
+app.post("/api/matlab/workspace/isolation/init", async (req, res) => {
+  try {
+    const result = await matlab.initAgentWorkspace();
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 根据文件类型路由文件路径
+app.post("/api/matlab/workspace/isolation/route", async (req, res) => {
+  const { filename, forceWorkspace } = req.body;
+  if (!filename) {
+    return res.status(400).json({ error: "请提供文件名" });
+  }
+  try {
+    const result = await matlab.routeFilePath(filename, forceWorkspace || false);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 清理隔离子目录中的中间文件
+app.post("/api/matlab/workspace/isolation/cleanup", async (req, res) => {
+  const { keepResults } = req.body;
+  try {
+    const result = await matlab.cleanupAgentWorkspace(keepResults !== false);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });
