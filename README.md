@@ -1,4 +1,4 @@
-# MATLAB-Agent v5.1
+# MATLAB-Agent v5.2
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
@@ -25,6 +25,7 @@
 | **diary 输出捕获** | `diary()` + `eng.eval()` 替代 `evalc()`，彻底解决引号双写、中文路径乱码 |
 | **常驻 Python 桥接** | Node.js ↔ Python ↔ MATLAB Engine，stdin/stdout JSON 行协议通信 |
 | **一键启动** | `quickstart` API 一步完成环境配置 + Engine 启动 + 项目目录设定 |
+| **配置自检 & 自修复** | 启动时自动检测双目录配置冲突并迁移；`/api/matlab/config/diagnose` 诊断配置状态 |
 | **变量持久化** | Engine 模式下变量跨命令保持，像真实 MATLAB 会话一样逐步操作 |
 | **UTF-8 输出** | `sys.stdout.buffer.write()` + UTF-8 编码，解决 Windows GBK 乱码 |
 | **Simulink 全流程** | 创建模型、添加模块/子系统、连线、自动排版、运行仿真 |
@@ -107,7 +108,10 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 | GET | `/api/health` | 服务器健康检查 |
 | GET | `/api/matlab/status` | MATLAB 状态 |
 | POST | `/api/matlab/quickstart` | ⭐ 一键快速启动 |
+| GET | `/api/matlab/config` | 获取 MATLAB 配置 |
 | POST | `/api/matlab/config` | 设置 MATLAB 根目录 |
+| DELETE | `/api/matlab/config` | 重置 MATLAB 配置（v5.2 新增） |
+| GET | `/api/matlab/config/diagnose` | 配置自检诊断（v5.2 新增） |
 | POST | `/api/matlab/project/set` | 设置项目目录 |
 | GET | `/api/matlab/project/scan` | 扫描项目文件 |
 | GET | `/api/matlab/file/m` | 读取 .m 文件 |
@@ -140,6 +144,9 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 4. **Simulink SubSystem 默认连线冲突**：先 `delete_line` 再 `add_line`
 5. **复杂模型 From/Goto 信号传递**：不要强行连线，用广播标签
 6. **模型构建后自动排版**：必须调用 `Simulink.BlockDiagram.arrangeSystem`
+7. **双 data/ 目录配置不同步**（v5.2 自动修复）：`ensureDataDirSync()` 启动自检 + 自动迁移
+8. **`>nul 2>&1` 在 `cmd /c` 嵌套调用报错**（v5.2 修复）：改用 `2>nul` + `-NoProfile`
+9. **bat 路径含括号 `(x86)` 导致脚本中断**（v5.2 修复）：用 `^(` `^)` 转义
 
 > 详细踩坑记录见 [SKILL.md](./SKILL.md) 和 [app/TROUBLESHOOTING.md](./app/TROUBLESHOOTING.md)
 
@@ -147,6 +154,7 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 
 | 版本 | 日期 | 核心改动 |
 |------|------|---------|
+| v5.2 | 2026-04-14 | 4 Bug 修复（双目录同步/重定向报错/空 bat/PowerShell 慢）、ensureDataDirSync 自检、config diagnose API、DELETE config API |
 | v5.1 | 2026-04-10 | 启动防弹、端口清理、Simulink 建模深坑固化、封装子系统解析规范 |
 | v5.0 | 2026-04-10 | diary 替代 evalc、quickstart API、UTF-8 输出修复 |
 | v4.1 | 2026-04-09 | 手动配置模式、动态环境信息注入 |

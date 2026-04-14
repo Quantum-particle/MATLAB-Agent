@@ -1,4 +1,4 @@
-﻿# MATLAB Agent Skill
+# MATLAB Agent Skill
 
 > AI 驱动的 MATLAB/Simulink 开发助手，打通 AI 智能体与 MATLAB 闭园开发环境的隔阂。
 
