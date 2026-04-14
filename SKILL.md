@@ -1,4 +1,4 @@
-# MATLAB Agent Skill
+﻿# MATLAB Agent Skill
 
 > AI 驱动的 MATLAB/Simulink 开发助手，打通 AI 智能体与 MATLAB 闭园开发环境的隔阂。
 
@@ -24,10 +24,11 @@
 
 ## 能力概述
 
-### 核心架构 (v5.0)
+### 核心架构 (v5.2)
 - **diary 输出捕获**: 用 `diary()` + `eng.eval()` 替代 `evalc()`，彻底解决引号双写、中文路径乱码问题
 - **一键启动**: quickstart API 一步完成 MATLAB_ROOT 配置 + Engine 启动 + 项目目录设置
 - **手动配置 MATLAB 路径**: 首次启动时需用户提供 MATLAB 安装路径（交互式引导或 API 配置）
+- **配置数据自动迁移**: v5.2 `ensureDataDirSync()` 自动检测并迁移旧数据目录，新用户不再踩坑
 - **双连接模式**: Engine API 模式（变量持久化） + CLI 回退模式（兼容老版本 MATLAB）
 - **常驻 Python 桥接进程**: Node.js 启动 `matlab_bridge.py --server`，通过 stdin/stdout JSON 行协议通信
 - **持久化 MATLAB Engine**: Engine 在进程生命周期内保持，变量跨命令保持
@@ -118,7 +119,8 @@ while ($elapsed -lt $maxWait) {
 
 ### 配置 MATLAB 路径
 
-首次启动时，一键脚本会自动交互式引导用户输入 MATLAB 安装路径。
+首次启动时，**AI Agent 会自动检测** MATLAB 是否已配置。如果未配置，会直接在对话中询问用户的 MATLAB 安装路径（适用于所有 AI Agent 平台），用户输入后自动持久化保存。
+
 也可以通过以下方式手动配置：
 
 ```bash
@@ -132,6 +134,12 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b'} | Conve
 powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectDir='D:\RL\my_project'} | ConvertTo-Json -Compress; Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/quickstart' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))"
 ```
 
+**首次配置流程（自动对话，所有平台通用）**：
+1. AI Agent 启动服务后，调用 `GET /api/matlab/config` 检查配置
+2. 如果 `matlab_root_source` 为 `"none"` 或 `matlab_root` 为空 → 直接在对话中询问用户输入 MATLAB 安装路径
+3. 用户在对话中回复路径后，Agent 调用 `POST /api/matlab/config` 保存
+4. 路径持久化到 `data/matlab-config.json`，后续启动自动加载，不再询问
+
 ### 3. API 速查
 
 | 方法 | 路径 | 说明 |
@@ -139,8 +147,10 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 | GET | `/api/health` | 服务器健康检查 |
 | GET | `/api/matlab/status` | MATLAB 状态（快速） |
 | GET | `/api/matlab/status?quick=false` | MATLAB 完整检查（含 Engine） |
-| GET | `/api/matlab/config` | 获取 MATLAB 配置 |
-| POST | `/api/matlab/config` | 设置 MATLAB 根目录 |
+| GET | `/api/matlab/config` | 获取 MATLAB 配置（含 `matlab_root_source` 用于首次检测） |
+| POST | `/api/matlab/config` | 设置 MATLAB 根目录（自动持久化 + 自动重启 bridge） |
+| DELETE | `/api/matlab/config` | 重置 MATLAB 配置（清除缓存 + 备份删除配置文件） |
+| GET | `/api/matlab/config/diagnose` | 配置自检（v5.1.1，诊断配置同步问题） |
 | **POST** | **`/api/matlab/quickstart`** | **一键快速启动（v5.0）** |
 | POST | `/api/matlab/project/set` | 设置项目目录 |
 | GET | `/api/matlab/project/scan?dir=...` | 扫描项目文件 |
@@ -330,6 +340,42 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 ### 17. MATLAB 路径配置
 - **持久化**: 通过 API 设置的路径保存到 `data/matlab-config.json`
 - **优先级**: 环境变量 MATLAB_ROOT > 配置文件 > 未配置
+- **⚠️ 配置文件路径**: 运行时使用的配置文件路径是 `skills/matlab-agent/data/matlab-config.json`（注意：不是 `app/data/`！）
+- **⚠️ 配置同步**: 通过 POST /api/matlab/config 设置路径后，bridge 进程会自动重启以加载新路径
+- **配置自检**: GET /api/matlab/config/diagnose 可诊断配置问题
+
+### 17.5 🔴 MATLAB 路径配置踩坑大全（v5.2 固化，已自动修复！）
+
+> **配置不对，MATLAB 就用不了！** 但 v5.2 已将大部分坑自动修复。
+
+- **坑A: 双 `data/` 目录歧义（v5.2 已自动修复！）**
+  - 历史问题: 存在 `skills/matlab-agent/data/` 和 `app/data/` 两个数据目录，配置文件可能散落两处
+  - **v5.2 自动修复**: `ensureDataDirSync()` 在服务启动时自动检测 `app/data/` 下的配置并迁移到 `data/`
+  - 迁移后自动清空 `app/data/matlab-config.json` 为 `{}`，避免后续混淆
+  - **新用户无需关心此问题，系统自动处理**
+  - 如需手动操作配置文件，正确路径是: `skills/matlab-agent/data/matlab-config.json`
+
+- **坑B: 配置路径无效（matlab.exe 不存在）**
+  - **症状**: API 返回 `matlab_root_source: "config"` 但 `matlab_available: false`
+  - **原因**: 用户输入了错误的路径，或 MATLAB 已卸载/移动
+  - **修复**: v5.1.1 `loadConfigFromFile` 自动检测路径有效性，无效路径会被清除并备份
+  - **自检**: 调用 GET /api/matlab/config/diagnose 诊断配置问题
+
+- **坑C: 设置新路径后 bridge 未重启**
+  - **症状**: POST /api/matlab/config 成功，但 MATLAB 仍使用旧路径
+  - **原因**: bridge 进程的环境变量 MATLAB_ROOT 在 spawn 时设定，运行中不会更新
+  - **修复**: v5.1.1 `POST /api/matlab/config` 会自动调用 `restartBridge()` 重启 bridge
+  - **⚠️ restartBridge 的 stop 命令已加 5 秒超时**，避免卡住
+
+- **坑D: bat 脚本路径含 `(x86)` 被误解析**
+  - **症状**: `D:\Program Files(x86)\MATLAB2023b was unexpected at this time`
+  - **原因**: cmd 中括号 `()` 是特殊字符，被当作子命令执行
+  - **修复**: v5.1.1 已在 start.bat 中转义为 `^(x86^)`
+
+- **坑E: `cmd /c` 调用 bat 时 PowerShell 健康检查报 `Input redirection is not supported`**
+  - **症状**: ensure-running.bat 在 `cmd /c` 方式调用时卡住或报错
+  - **原因**: bat 中 `>nul 2>&1` 重定向与 `cmd /c` 嵌套冲突
+  - **修复**: v5.2 将 `>nul 2>&1` 改为 `2>nul`，并添加 `-NoProfile` 加速 PowerShell 启动
 
 ### 18. 绝对不能阻塞式启动服务器！
 - **正确做法**: 后台启动服务器 → 轮询 `/api/health` → 检查 `warmup` 字段

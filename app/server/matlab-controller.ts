@@ -1,10 +1,20 @@
 /**
-* MATLAB Controller v5.0 - 通用化后端 MATLAB 控制器
+* MATLAB Controller v5.2 - 通用化后端 MATLAB 控制器
 * 
 * 核心架构: 使用常驻 Python 桥接进程（--server 模式）
 * - Python 进程保持运行，MATLAB Engine 持久化
 * - 变量跨命令保持，图形窗口实时显示
 * - 通过 stdin/stdout JSON 行协议通信
+* 
+* v5.2 变更（2026-04-14）:
+* - 新增 ensureDataDirSync(): 启动时自动检测并迁移 app/data/ 下的配置到 data/，彻底解决双目录问题
+* - 新增 LEGACY_DATA_DIR / LEGACY_CONFIG_FILE 常量标识冗余数据路径
+* - 修复 bat 脚本: PowerShell -NoProfile + 2>nul 替代 >nul 2>&1（避免 cmd /c 输入重定向错误）
+* 
+* v5.1.1 变更（2026-04-14）:
+* - 修复 loadConfigFromFile: 清理 DEBUG 日志 + 无效路径自动清理 + 损坏配置自动重建
+* - 修复 restartBridge: stop 命令加 5 秒超时，避免卡住
+* - 修复配置文件路径歧义: CONFIG_DIR 明确为 skills/matlab-agent/data/（非 app/data/）
 * 
 * v5.0 变更（2026-04-10）:
 * - 修复 executeMATLABScript 相对路径解析（基于项目目录而非 CWD）
@@ -37,24 +47,111 @@ const __dirname = path.dirname(__filename);
  */
 
 let _configuredMatlabRoot: string | null = null;
+let _rootSource: 'none' | 'env' | 'config' | 'api' = 'none';
 
-// 配置文件路径
+// 配置文件路径 — 统一为 skills/matlab-agent/data/（__dirname 是 app/server/，向上两层到 skills/matlab-agent/）
 const CONFIG_DIR = path.join(__dirname, '..', '..', 'data');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'matlab-config.json');
 
-/** 从配置文件读取 MATLAB_ROOT */
-function loadConfigFromFile(): string | null {
+// 可能存在的冗余数据目录（旧版或手动创建），启动时自动迁移
+const LEGACY_DATA_DIR = path.join(__dirname, '..', 'data');
+const LEGACY_CONFIG_FILE = path.join(LEGACY_DATA_DIR, 'matlab-config.json');
+
+/**
+ * 启动时数据目录自检与自动迁移（v5.2 固化踩坑经验）
+ * 
+ * 踩坑背景:
+ * - 存在两个 data/ 目录: skills/matlab-agent/data/ 和 app/data/
+ * - Node 服务读写的正确路径是 skills/matlab-agent/data/（CONFIG_DIR）
+ * - 但 app/data/ 可能被手动创建，里面也有 matlab-config.json 和 chat.db
+ * - 两个目录不同步 → 改了这边那边不变 → 配置检测失灵
+ * 
+ * 解决方案:
+ * - 启动时检测 app/data/ 下是否有 matlab-config.json
+ * - 如果有，且 skills/matlab-agent/data/ 下没有，则自动迁移
+ * - 迁移后删除旧文件的配置部分（保留 chat.db 不动，因为那是 index.ts 管理的）
+ * - 确保唯一数据源: skills/matlab-agent/data/
+ */
+function ensureDataDirSync(): void {
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
-      if (config.matlab_root && fs.existsSync(config.matlab_root)) {
-        return config.matlab_root;
+    // 1. 确保主数据目录存在
+    if (!fs.existsSync(CONFIG_DIR)) {
+      fs.mkdirSync(CONFIG_DIR, { recursive: true });
+      console.log(`[MATLAB Config] 已创建数据目录: ${CONFIG_DIR}`);
+    }
+
+    // 2. 检查冗余目录是否有需要迁移的配置
+    if (fs.existsSync(LEGACY_CONFIG_FILE)) {
+      try {
+        const legacyContent = fs.readFileSync(LEGACY_CONFIG_FILE, 'utf-8').trim();
+        const legacyConfig = JSON.parse(legacyContent);
+        
+        // 只有当 legacy 有有效配置且主目录没有时才迁移
+        if (legacyConfig.matlab_root && typeof legacyConfig.matlab_root === 'string' && legacyConfig.matlab_root.trim()) {
+          const mainContent = fs.existsSync(CONFIG_FILE) 
+            ? fs.readFileSync(CONFIG_FILE, 'utf-8').trim() 
+            : '{}';
+          const mainConfig = JSON.parse(mainContent);
+          
+          if (!mainConfig.matlab_root) {
+            // 主目录没有配置，从 legacy 迁移
+            mainConfig.matlab_root = legacyConfig.matlab_root;
+            if (legacyConfig.updated_at) mainConfig.updated_at = legacyConfig.updated_at;
+            mainConfig.migrated_from = LEGACY_CONFIG_FILE;
+            mainConfig.migrated_at = new Date().toISOString();
+            fs.writeFileSync(CONFIG_FILE, JSON.stringify(mainConfig, null, 2), 'utf-8');
+            console.log(`[MATLAB Config] ⚡ 已自动迁移配置: ${LEGACY_CONFIG_FILE} → ${CONFIG_FILE}`);
+            console.log(`[MATLAB Config] 迁移的 MATLAB_ROOT: ${legacyConfig.matlab_root}`);
+          }
+        }
+        
+        // 无论是否迁移，都清除 legacy 配置文件避免后续混淆
+        fs.writeFileSync(LEGACY_CONFIG_FILE, '{}', 'utf-8');
+        console.log(`[MATLAB Config] 已清空冗余配置文件: ${LEGACY_CONFIG_FILE}`);
+      } catch (err: any) {
+        console.warn(`[MATLAB Config] 迁移冗余配置时出错: ${err.message}`);
       }
     }
-  } catch {
-    // 配置文件损坏，忽略
+  } catch (err: any) {
+    console.warn(`[MATLAB Config] 数据目录自检失败: ${err.message}`);
   }
-  return null;
+}
+
+// 启动时立即执行数据目录自检
+ensureDataDirSync();
+
+/** 从配置文件读取 MATLAB_ROOT
+ * v5.1.1: 清理 DEBUG 日志 + 增强空值/损坏配置自动修复
+ * - 配置文件为空或 matlab_root 为空时，自动重置为 {} 避免歧义
+ * - 文件损坏时备份并重建
+ */
+function loadConfigFromFile(): string | null {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) return null;
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf-8').trim();
+    if (!raw || raw === '{}') return null;  // 空文件或空 JSON
+    const config = JSON.parse(raw);
+    const root = config.matlab_root;
+    if (!root || typeof root !== 'string' || !root.trim()) return null;  // 空值
+    if (fs.existsSync(root)) return root;
+    // 路径不存在，清理无效配置
+    console.warn(`[MATLAB Config] 配置的路径不存在: ${root}，将清除无效配置`);
+    try {
+      const bakFile = CONFIG_FILE + '.bak';
+      fs.copyFileSync(CONFIG_FILE, bakFile);
+      fs.writeFileSync(CONFIG_FILE, '{}', 'utf-8');
+    } catch { /* 忽略清理失败 */ }
+    return null;
+  } catch (err: any) {
+    // 配置文件损坏，备份并重建
+    console.warn(`[MATLAB Config] 配置文件损坏，将重建: ${err.message}`);
+    try {
+      const bakFile = CONFIG_FILE + '.corrupt.bak';
+      fs.copyFileSync(CONFIG_FILE, bakFile);
+      fs.writeFileSync(CONFIG_FILE, '{}', 'utf-8');
+    } catch { /* 忽略重建失败 */ }
+    return null;
+  }
 }
 
 /** 保存 MATLAB_ROOT 到配置文件 */
@@ -80,6 +177,7 @@ function getMATLABRoot(): string {
   // 1. 环境变量（最高优先级）
   const envRoot = process.env.MATLAB_ROOT;
   if (envRoot && fs.existsSync(envRoot)) {
+    _rootSource = 'env';
     return envRoot;
   }
   // 2. API 动态设置（本次会话内存缓存）
@@ -90,9 +188,11 @@ function getMATLABRoot(): string {
   const fileRoot = loadConfigFromFile();
   if (fileRoot) {
     _configuredMatlabRoot = fileRoot;  // 缓存到内存
+    _rootSource = 'config';
     return fileRoot;
   }
   // 未配置，返回空字符串
+  _rootSource = 'none';
   return '';
 }
 
@@ -123,8 +223,28 @@ export function setMATLABRoot(root: string): { success: boolean; message: string
   _configuredMatlabRoot = normalizedPath;
   // 持久化到配置文件
   saveConfigToFile(normalizedPath);
+  _rootSource = 'api';
   console.log(`[MATLAB Config] MATLAB_ROOT 已设置为: ${normalizedPath}`);
   return { success: true, message: `MATLAB_ROOT 已设置为 ${normalizedPath}` };
+}
+
+/** 重置 MATLAB 配置（清除内存缓存 + 删除配置文件） */
+export function resetMATLABConfig(): { success: boolean; message: string } {
+  _configuredMatlabRoot = null;
+  _rootSource = 'none';
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      // 备份当前配置
+      const bakFile = CONFIG_FILE + '.bak';
+      fs.copyFileSync(CONFIG_FILE, bakFile);
+      fs.unlinkSync(CONFIG_FILE);
+      console.log(`[MATLAB Config] 配置已重置（已备份到 ${bakFile}）`);
+      return { success: true, message: 'MATLAB 配置已重置。请重新设置 MATLAB 安装路径。' };
+    }
+    return { success: true, message: '配置文件不存在，无需重置。' };
+  } catch (err: any) {
+    return { success: false, message: `重置配置失败: ${err.message}` };
+  }
 }
 
 // ============= 动态路径常量 =============
@@ -409,16 +529,21 @@ function processQueue(): void {
   setTimeout(checkDone, 200);
 }
 
-/** 重启桥接进程（切换 MATLAB 版本时使用） */
+/** 重启桥接进程（切换 MATLAB 版本时使用）
+ * v5.1.1: stop 命令加 5 秒超时，避免卡住
+ */
 export async function restartBridge(): Promise<MATLABResult> {
   console.log('[MATLAB Bridge] Restarting bridge with new MATLAB_ROOT...');
   
-  // 先停止现有进程
+  // 先停止现有进程（5 秒超时，避免 stop 命令卡住）
   if (bridgeProcess && !bridgeProcess.killed) {
     try {
-      await executeBridgeCommand({ action: 'stop', params: {} });
+      await Promise.race([
+        executeBridgeCommand({ action: 'stop', params: {} }),
+        new Promise<void>((_, reject) => setTimeout(() => reject(new Error('stop timeout')), 5000))
+      ]);
     } catch {
-      // 忽略停止错误
+      // 超时或错误，直接 kill
     }
     try {
       bridgeProcess.kill();
@@ -489,12 +614,9 @@ export async function checkMATLABInstallation(): Promise<MATLABResult & Record<s
 /** 获取 MATLAB 配置信息 */
 export function getMATLABConfig(): Record<string, any> {
   const root = getMATLABRoot();
-  const rootSource = !root ? 'none' : 
-    (process.env.MATLAB_ROOT && fs.existsSync(process.env.MATLAB_ROOT) ? 'env' : 
-    (_configuredMatlabRoot ? 'config' : 'none'));
   return {
     matlab_root: root,
-    matlab_root_source: rootSource,
+    matlab_root_source: _rootSource,
     matlab_available: isMATLABAvailable(),
     matlab_exe_exists: root ? fs.existsSync(path.join(root, 'bin', 'matlab.exe')) : false,
     default_workspace: getDefaultWorkspace(),

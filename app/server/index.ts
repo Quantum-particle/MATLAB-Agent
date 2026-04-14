@@ -372,6 +372,44 @@ app.get("/api/matlab/config", (req, res) => {
   }
 });
 
+// v5.1.1: 配置自检 API — 诊断配置文件和运行时状态是否同步
+app.get("/api/matlab/config/diagnose", (req, res) => {
+  try {
+    const config = matlab.getMATLABConfig();
+    const issues: string[] = [];
+    
+    // 检查1：配置来源为 none 但可能有残留文件
+    if (config.matlab_root_source === 'none' && config.matlab_root === '') {
+      // 这是正常的首次使用状态，不算问题
+    }
+    
+    // 检查2：matlab_root 存在但 matlab.exe 不存在
+    if (config.matlab_root && !config.matlab_exe_exists) {
+      issues.push(`MATLAB_ROOT 已配置为 "${config.matlab_root}"，但 bin/matlab.exe 不存在。路径可能不正确。`);
+    }
+    
+    // 检查3：配置来源为 none 但服务已尝试启动
+    if (config.matlab_root_source === 'none' && warmupStatus !== 'idle') {
+      issues.push('MATLAB_ROOT 未配置，但 Engine 已尝试启动。请先配置 MATLAB 路径。');
+    }
+    
+    res.json({
+      status: issues.length === 0 ? 'ok' : 'warning',
+      config,
+      issues,
+      warmup_status: warmupStatus,
+      recommendations: issues.length === 0 
+        ? ['配置正常'] 
+        : [
+            '请通过 POST /api/matlab/config 设置正确的 MATLAB 安装路径',
+            '路径应为包含 bin/matlab.exe 的根目录，如 D:\\Program Files\\MATLAB\\R2023b',
+          ],
+    });
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
 // 设置 MATLAB 根目录
 app.post("/api/matlab/config", async (req, res) => {
   // 兼容 matlab_root（下划线）和 matlabRoot（驼峰）两种命名
@@ -384,8 +422,20 @@ app.post("/api/matlab/config", async (req, res) => {
       matlab.restartBridge().catch((err: any) => {
         console.warn('[MATLAB Config] Bridge restart failed (will retry on next command):', err?.message || err);
       });
+      res.json({ status: "success", message: result.message });
+    } else {
+      res.status(400).json({ status: "error", message: result.message });
     }
-    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 重置 MATLAB 配置（清除内存缓存 + 删除配置文件）
+app.delete("/api/matlab/config", (req, res) => {
+  try {
+    const result = matlab.resetMATLABConfig();
+    res.json({ status: "success", ...result });
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });
   }
@@ -900,15 +950,22 @@ app.post("/api/chat", async (req, res) => {
 // 启动服务器
 app.listen(PORT, () => {
   const matlabConfig = matlab.getMATLABConfig();
+  const configSource = matlabConfig.matlab_root_source;
+  const matlabStatusDisplay = !matlabConfig.matlab_root
+    ? '⚠️ 未配置 (首次使用请通过 POST /api/matlab/config 设置 MATLAB_ROOT)'
+    : `${matlabConfig.matlab_root.substring(0, 45)}${matlabConfig.matlab_root.length > 45 ? '...' : ''}`;
+  const isFirstTime = configSource === 'none' || !matlabConfig.matlab_root;
+
   console.log(`
 ╔════════════════════════════════════════════════════╗
 ║                                                    ║
-║     ◉ MATLAB Agent - API 服务器已启动              ║
+║     ◉ MATLAB Agent v5.2 - API 服务器已启动         ║
 ║                                                    ║
 ║     地址: http://localhost:${PORT}                    ║
-║     MATLAB: ${!matlabConfig.matlab_root ? '未配置 (请设置 MATLAB_ROOT)' : matlabConfig.matlab_root.substring(0, 30)}║
+║     MATLAB: ${matlabStatusDisplay}║
+║     配置来源: ${configSource}${isFirstTime ? ' (首次使用)' : ''}${' '.repeat(Math.max(0, 30 - configSource.length - (isFirstTime ? 10 : 0)))}║
 ║     数据库: SQLite (data/chat.db)                  ║
-║                                                    ║
+${isFirstTime ? '║  ⚠️  首次使用！AI Agent 将自动引导配置 MATLAB 路径      ║\n' : ''}║                                                    ║
 ╚════════════════════════════════════════════════════╝
   `);
 
@@ -923,7 +980,7 @@ app.listen(PORT, () => {
     warmupError = 'MATLAB 未配置。首次使用请通过 POST /api/matlab/config 设置 MATLAB_ROOT';
     console.warn('[Warmup] ✗ 跳过预热：MATLAB 未配置');
     console.warn('[Warmup] 提示：请通过 POST /api/matlab/config 设置 MATLAB 安装路径');
-    console.warn('[Warmup] 示例：curl -X POST http://localhost:3000/api/matlab/config -H "Content-Type: application/json" -d "{\\"matlabRoot\\":\\"D:\\\\Program Files\\\\MATLAB\\\\R2023b\\"}"');
+    console.warn('[Warmup] 示例：powershell -Command "Invoke-RestMethod -Method POST -Uri http://localhost:3000/api/matlab/config -ContentType \'application/json\' -Body \'{\"matlabRoot\":\"D:\\\\Program Files\\\\MATLAB\\\\R2023b\"}\'"');
     console.warn('[Warmup] 或设置环境变量：set MATLAB_ROOT=D:\\Program Files\\MATLAB\\R2023b');
   } else {
     const WARMUP_TIMEOUT = 90; // 预热总超时（秒），包含 Engine 兼容性检测 + Engine 启动

@@ -1,4 +1,4 @@
-# MATLAB Agent GitHub 发布流程
+﻿# MATLAB Agent GitHub 发布流程
 
 > 本文档定义了从 Skill 目录全量同步到 GitHub 公开仓库的标准流程。
 > **核心原则：GitHub 仓库文件与本地 Skill 目录完全相同，但推送前脱敏！**
