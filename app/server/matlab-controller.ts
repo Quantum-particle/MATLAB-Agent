@@ -276,6 +276,36 @@ const TIMEOUTS = {
   runCode: 1800_000,        // 30分钟 — 代码执行可能包含训练/仿真
   engineStart: 90_000,      // Engine 启动超时（含兼容性检测）
   engineCompatTest: 45_000, // Engine 兼容性测试超时
+  // v7.0: sl_* 命令超时
+  slInspect: 30_000,         // 30秒
+  slAddBlock: 30_000,        // 30秒
+  slAddLine: 30_000,         // 30秒
+  slSetParam: 30_000,        // 30秒
+  slDelete: 30_000,          // 30秒
+  slFindBlocks: 30_000,      // 30秒
+  slReplaceBlock: 60_000,    // 1分钟
+  slBusCreate: 30_000,       // 30秒
+  slBusInspect: 30_000,      // 30秒
+  slSignalConfig: 30_000,    // 30秒
+  slSignalLogging: 30_000,   // 30秒
+  slSubsystemCreate: 60_000, // 1分钟
+  slSubsystemMask: 60_000,   // 1分钟
+  slSubsystemExpand: 60_000, // 1分钟
+  slConfigGet: 30_000,       // 30秒
+  slConfigSet: 30_000,       // 30秒
+  slSimRun: 300_000,         // 5分钟
+  slSimResults: 60_000,      // 1分钟
+  slCallbackSet: 30_000,     // 30秒
+  slSimBatch: 600_000,       // 10分钟
+  slValidate: 60_000,        // 1分钟
+  slParseError: 15_000,      // 15秒
+  slBlockPosition: 60_000,   // 1分钟
+  slAutoLayout: 120_000,     // 2分钟
+  slSnapshot: 60_000,        // 1分钟
+  slBaselineTest: 300_000,   // 5分钟
+  slProfileSim: 300_000,     // 5分钟
+  slProfileSolver: 300_000,  // 5分钟
+  slBestPractices: 15_000,   // 15秒
   default: 1800_000,        // 30分钟
 };
 
@@ -297,6 +327,18 @@ export interface MATLABResult {
   files?: any;
   summary?: any;
   content?: string;
+  executionTime?: number;        // v6.0: 执行耗时（毫秒）
+  variablesChanged?: string[];   // v6.0: 被赋值的变量名列表
+  codeType?: string;             // v6.0: 代码类型 (script/expression/assignment)
+  parsedError?: {                // v6.0: 结构化错误信息
+    hasError: boolean;
+    errorMessage: string;
+    errorType?: string;
+    fileHint?: string;
+    lineHint?: number;
+    blockPath?: string;
+    suggestions: string[];
+  };
   [key: string]: any;
 }
 
@@ -312,6 +354,36 @@ function getTimeout(command: MATLABCommand): number {
     case 'read_m_file':
     case 'read_mat_file':
     case 'read_simulink': return TIMEOUTS.fileRead;
+    // v7.0: sl_* 命令超时
+    case 'sl_inspect': return TIMEOUTS.slInspect;
+    case 'sl_add_block': return TIMEOUTS.slAddBlock;
+    case 'sl_add_line': return TIMEOUTS.slAddLine;
+    case 'sl_set_param': return TIMEOUTS.slSetParam;
+    case 'sl_delete': return TIMEOUTS.slDelete;
+    case 'sl_find_blocks': return TIMEOUTS.slFindBlocks;
+    case 'sl_replace_block': return TIMEOUTS.slReplaceBlock;
+    case 'sl_bus_create': return TIMEOUTS.slBusCreate;
+    case 'sl_bus_inspect': return TIMEOUTS.slBusInspect;
+    case 'sl_signal_config': return TIMEOUTS.slSignalConfig;
+    case 'sl_signal_logging': return TIMEOUTS.slSignalLogging;
+    case 'sl_subsystem_create': return TIMEOUTS.slSubsystemCreate;
+    case 'sl_subsystem_mask': return TIMEOUTS.slSubsystemMask;
+    case 'sl_subsystem_expand': return TIMEOUTS.slSubsystemExpand;
+    case 'sl_config_get': return TIMEOUTS.slConfigGet;
+    case 'sl_config_set': return TIMEOUTS.slConfigSet;
+    case 'sl_sim_run': return TIMEOUTS.slSimRun;
+    case 'sl_sim_results': return TIMEOUTS.slSimResults;
+    case 'sl_callback_set': return TIMEOUTS.slCallbackSet;
+    case 'sl_sim_batch': return TIMEOUTS.slSimBatch;
+    case 'sl_validate': return TIMEOUTS.slValidate;
+    case 'sl_parse_error': return TIMEOUTS.slParseError;
+    case 'sl_block_position': return TIMEOUTS.slBlockPosition;
+    case 'sl_auto_layout': return TIMEOUTS.slAutoLayout;
+    case 'sl_snapshot': return TIMEOUTS.slSnapshot;
+    case 'sl_baseline_test': return TIMEOUTS.slBaselineTest;
+    case 'sl_profile_sim': return TIMEOUTS.slProfileSim;
+    case 'sl_profile_solver': return TIMEOUTS.slProfileSolver;
+    case 'sl_best_practices': return TIMEOUTS.slBestPractices;
     default: return TIMEOUTS.default;
   }
 }
@@ -852,6 +924,160 @@ export async function quickstartMATLAB(options: {
   };
 }
 
+// ============= v7.0: sl_* 命令导出函数（26 个） =============
+// 这些函数通过 executeBridgeCommand 将 sl_* 命令发送到 Python Bridge，
+// Python Bridge 中的 _handle_sl_command 再调用对应的 .m 函数。
+
+/** sl_inspect — 检查模型全景 */
+export async function simulinkInspect(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_inspect', params });
+}
+
+/** sl_add_block — 安全添加模块 */
+export async function simulinkAddBlock(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_add_block', params });
+}
+
+/** sl_add_line — 安全连线 */
+export async function simulinkAddLine(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_add_line', params });
+}
+
+/** sl_set_param — 安全设置参数 */
+export async function simulinkSetParam(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_set_param', params });
+}
+
+/** sl_delete — 安全删除模块 */
+export async function simulinkDelete(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_delete', params });
+}
+
+/** sl_find_blocks — 高级查找模块 */
+export async function simulinkFindBlocks(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_find_blocks', params });
+}
+
+/** sl_replace_block — 替换模块 */
+export async function simulinkReplaceBlock(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_replace_block', params });
+}
+
+/** sl_bus_create — 创建总线 */
+export async function simulinkBusCreate(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_bus_create', params });
+}
+
+/** sl_bus_inspect — 检查总线 */
+export async function simulinkBusInspect(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_bus_inspect', params });
+}
+
+/** sl_signal_config — 信号配置 */
+export async function simulinkSignalConfig(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_signal_config', params });
+}
+
+/** sl_signal_logging — 信号记录 */
+export async function simulinkSignalLogging(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_signal_logging', params });
+}
+
+/** sl_subsystem_create — 创建子系统 */
+export async function simulinkSubsystemCreate(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_subsystem_create', params });
+}
+
+/** sl_subsystem_mask — 子系统 Mask */
+export async function simulinkSubsystemMask(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_subsystem_mask', params });
+}
+
+/** sl_subsystem_expand — 展开子系统 */
+export async function simulinkSubsystemExpand(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_subsystem_expand', params });
+}
+
+/** sl_config_get — 获取模型配置 */
+export async function simulinkConfigGet(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_config_get', params });
+}
+
+/** sl_config_set — 设置模型配置 */
+export async function simulinkConfigSet(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_config_set', params });
+}
+
+/** sl_sim_run — 运行仿真 */
+export async function simulinkSimRun(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_sim_run', params });
+}
+
+/** sl_sim_results — 获取仿真结果 */
+export async function simulinkSimResults(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_sim_results', params });
+}
+
+/** sl_callback_set — 设置回调 */
+export async function simulinkCallbackSet(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_callback_set', params });
+}
+
+/** sl_sim_batch — 批量仿真 */
+export async function simulinkSimBatch(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_sim_batch', params });
+}
+
+/** sl_validate — 模型验证 */
+export async function simulinkValidate(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_validate', params });
+}
+
+/** sl_parse_error — 错误解析 */
+export async function simulinkParseError(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_parse_error', params });
+}
+
+/** sl_block_position — 模块位置 */
+export async function simulinkBlockPosition(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_block_position', params });
+}
+
+/** sl_auto_layout — 自动排版 */
+export async function simulinkAutoLayout(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_auto_layout', params });
+}
+
+/** sl_snapshot — 模型快照 */
+export async function simulinkSnapshot(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_snapshot', params });
+}
+
+/** sl_baseline_test — 基线测试 */
+export async function simulinkBaselineTest(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_baseline_test', params });
+}
+
+/** sl_profile_sim — 仿真性能分析 */
+export async function simulinkProfileSim(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_profile_sim', params });
+}
+
+/** sl_profile_solver — 求解器性能分析 */
+export async function simulinkProfileSolver(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_profile_solver', params });
+}
+
+/** sl_best_practices — 最佳实践查询 */
+export async function simulinkBestPractices(params?: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_best_practices', params: params || {} });
+}
+
+/** v7.0: Layer 5 源码级自我改进 — 动态规则引擎 + 源码 patch */
+export async function simulinkSelfImprove(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_self_improve', params });
+}
+
 // ============= 辅助函数 =============
 
 export function ensureWorkspace(workDir?: string): string {
@@ -874,7 +1100,7 @@ export function createMFile(filePath: string, content: string): { success: boole
 }
 
 export function parseMATLABError(output: string): {
-  hasError: boolean; errorMessage: string; fileHint?: string; lineHint?: number; suggestions: string[];
+  hasError: boolean; errorMessage: string; errorType?: string; fileHint?: string; lineHint?: number; blockPath?: string; suggestions: string[];
 } {
   if (!output) return { hasError: false, errorMessage: '', suggestions: [] };
   
@@ -882,17 +1108,35 @@ export function parseMATLABError(output: string): {
     { regex: /Error using\s+(\w+).*?\n.*?line (\d+)/i, type: 'usage' },
     { regex: /Error in\s+(\S+).*?\(line (\d+)\)/i, type: 'runtime' },
     { regex: /Undefined (?:function|variable) ['"]?(\w+)/i, type: 'undefined' },
+    { regex: /Unrecognized function or variable ['"]?(\w+)/i, type: 'undefined' },
+    // v6.0: MATLAB 中文版错误消息
+    { regex: /函数或变量\s+['"]?(\w+)['"]?\s*无法识别/i, type: 'undefined' },
+    { regex: /未定义.*函数或变量/i, type: 'undefined' },
+    { regex: /错误使用\s+(\w+)/i, type: 'usage' },
+    { regex: /出错\s+(\S+)/i, type: 'runtime' },
+    { regex: /索引超出(?:矩阵维度|数组边界)/i, type: 'index' },
+    { regex: /矩阵维度必须一致/i, type: 'dimension' },
+    { regex: /输入参数不足/i, type: 'args' },
+    { regex: /输入参数过多/i, type: 'args' },
     { regex: /Index exceeds (?:matrix dimensions|array bounds)/i, type: 'index' },
     { regex: /Matrix dimensions must agree/i, type: 'dimension' },
     { regex: /Not enough input arguments/i, type: 'args' },
     { regex: /Too many input arguments/i, type: 'args' },
-    { regex: /Unrecognized function or variable/i, type: 'undefined' },
+    // v6.0: Simulink / sl_toolbox 专属模式
+    { regex: /Block '([^']+)' is not found/i, type: 'simulink_block_not_found' },
+    { regex: /Invalid Simulink object name/i, type: 'simulink_invalid_name' },
+    { regex: /already connected|destination port.*already/i, type: 'simulink_port_occupied' },
+    { regex: /dimension.*mismatch|mismatched.*dimension/i, type: 'simulink_dimension_mismatch' },
+    { regex: /algebraic loop/i, type: 'simulink_algebraic_loop' },
+    { regex: /Error using sl_(\w+)/i, type: 'sl_toolbox_function' },
+    { regex: /model.*not found|referenced model.*not found/i, type: 'simulink_model_not_found' },
     { regex: /Simulink error:/i, type: 'simulink' },
     { regex: /Block error/i, type: 'simulink' },
   ];
   
   let errorMessage = '', errorType = '';
   let fileHint: string | undefined, lineHint: number | undefined;
+  let blockPath: string | undefined;
   const suggestions: string[] = [];
   
   for (const { regex, type } of patterns) {
@@ -900,7 +1144,19 @@ export function parseMATLABError(output: string): {
     if (match) {
       errorMessage = match[0]; errorType = type;
       if (match[2]) { fileHint = match[1]; lineHint = parseInt(match[2]); }
+      // v6.0: 提取 Simulink 模块路径
+      if (type === 'simulink_block_not_found' && match[1]) {
+        blockPath = match[1];
+      }
       break;
+    }
+  }
+  
+  // v6.0: 额外提取模块路径（从 'Block' 引用中）
+  if (!blockPath) {
+    const blockMatch = output.match(/Block '([^']+)'/i) || output.match(/in '([^']+)'/i);
+    if (blockMatch) {
+      blockPath = blockMatch[1];
     }
   }
   
@@ -910,9 +1166,98 @@ export function parseMATLABError(output: string): {
     dimension: ['使用 size() 检查矩阵维度', '考虑使用转置或 reshape()'],
     args: ['使用 nargin 检查参数数量', '确认函数签名与调用方式一致'],
     simulink: ['检查模块参数设置', '确认信号维度在各模块间一致'],
+    // v6.0: sl_toolbox 专属建议
+    simulink_block_not_found: ['使用 sl_find_blocks 或 find_system 查找正确的模块路径', '检查模块名称拼写', '模块路径格式: model/BlockName'],
+    simulink_invalid_name: ['模块路径应使用 / 分隔', '格式: 模型名/子系统名/模块名', '使用 sl_inspect_model 查看模型结构'],
+    simulink_port_occupied: ['先删除已有连线: sl_delete_safe(blockPath)', '使用 sl_add_line_safe 的 autoReconnect 选项'],
+    simulink_dimension_mismatch: ['使用 sl_inspect_model 查看端口维度', '添加 Mux/Demux 或 Conversion 模块'],
+    simulink_algebraic_loop: ['添加 Memory 或 Unit Delay 模块打断代数环', '设置模型配置 AlgebraicLoopMsg=warning'],
+    sl_toolbox_function: ['该函数来自 sl_toolbox，确保 sl_init 已执行', '使用 /api/matlab/exec-smart 自动添加路径'],
+    simulink_model_not_found: ['确认模型文件 (.slx) 存在', '使用 load_system 而非 open_system'],
   };
   
   if (errorType && suggestionMap[errorType]) suggestions.push(...suggestionMap[errorType]);
   
-  return { hasError: !!errorMessage || output.includes('error') || output.includes('Error'), errorMessage, fileHint, lineHint, suggestions };
+  return { hasError: !!errorMessage || output.includes('error') || output.includes('Error'), errorMessage, errorType, fileHint, lineHint, blockPath, suggestions };
+}
+
+// ============= v6.0 AI 智能执行端点 =============
+
+/** 检测 MATLAB 代码类型 */
+function detectCodeType(code: string): 'script' | 'expression' | 'assignment' {
+  const trimmed = code.trim();
+  const firstLine = trimmed.split('\n')[0].trim();
+  // 包含赋值（排除 == 比较）
+  if (/^[a-zA-Z_]\w*\s*=[^=]/.test(firstLine)) {
+    return 'assignment';
+  }
+  // 包含分号结尾或关键字
+  if (/;\s*$/.test(trimmed) || /^(function|if|for|while|switch|try|classdef)/m.test(trimmed)) {
+    return 'script';
+  }
+  return 'expression';
+}
+
+/**
+ * 智能执行 MATLAB 代码（AI 专属端点）
+ * 
+ * 与 /run 的区别：
+ * 1. 自动检测代码类型（脚本/表达式/函数调用）
+ * 2. 自动 addpath sl_toolbox + sl_init
+ * 3. 返回结构化结果（含执行耗时、变量变化、代码类型）
+ * 4. 错误时自动调用 parseMATLABError 提供修复建议
+ * 5. 支持 autoAddpath 选项（默认 true）
+ */
+export async function execSmartMATLAB(options: {
+  code: string;
+  autoAddpath?: boolean;
+  captureOutput?: boolean;
+}): Promise<MATLABResult & {
+  executionTime?: number;
+  variablesChanged?: string[];
+  codeType?: string;
+  parsedError?: {
+    hasError: boolean;
+    errorMessage: string;
+    errorType?: string;
+    fileHint?: string;
+    lineHint?: number;
+    blockPath?: string;
+    suggestions: string[];
+  };
+}> {
+  const { code, autoAddpath = true, captureOutput = true } = options;
+  
+  // 1. 自动添加 sl_toolbox 路径
+  let fullCode = '';
+  if (autoAddpath) {
+    const slToolboxDir = path.join(__dirname, '..', 'matlab-bridge', 'sl_toolbox');
+    const slPathSafe = slToolboxDir.replace(/\\/g, '/');
+    // 用 workspace 变量方式传递路径（避免中文路径问题）
+    fullCode += `sl_toolbox_dir = '${slPathSafe}'; addpath(sl_toolbox_dir); sl_init; `;
+  }
+  fullCode += code;
+  
+  // 2. 检测代码类型
+  const codeType = detectCodeType(code);
+  
+  // 3. 执行
+  const startTime = Date.now();
+  const result = await runMATLABCode(fullCode, captureOutput);
+  const executionTime = Date.now() - startTime;
+  
+  // 4. 增强返回
+  const enhanced: any = {
+    ...result,
+    executionTime,
+    codeType,
+  };
+  
+  // 5. 如果出错，自动调用结构化错误解析
+  if (result.status === 'error') {
+    const parsed = parseMATLABError(result.message || result.stdout || '');
+    enhanced.parsedError = parsed;
+  }
+  
+  return enhanced;
 }

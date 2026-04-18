@@ -22,6 +22,19 @@ data/
 app/matlab-bridge/test_ws_model.slx
 app/matlab-bridge/workspace.mat
 
+# All test .slx/.slxc files (local testing only)
+app/*.slx
+app/*.slxc
+app/matlab-bridge/*.slx
+app/matlab-bridge/*.slxc
+app/matlab-bridge/*.mat
+
+# Simulink auto-generated build artifacts
+app/slprj/
+
+# Baseline test files (large binary)
+app/matlab-bridge/sl_toolbox/tests/baselines/*.mat
+
 # Python cache
 __pycache__/
 *.pyc

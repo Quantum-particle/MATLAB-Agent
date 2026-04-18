@@ -7,7 +7,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import * as db from "./db.js";
 import * as matlab from "./matlab-controller.js";
-import { MATLAB_SYSTEM_PROMPT, SIMULINK_SYSTEM_PROMPT, getMATLABSystemPrompt, getSimulinkSystemPrompt } from "./system-prompts.js";
+import { MATLAB_SYSTEM_PROMPT, SIMULINK_SYSTEM_PROMPT, getMATLABSystemPrompt, getSimulinkSystemPrompt, getSimulinkReference, SUPPORTED_SCENARIOS, SUPPORTED_REFERENCE_TOPICS } from "./system-prompts.js";
 
 const execAsync = promisify(exec);
 
@@ -127,10 +127,10 @@ app.post("/api/matlab/execute", async (req, res) => {
   try {
     const result = await matlab.executeMATLABScript(scriptPath, { outputDir });
     
-    // 解析错误
+    // 解析错误（v6.0: 统一用 parsedError 字段）
     if (result.status === 'error') {
       const parsed = matlab.parseMATLABError(result.stdout || result.message || '');
-      res.json({ ...result, ...parsed });
+      res.json({ ...result, parsedError: parsed });
     } else {
       res.json(result);
     }
@@ -255,12 +255,25 @@ app.post("/api/matlab/run", async (req, res) => {
   if (!code) return res.status(400).json({ error: "请提供 MATLAB 代码" });
   try {
     const result = await matlab.runMATLABCode(code, showOutput !== false);
-    if (result.status === 'error') {
+    if (result && typeof result === 'object' && result.status === 'error') {
       const parsed = matlab.parseMATLABError(result.stdout || result.message || '');
-      res.json({ ...result, ...parsed });
+      res.json({ ...result, parsedError: parsed });
     } else {
       res.json(result);
     }
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v6.0: 智能执行 MATLAB 代码（AI 专属端点）
+// 与 /run 的区别：自动 addpath sl_toolbox、检测代码类型、结构化错误解析
+app.post("/api/matlab/exec-smart", async (req, res) => {
+  const { code, autoAddpath, captureOutput } = req.body;
+  if (!code) return res.status(400).json({ error: "请提供 MATLAB 代码" });
+  try {
+    const result = await matlab.execSmartMATLAB({ code, autoAddpath, captureOutput });
+    res.json(result);
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });
   }
@@ -494,6 +507,427 @@ app.post("/api/matlab/workspace/isolation/cleanup", async (req, res) => {
   try {
     const result = await matlab.cleanupAgentWorkspace(keepResults !== false);
     res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// ============= v7.0: sl_* Simulink 工具箱 API（26 个端点） =============
+// 这些端点通过 Python Bridge 调用 sl_toolbox 中的 .m 函数
+
+// sl_inspect — 检查模型全景
+app.post("/api/matlab/simulink/inspect", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkInspect(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_add_block — 安全添加模块
+app.post("/api/matlab/simulink/add_block", async (req, res) => {
+  const { modelName, sourceBlock } = req.body;
+  if (!modelName || !sourceBlock) return res.status(400).json({ error: "请提供 modelName 和 sourceBlock" });
+  try {
+    const result = await matlab.simulinkAddBlock(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_add_line — 安全连线
+app.post("/api/matlab/simulink/add_line", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkAddLine(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_set_param — 安全设置参数
+app.post("/api/matlab/simulink/set_param", async (req, res) => {
+  const { blockPath } = req.body;
+  if (!blockPath) return res.status(400).json({ error: "请提供 blockPath" });
+  try {
+    const result = await matlab.simulinkSetParam(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_delete — 安全删除模块
+app.post("/api/matlab/simulink/delete", async (req, res) => {
+  const { blockPath } = req.body;
+  if (!blockPath) return res.status(400).json({ error: "请提供 blockPath" });
+  try {
+    const result = await matlab.simulinkDelete(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_find_blocks — 高级查找模块
+app.post("/api/matlab/simulink/find_blocks", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkFindBlocks(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_replace_block — 替换模块
+app.post("/api/matlab/simulink/replace_block", async (req, res) => {
+  const { modelName, blockPath, newBlockType } = req.body;
+  if (!modelName || !blockPath || !newBlockType) return res.status(400).json({ error: "请提供 modelName, blockPath, newBlockType" });
+  try {
+    const result = await matlab.simulinkReplaceBlock(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_bus_create — 创建总线
+app.post("/api/matlab/simulink/bus_create", async (req, res) => {
+  const { busName, elements } = req.body;
+  if (!busName || !elements) return res.status(400).json({ error: "请提供 busName 和 elements" });
+  try {
+    const result = await matlab.simulinkBusCreate(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_bus_inspect — 检查总线
+app.post("/api/matlab/simulink/bus_inspect", async (req, res) => {
+  const { busName } = req.body;
+  if (!busName) return res.status(400).json({ error: "请提供 busName" });
+  try {
+    const result = await matlab.simulinkBusInspect(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_signal_config — 信号配置
+app.post("/api/matlab/simulink/signal_config", async (req, res) => {
+  const { modelName, blockPath } = req.body;
+  if (!modelName || !blockPath) return res.status(400).json({ error: "请提供 modelName 和 blockPath" });
+  try {
+    const result = await matlab.simulinkSignalConfig(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_signal_logging — 信号记录
+app.post("/api/matlab/simulink/signal_logging", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkSignalLogging(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_subsystem_create — 创建子系统
+app.post("/api/matlab/simulink/subsystem_create", async (req, res) => {
+  const { modelName, subsystemName } = req.body;
+  if (!modelName || !subsystemName) return res.status(400).json({ error: "请提供 modelName 和 subsystemName" });
+  try {
+    const result = await matlab.simulinkSubsystemCreate(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_subsystem_mask — 子系统 Mask
+app.post("/api/matlab/simulink/subsystem_mask", async (req, res) => {
+  const { modelName, blockPath } = req.body;
+  if (!modelName || !blockPath) return res.status(400).json({ error: "请提供 modelName 和 blockPath" });
+  try {
+    const result = await matlab.simulinkSubsystemMask(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_subsystem_expand — 展开子系统
+app.post("/api/matlab/simulink/subsystem_expand", async (req, res) => {
+  const { modelName, subsystemPath } = req.body;
+  if (!modelName || !subsystemPath) return res.status(400).json({ error: "请提供 modelName 和 subsystemPath" });
+  try {
+    const result = await matlab.simulinkSubsystemExpand(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_config_get — 获取模型配置
+app.post("/api/matlab/simulink/config_get", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkConfigGet(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_config_set — 设置模型配置
+app.post("/api/matlab/simulink/config_set", async (req, res) => {
+  const { modelName, config } = req.body;
+  if (!modelName || !config) return res.status(400).json({ error: "请提供 modelName 和 config" });
+  try {
+    const result = await matlab.simulinkConfigSet(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_sim_run — 运行仿真
+app.post("/api/matlab/simulink/sim_run", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkSimRun(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_sim_results — 获取仿真结果
+app.post("/api/matlab/simulink/sim_results", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkSimResults(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_callback_set — 设置回调
+app.post("/api/matlab/simulink/callback_set", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkCallbackSet(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_sim_batch — 批量仿真
+app.post("/api/matlab/simulink/sim_batch", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkSimBatch(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_validate — 模型验证
+app.post("/api/matlab/simulink/validate", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkValidate(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_parse_error — 错误解析
+app.post("/api/matlab/simulink/parse_error", async (req, res) => {
+  const { errorMessage } = req.body;
+  if (!errorMessage) return res.status(400).json({ error: "请提供 errorMessage" });
+  try {
+    const result = await matlab.simulinkParseError(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_block_position — 模块位置
+app.post("/api/matlab/simulink/block_position", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkBlockPosition(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_auto_layout — 自动排版
+app.post("/api/matlab/simulink/auto_layout", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkAutoLayout(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_snapshot — 模型快照
+app.post("/api/matlab/simulink/snapshot", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkSnapshot(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_baseline_test — 基线测试
+app.post("/api/matlab/simulink/baseline_test", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkBaselineTest(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_profile_sim — 仿真性能分析
+app.post("/api/matlab/simulink/profile_sim", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkProfileSim(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_profile_solver — 求解器性能分析
+app.post("/api/matlab/simulink/profile_solver", async (req, res) => {
+  const { modelName } = req.body;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
+  try {
+    const result = await matlab.simulinkProfileSolver(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// sl_best_practices — 最佳实践查询
+app.post("/api/matlab/simulink/best_practices", async (req, res) => {
+  try {
+    const result = await matlab.simulinkBestPractices(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v7.0: Layer 5 源码级自我改进 API
+app.post("/api/matlab/simulink/self_improve", async (req, res) => {
+  try {
+    const result = await matlab.simulinkSelfImprove(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// ========== Part 8: 提示词分层查询 API ==========
+
+// 获取 Simulink 场景提示词（Layer 2）
+app.get("/api/matlab/simulink/prompt/scenario", async (req, res) => {
+  try {
+    const scenario = req.query.scenario as string;
+    if (!scenario) {
+      return res.json({
+        status: "ok",
+        supportedScenarios: SUPPORTED_SCENARIOS,
+        message: "Provide ?scenario= parameter to get scenario prompt"
+      });
+    }
+    const prompt = getSimulinkSystemPrompt(scenario);
+    res.json({ status: "ok", scenario, prompt });
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 获取 Simulink 参考层提示词（Layer 3）
+app.get("/api/matlab/simulink/prompt/reference", async (req, res) => {
+  try {
+    const topic = req.query.topic as string;
+    if (!topic) {
+      return res.json({
+        status: "ok",
+        supportedTopics: SUPPORTED_REFERENCE_TOPICS,
+        message: "Provide ?topic= parameter to get reference prompt"
+      });
+    }
+    const reference = getSimulinkReference(topic);
+    if (!reference) {
+      return res.status(404).json({
+        status: "error",
+        message: `Unknown topic: ${topic}. Supported: ${SUPPORTED_REFERENCE_TOPICS.join(', ')}`
+      });
+    }
+    res.json({ status: "ok", topic, reference });
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 列出所有可用的场景和参考主题
+app.get("/api/matlab/simulink/prompt/list", async (req, res) => {
+  try {
+    res.json({
+      status: "ok",
+      scenarios: SUPPORTED_SCENARIOS,
+      referenceTopics: SUPPORTED_REFERENCE_TOPICS,
+      usage: {
+        scenario: "GET /api/matlab/simulink/prompt/scenario?scenario=<name>",
+        reference: "GET /api/matlab/simulink/prompt/reference?topic=<name>",
+        fullPrompt: "GET /api/matlab/simulink/prompt/scenario?scenario=<name> returns core+scenario layers"
+      }
+    });
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });
   }

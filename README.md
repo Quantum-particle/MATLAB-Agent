@@ -1,4 +1,4 @@
-# MATLAB-Agent v5.4
+# MATLAB-Agent v8.0
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
@@ -28,6 +28,10 @@
 | **配置自检 & 自修复** | 启动时自动检测双目录配置冲突并迁移；`/api/matlab/config/diagnose` 诊断配置状态 |
 | **工作空间隔离**（v5.4） | 中间执行文件自动隔离到 `.matlab_agent_tmp/`，用户项目目录保持干净 |
 | **自动清理**（v5.4） | 任务完成后自动清理中间文件，支持保留结果文件 |
+| **23 个 sl_toolbox API**（v6.0） | Simulink 建模全流程 API：创建模型、添加模块、连线、参数设置、仿真、总线、子系统、验证、最佳实践 |
+| **Python Bridge + Node.js REST**（v7.0） | 完整的 Python Bridge 命令处理器 + Express REST API 端点，支持远程调用 |
+| **提示词三层架构**（v8.0） | 核心层 + 场景层 + 参考层，3 个查询 API 支持按需加载提示词 |
+| **源码级自我改进**（v7.0） | Layer 5 动态规则引擎 + patch_source 源码补丁 + 自动学习 |
 | **变量持久化** | Engine 模式下变量跨命令保持，像真实 MATLAB 会话一样逐步操作 |
 | **UTF-8 输出** | `sys.stdout.buffer.write()` + UTF-8 编码，解决 Windows GBK 乱码 |
 | **Simulink 全流程** | 创建模型、添加模块/子系统、连线、自动排版、运行仿真 |
@@ -72,8 +76,10 @@ matlab-agent/
 │   ├── TROUBLESHOOTING.md       # 故障排除手册
 │   └── README.md                # 应用内说明文档
 └── references/
-    ├── troubleshooting.md       # 故障排除参考
-    └── matlab-bridge-api.md     # Python Bridge API 文档
+    ├── sl_toolbox_api_guide.md      # 🔴 sl_toolbox API 说明书（23 个函数）
+    ├── pitfall-database.md          # 踩坑数据库（结构化）
+    ├── troubleshooting.md           # 故障排除参考
+    └── matlab-bridge-api.md         # Python Bridge API 文档
 ```
 
 ## 🚀 快速开始
@@ -126,8 +132,27 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 | POST | `/api/matlab/workspace/isolation/init` | 初始化工作空间隔离（v5.4） |
 | POST | `/api/matlab/workspace/isolation/route` | 文件路径路由（v5.4） |
 | POST | `/api/matlab/workspace/isolation/cleanup` | 清理中间文件（v5.4） |
+| **v6.0+: sl_toolbox API** | | |
+| POST | `/api/matlab/simulink/inspect` | 检查模型全景 |
+| POST | `/api/matlab/simulink/add_block` | 安全添加模块 |
+| POST | `/api/matlab/simulink/add_line` | 安全连线 |
+| POST | `/api/matlab/simulink/set_param` | 安全设置参数 |
+| POST | `/api/matlab/simulink/delete` | 安全删除 |
+| POST | `/api/matlab/simulink/find_blocks` | 高级查找 |
+| POST | `/api/matlab/simulink/replace_block` | 替换模块 |
+| POST | `/api/matlab/simulink/bus_create` | 创建总线 |
+| POST | `/api/matlab/simulink/subsystem_create` | 创建子系统 |
+| POST | `/api/matlab/simulink/sim_run` | 运行仿真 |
+| POST | `/api/matlab/simulink/sim_batch` | 批量仿真 |
+| POST | `/api/matlab/simulink/validate` | 模型验证 |
+| POST | `/api/matlab/simulink/auto_layout` | 自动排版 |
+| POST | `/api/matlab/simulink/self_improve` | 源码级自我改进（v7.0） |
+| **v8.0: 提示词 API** | | |
+| GET | `/api/matlab/simulink/prompt/list` | 列出可用场景 |
+| GET | `/api/matlab/simulink/prompt/scenario` | 获取场景提示词 |
+| GET | `/api/matlab/simulink/prompt/reference` | 获取参考层提示词 |
 
-> 完整 API 列表见 [SKILL.md](./SKILL.md)
+> 完整 23 个 sl_toolbox API 列表见 [SKILL.md](./SKILL.md) 和 `references/sl_toolbox_api_guide.md`
 
 ## 🔧 技术栈
 
@@ -160,6 +185,9 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 
 | 版本 | 日期 | 核心改动 |
 |------|------|---------|
+| v8.0 | 2026-04-18 | 提示词三层架构（核心层+场景层+参考层）、3 个提示词查询 API |
+| v7.0 | 2026-04-18 | Layer 5 源码级自我改进、动态规则引擎、patch_source 源码补丁、Python Bridge + Node.js REST 全量端点 |
+| v6.0 | 2026-04-18 | 23 个 sl_toolbox API、端到端测试 74/74 通过、二阶倒立摆测试 35/35 通过 |
 | v5.4 | 2026-04-14 | 工作空间隔离（.matlab_agent_tmp/）、中间文件自动清理、3 个新 API |
 | v5.2 | 2026-04-14 | 4 Bug 修复（双目录同步/重定向报错/空 bat/PowerShell 慢）、ensureDataDirSync 自检、config diagnose API、DELETE config API |
 | v5.1 | 2026-04-10 | 启动防弹、端口清理、Simulink 建模深坑固化、封装子系统解析规范 |
