@@ -46,6 +46,39 @@
 
 ## 更新历史
 
+### v8.0.0 — 2026-04-18 提示词三层架构 + 清仓重推
+
+- **提交**: `97715da`
+- **分支**: main
+- **内容**: 49 个文件，20247 行新增，741 行删除
+- **核心改动**:
+  - **提示词三层架构 (Part 8)**: 核心层 + 场景层 + 参考层，3 个查询 API（list/scenario/reference）
+  - **Layer 5 源码级自我改进**: 动态规则引擎（JSON 持久化）、patch_source 源码补丁、auto_learn 自动学习
+  - **Python Bridge 全量命令处理器**: 26 个 sl_* 命令处理，_build_sl_args 参数构建 + _auto_fix_args 自动修正
+  - **Node.js REST API 全量端点**: 26 个 /api/matlab/simulink/* 端点
+  - **端到端测试**: 74/74 通过，二阶倒立摆系统性测试 35/35 通过
+  - **README.md**: 版本号升级至 v8.0，新增 v6.0~v8.0 特性和 API 列表
+  - **.gitignore**: 排除所有测试 .slx/.slxc/.mat 文件和 slprj/ 构建产物
+
+### v7.0.0 — 2026-04-18 23 个 sl_toolbox API + Layer 5 自我改进
+
+- **核心改动**:
+  - `sl_toolbox/`: 23 个 .m 函数（sl_add_block_safe, sl_add_line_safe, sl_arrange_model, sl_bus_create, sl_subsystem_create, sl_sim_run, sl_sim_batch, sl_validate_model, sl_self_improve 等）
+  - `matlab_bridge.py`: 新增 _handle_sl_command 路由 + _build_sl_args 参数构建 + _auto_fix_args 自动修正
+  - `index.ts`: 新增 26 个 /api/matlab/simulink/* REST API 端点
+  - `system-prompts.ts`: v7.0 提示词 — 五层自我改进体系 + sl_toolbox API 速查
+  - `SKILL.md`: v7.0 全面升级 — 23 个 API 文档 + 34+ 踩坑经验 + 五层自我改进机制
+  - `references/sl_toolbox_api_guide.md`: 完整 API 说明书（v13.0）
+  - `references/pitfall-database.md`: 结构化踩坑数据库
+
+### v6.0.0 — 2026-04-18 sl_toolbox 核心 API 集
+
+- **核心改动**:
+  - `sl_toolbox/`: 首批核心 .m 函数（sl_init, sl_jsonencode, sl_block_registry 等）
+  - `matlab_bridge.py`: sl_* 命令处理框架
+  - `index.ts`: sl_toolbox API 路由
+  - 端到端测试框架搭建
+
 ### v5.4.0 — 2026-04-14 工作空间隔离 + 自动清理
 
 - **核心改动**:
