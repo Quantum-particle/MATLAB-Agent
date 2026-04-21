@@ -105,6 +105,39 @@ function result = sl_sim_results(modelName, varargin)
     if isempty(variablesRequested)
         result.status = 'ok';
         result.message = 'No simulation output variables found in workspace';
+        % [BUG FIX] 即使没有变量，也尝试从 simOut 中提取
+        try
+            simOutObj = evalin('base', 'simOut');
+            if isa(simOutObj, 'Simulink.SimulationOutput')
+                outVarNames = {};
+                try
+                    outVarNames = simOutObj.find();
+                catch
+                    outVarNames = {'tout', 'yout', 'logsout', 'xout'};
+                end
+                for vi = 1:length(outVarNames)
+                    try
+                        varData = simOutObj.(outVarNames{vi});
+                        nFound = nFound + 1;
+                        result.results.(outVarNames{vi}) = parse_variable(varData, outVarNames{vi}, fmt, maxRows);
+                        variablesRequested{end+1} = outVarNames{vi}; %#ok<AGROW>
+                    catch
+                        try
+                            varData = simOutObj.get(outVarNames{vi});
+                            nFound = nFound + 1;
+                            result.results.(outVarNames{vi}) = parse_variable(varData, outVarNames{vi}, fmt, maxRows);
+                            variablesRequested{end+1} = outVarNames{vi}; %#ok<AGROW>
+                        catch
+                        end
+                    end
+                end
+                if nFound > 0
+                    result.message = sprintf('Extracted %d variables from simOut', nFound);
+                end
+            end
+        catch
+            % simOut 不存在
+        end
         return;
     end
 
@@ -155,6 +188,103 @@ function result = sl_sim_results(modelName, varargin)
     if ~isempty(warnings)
         result.warnings = warnings;
     end
+    
+    % [BUG FIX] 确保所有 results 字段可被 sl_jsonencode 序列化
+    % Dataset 等复杂类型可能无法序列化，在序列化前转为纯 struct
+    result = sanitize_for_json(result);
+end
+
+
+function sanitized = sanitize_for_json(data)
+% SANITIZE_FOR_JSON 递归清理不可序列化的数据类型
+% 将 Simulink.SimulationData.Dataset 等对象转为纯 struct
+
+    if isstruct(data)
+        fnames = fieldnames(data);
+        for fi = 1:length(fnames)
+            val = data.(fnames{fi});
+            if isa(val, 'Simulink.SimulationData.Dataset')
+                % Dataset -> 转为摘要 struct
+                ds_info = struct();
+                ds_info.type = 'Dataset';
+                try
+                    elemNames = val.getElementNames();
+                    ds_info.numElements = length(elemNames);
+                    ds_info.elementNames = elemNames;
+                    for ei = 1:length(elemNames)
+                        try
+                            elem = val.get(ei);
+                            safeName = ['elem' num2str(ei)];
+                            try
+                                safeName = matlab.lang.makeValidName(char(elem.Name));
+                            catch
+                            end
+                            elemInfo = struct();
+                            elemInfo.name = char(elem.Name);
+                            if isa(elem.Values, 'timeseries')
+                                elemInfo.type = 'timeseries';
+                                try
+                                    elemInfo.timeRange = sprintf('[%g, %g]', ...
+                                        elem.Values.Time(1), elem.Values.Time(end));
+                                    elemInfo.numTimePoints = length(elem.Values.Time);
+                                catch
+                                end
+                            elseif isnumeric(elem.Values)
+                                elemInfo.type = 'numeric';
+                                elemInfo.dimensions = mat2str(size(elem.Values));
+                            else
+                                elemInfo.type = class(elem.Values);
+                            end
+                            ds_info.(safeName) = elemInfo;
+                        catch ME_elem
+                            ds_info.(['elem' num2str(ei)]) = struct('error', ME_elem.message);
+                        end
+                    end
+                catch
+                    ds_info.numElements = length(val);
+                end
+                data.(fnames{fi}) = ds_info;
+            elseif isstruct(val) || isa(val, 'struct')
+                data.(fnames{fi}) = sanitize_for_json(val);
+            elseif isa(val, 'timeseries')
+                % timeseries -> 摘要 struct
+                ts_info = struct();
+                ts_info.type = 'timeseries';
+                try ts_info.name = val.Name; catch, end
+                try ts_info.dimensions = mat2str(size(val.Data)); catch, end
+                try
+                    if ~isempty(val.Time)
+                        ts_info.timeRange = sprintf('[%g, %g]', val.Time(1), val.Time(end));
+                        ts_info.numTimePoints = length(val.Time);
+                    end
+                catch
+                end
+                try
+                    d = val.Data(:);
+                    ts_info.min = min(d);
+                    ts_info.max = max(d);
+                    ts_info.mean = mean(d);
+                    if ~isempty(d)
+                        ts_info.finalValue = d(end);
+                    end
+                catch
+                end
+                data.(fnames{fi}) = ts_info;
+            elseif iscell(val)
+                % 递归处理 cell 中的元素
+                new_cell = cell(1, length(val));
+                for ci = 1:length(val)
+                    if isstruct(val{ci})
+                        new_cell{ci} = sanitize_for_json(val{ci});
+                    else
+                        new_cell{ci} = val{ci};
+                    end
+                end
+                data.(fnames{fi}) = new_cell;
+            end
+        end
+    end
+    sanitized = data;
 end
 
 

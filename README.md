@@ -1,4 +1,4 @@
-# MATLAB-Agent v8.0
+# MATLAB-Agent v11.0
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
@@ -18,9 +18,9 @@
 
 > 不再是"AI 写代码你复制粘贴"，而是 AI 直接坐在 MATLAB 命令行前。
 
-## 🏗️ Simulink 建模中间件架构（v8.0 核心重构）
+## 🏗️ Simulink 建模中间件架构（v11.0 核心重构）
 
-本次 v8.0 最大的更新是对 **Simulink 建模底层的全面重构**——从"AI 靠 LLM 裸写 MATLAB 代码"升级为"结构化 API + 反模式防护 + 反馈闭环"的工业级中间件体系。
+本次 v11.0 最大的更新是对 **Simulink 建模底层的全面重构**——从"AI 靠 LLM 裸写 MATLAB 代码"升级为"结构化 API + 反模式防护 + 反馈闭环"的工业级中间件体系。
 
 ### 整体架构图
 
@@ -102,7 +102,7 @@
 
 | 特性 | 说明 |
 |------|------|
-| **Simulink 建模中间件**（v6.0~v8.0） | 31 个 .m 函数 + 27 个 REST API 端点，覆盖建模→仿真→验证→测试→性能分析全生命周期 |
+| **Simulink 建模中间件**（v6.0~v11.0） | 31 个 .m 函数 + 27 个 REST API 端点，覆盖建模→仿真→验证→测试→性能分析全生命周期 |
 | **反模式防护** | 8 大禁止规则（Sum 块/To Workspace/裸 Position 等）嵌入 .m 函数，自动拦截 + 替代建议 |
 | **diary 输出捕获** | `diary()` + `eng.eval()` 替代 `evalc()`，彻底解决引号双写、中文路径乱码 |
 | **常驻 Python 桥接** | Node.js ↔ Python ↔ MATLAB Engine，stdin/stdout JSON 行协议通信 |
@@ -254,6 +254,7 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 
 | 版本 | 日期 | 核心改动 |
 |------|------|---------|
+| v11.0 | 2026-04-21 | **v10.1 强制文件隔离**：slprj/隔离到 .matlab_agent_tmp/、Bridge _run_code_via_diary 隔离、createMFile routeFilePathSync；**API Guide v15.0**：sl_model_status_snapshot、_verification/_auto_layout/_workflow 字段说明、35+ 章节；**v10.0 代码审查**：18 项修复 51/51 PASS |
 | v8.0 | 2026-04-18 | Simulink 建模底层重构（中间件架构+反模式防护+反馈闭环）、提示词三层架构 |
 | v7.0 | 2026-04-18 | Layer 5 源码级自我改进、动态规则引擎、patch_source 源码补丁、Python Bridge + Node.js REST 全量端点 |
 | v6.0 | 2026-04-18 | 23 个 sl_toolbox API、端到端测试 74/74 通过、二阶倒立摆测试 35/35 通过 |

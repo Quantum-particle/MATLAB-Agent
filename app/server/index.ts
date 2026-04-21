@@ -44,6 +44,83 @@ process.on('unhandledRejection', (reason) => {
 // Middleware
 app.use(express.json());
 
+// ============= [P0-5 FIX] CORS + API Key 认证 =============
+
+// CORS 中间件 — 允许 localhost 和同源访问
+app.use((req: any, res: any, next: any) => {
+  const origin = req.headers.origin || '';
+  // 允许 localhost、127.0.0.1 和同源请求
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',  // Vite dev server
+    'http://127.0.0.1:5173',
+  ];
+  if (!origin || allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key, Authorization');
+    res.setHeader('Access-Control-Max-Age', '86400');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+  next();
+});
+
+// API Key 认证中间件 — 保护高危端点
+// 低危端点（健康检查、状态查询）不需要认证
+// 高危端点（执行代码、修改源码、删除模型）需要 API Key
+const API_KEY = process.env.MATLAB_AGENT_API_KEY || '';  // 空字符串 = 不启用认证
+
+function requireApiKey(req: any, res: any, next: any) {
+  if (!API_KEY) {
+    // 未配置 API Key，跳过认证（本地开发模式）
+    return next();
+  }
+  const providedKey = req.headers['x-api-key'] || req.query?.apiKey || req.body?._apiKey;
+  if (providedKey === API_KEY) {
+    return next();
+  }
+  return res.status(401).json({ 
+    status: 'error', 
+    message: 'API Key required. Set MATLAB_AGENT_API_KEY env var and pass X-API-Key header.' 
+  });
+}
+
+// 高危端点列表 — 需要认证
+const HIGH_RISK_PATHS = [
+  '/api/matlab/command',          // 执行 MATLAB 命令
+  '/api/matlab/run',              // 运行 MATLAB 代码
+  '/api/matlab/execute',          // 执行 MATLAB 脚本
+  '/api/save-env-config',         // 修改环境配置
+  '/api/matlab/simulink/self_improve',  // 修改源码/动态规则
+  '/api/matlab/simulink/delete',        // 删除模型模块
+];
+
+app.use((req: any, res: any, next: any) => {
+  if (HIGH_RISK_PATHS.some(p => req.path === p || req.path.startsWith(p + '/'))) {
+    return requireApiKey(req, res, next);
+  }
+  next();
+});
+
+// 辅助函数：统一处理 sl_* API 的响应
+function handleSlResponse(res: any, result: any) {
+  if (result && result.status === "error") {
+    return res.status(500).json(result);
+  }
+  res.json(result);
+}
+
+function handleSlError(res: any, error: any) {
+  res.status(500).json({ 
+    status: "error", 
+    error: error.message || "Unknown error",
+    details: error.response?.data || {}
+  });
+}
+
 // 缓存可用模型列表
 let cachedModels: Array<{ modelId: string; name: string; description?: string }> = [];
 const defaultModel = "claude-sonnet-4";
@@ -501,11 +578,11 @@ app.post("/api/matlab/workspace/isolation/route", async (req, res) => {
   }
 });
 
-// 清理隔离子目录中的中间文件
+// 清理隔离子目录中的中间文件（v10.1: 支持 deepClean 深度清理）
 app.post("/api/matlab/workspace/isolation/cleanup", async (req, res) => {
-  const { keepResults } = req.body;
+  const { keepResults, deepClean } = req.body;
   try {
-    const result = await matlab.cleanupAgentWorkspace(keepResults !== false);
+    const result = await matlab.cleanupAgentWorkspace(keepResults !== false, deepClean === true);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });
@@ -533,9 +610,19 @@ app.post("/api/matlab/simulink/add_block", async (req, res) => {
   if (!modelName || !sourceBlock) return res.status(400).json({ error: "请提供 modelName 和 sourceBlock" });
   try {
     const result = await matlab.simulinkAddBlock(req.body);
+    // 如果 MATLAB 端返回错误状态，直接返回给客户端
+    if (result && result.status === "error") {
+      return res.status(500).json(result);
+    }
     res.json(result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    // 传递完整错误信息
+    res.status(500).json({ 
+      status: "error", 
+      error: error.message,
+      stack: error.stack,
+      details: error.response?.data || {}
+    });
   }
 });
 
@@ -545,9 +632,9 @@ app.post("/api/matlab/simulink/add_line", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
   try {
     const result = await matlab.simulinkAddLine(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -557,9 +644,9 @@ app.post("/api/matlab/simulink/set_param", async (req, res) => {
   if (!blockPath) return res.status(400).json({ error: "请提供 blockPath" });
   try {
     const result = await matlab.simulinkSetParam(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -569,9 +656,9 @@ app.post("/api/matlab/simulink/delete", async (req, res) => {
   if (!blockPath) return res.status(400).json({ error: "请提供 blockPath" });
   try {
     const result = await matlab.simulinkDelete(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -581,9 +668,9 @@ app.post("/api/matlab/simulink/find_blocks", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
   try {
     const result = await matlab.simulinkFindBlocks(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -593,9 +680,9 @@ app.post("/api/matlab/simulink/replace_block", async (req, res) => {
   if (!modelName || !blockPath || !newBlockType) return res.status(400).json({ error: "请提供 modelName, blockPath, newBlockType" });
   try {
     const result = await matlab.simulinkReplaceBlock(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -605,9 +692,9 @@ app.post("/api/matlab/simulink/bus_create", async (req, res) => {
   if (!busName || !elements) return res.status(400).json({ error: "请提供 busName 和 elements" });
   try {
     const result = await matlab.simulinkBusCreate(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -617,9 +704,9 @@ app.post("/api/matlab/simulink/bus_inspect", async (req, res) => {
   if (!busName) return res.status(400).json({ error: "请提供 busName" });
   try {
     const result = await matlab.simulinkBusInspect(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -629,9 +716,9 @@ app.post("/api/matlab/simulink/signal_config", async (req, res) => {
   if (!modelName || !blockPath) return res.status(400).json({ error: "请提供 modelName 和 blockPath" });
   try {
     const result = await matlab.simulinkSignalConfig(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -641,9 +728,9 @@ app.post("/api/matlab/simulink/signal_logging", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
   try {
     const result = await matlab.simulinkSignalLogging(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -653,9 +740,9 @@ app.post("/api/matlab/simulink/subsystem_create", async (req, res) => {
   if (!modelName || !subsystemName) return res.status(400).json({ error: "请提供 modelName 和 subsystemName" });
   try {
     const result = await matlab.simulinkSubsystemCreate(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -665,9 +752,9 @@ app.post("/api/matlab/simulink/subsystem_mask", async (req, res) => {
   if (!modelName || !blockPath) return res.status(400).json({ error: "请提供 modelName 和 blockPath" });
   try {
     const result = await matlab.simulinkSubsystemMask(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -677,9 +764,9 @@ app.post("/api/matlab/simulink/subsystem_expand", async (req, res) => {
   if (!modelName || !subsystemPath) return res.status(400).json({ error: "请提供 modelName 和 subsystemPath" });
   try {
     const result = await matlab.simulinkSubsystemExpand(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -689,9 +776,9 @@ app.post("/api/matlab/simulink/config_get", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
   try {
     const result = await matlab.simulinkConfigGet(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -701,9 +788,9 @@ app.post("/api/matlab/simulink/config_set", async (req, res) => {
   if (!modelName || !config) return res.status(400).json({ error: "请提供 modelName 和 config" });
   try {
     const result = await matlab.simulinkConfigSet(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -713,9 +800,9 @@ app.post("/api/matlab/simulink/sim_run", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
   try {
     const result = await matlab.simulinkSimRun(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -725,9 +812,9 @@ app.post("/api/matlab/simulink/sim_results", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
   try {
     const result = await matlab.simulinkSimResults(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -737,9 +824,9 @@ app.post("/api/matlab/simulink/callback_set", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
   try {
     const result = await matlab.simulinkCallbackSet(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -749,9 +836,9 @@ app.post("/api/matlab/simulink/sim_batch", async (req, res) => {
   if (!modelName) return res.status(400).json({ error: "请提供 modelName" });
   try {
     const result = await matlab.simulinkSimBatch(req.body);
-    res.json(result);
+    handleSlResponse(res, result);
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    handleSlError(res, error);
   }
 });
 
@@ -865,6 +952,33 @@ app.post("/api/matlab/simulink/best_practices", async (req, res) => {
 app.post("/api/matlab/simulink/self_improve", async (req, res) => {
   try {
     const result = await matlab.simulinkSelfImprove(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v8.0: 结构化状态报告 API
+app.post("/api/matlab/simulink/model_status", async (req, res) => {
+  try {
+    const result = await matlab.simulinkModelStatus(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v8.0: GET 方法查询模型状态（设计文档要求）
+app.get("/api/matlab/simulink/model_status", async (req, res) => {
+  const modelName = req.query.modelName as string;
+  if (!modelName) return res.status(400).json({ error: "请提供 modelName 查询参数" });
+  try {
+    const params: Record<string, any> = { modelName };
+    if (req.query.format) params.format = req.query.format;
+    if (req.query.depth) params.depth = parseInt(req.query.depth as string);
+    if (req.query.includeHidden) params.includeHidden = req.query.includeHidden === 'true';
+    if (req.query.blockPath) params.blockPath = req.query.blockPath;
+    const result = await matlab.simulinkModelStatus(params);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });

@@ -1,7 +1,7 @@
 # sl_toolbox API 使用说明书
 
-> **版本**: v12.0 (Part 0~10, 工作流重构版)  
-> **更新日期**: 2026-04-18  
+> **版本**: v15.0 (v9.0 标准化建模工作流版)  
+> **更新日期**: 2026-04-20  
 > **适用范围**: 大模型通过 @skill://matlab-agent 调用 Simulink 建模函数时，**必须先阅读本手册**，防止语法错误  
 > **同步规则**: 任何 .m 函数的 API 签名或返回结构变更后，**必须同步更新本手册对应条目**
 
@@ -47,6 +47,7 @@
     |-----------> POST /simulink/auto_layout           自动排版
     |-----------> POST /simulink/snapshot              创建快照（重要操作前必做！）
     |-----------> POST /simulink/find_blocks           查找模块（验证构建结果）
+    |-----------> GET  /simulink/model_status          [v8.0] 查看模型完整状态（含端口+连线诊断）
     |
     | Step 5: 仿真 + 结果 + 测试
     |-----------> POST /simulink/sim_run               运行仿真（SimulationInput优先）
@@ -2236,6 +2237,329 @@ POST /api/matlab/simulink/self_improve
 POST /api/matlab/simulink/self_improve
 {"action": "stats"}
 ```
+
+---
+
+## 40. sl_model_status_snapshot — 模型结构化状态快照 (v8.0)
+
+> **获取模型的完整结构化状态快照，含端口坐标、连线路由、未连接端口诊断 — AI 自动连线和验证的基础**
+
+### 端点
+
+- `POST /api/matlab/simulink/model_status`
+- `GET /api/matlab/simulink/model_status?modelName=xxx&format=comment&depth=1`
+
+### MATLAB 函数签名
+
+```matlab
+result = sl_model_status_snapshot(modelName)
+result = sl_model_status_snapshot(modelName, 'format', 'both')
+result = sl_model_status_snapshot(modelName, 'depth', 0)
+```
+
+### 参数
+
+| 参数 | 类型 | 必选 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `modelName` | string | 是 | - | 模型名称 |
+| `format` | string | 否 | 'both' | 'json' / 'comment' / 'both' |
+| `depth` | number | 否 | 1 | find_system SearchDepth，0=全部 |
+| `includeParams` | boolean | 否 | true | 包含模块参数 |
+| `includeLines` | boolean | 否 | true | 包含连线信息 |
+| `includeHidden` | boolean | 否 | false | 包含隐藏块 |
+
+### 返回结构
+
+```json
+{
+  "status": "ok",
+  "snapshot": {
+    "modelName": "MyModel",
+    "timestamp": "2026-04-20 10:00:00",
+    "totalBlocks": 25,
+    "totalLines": 18,
+    "unconnectedPorts": 3,
+    "diagnosticsCount": 2
+  },
+  "blocks": [
+    {
+      "path": "MyModel/Gain",
+      "name": "Gain",
+      "type": "Gain",
+      "handle": 12345.0,
+      "position": {
+        "left": 100, "bottom": 50, "right": 200, "top": 100,
+        "center": { "x": 150, "y": 75 }
+      },
+      "ports": {
+        "inputs": [
+          {
+            "index": 1, "handle": 111.0,
+            "position": { "x": 100, "y": 75 },
+            "connected": true,
+            "connectedTo": { "block": "MyModel/Constant", "port": 1, "lineHandle": 222.0 }
+          }
+        ],
+        "outputs": [
+          {
+            "index": 1, "handle": 121.0,
+            "position": { "x": 200, "y": 75 },
+            "connected": true,
+            "connectedTo": [{ "block": "MyModel/Scope", "port": 1, "lineHandle": 223.0 }]
+          }
+        ]
+      },
+      "params": { "Gain": "2.5" }
+    }
+  ],
+  "lines": [
+    {
+      "handle": 222.0,
+      "name": "",
+      "sourceBlock": "MyModel/Constant",
+      "sourcePort": 1,
+      "sourcePosition": { "x": 200, "y": 75 },
+      "destinations": [{ "block": "MyModel/Gain", "port": 1, "position": { "x": 100, "y": 75 } }],
+      "routingPoints": [{ "x": 250, "y": 75 }],
+      "isConnected": true
+    }
+  ],
+  "unconnectedPorts": [
+    { "block": "MyModel/In1", "portType": "output", "portIndex": 1 }
+  ],
+  "diagnostics": [
+    {
+      "level": "WARNING",
+      "code": "PORT_UNCONNECTED",
+      "message": "Port 1 of block 'MyModel/Out1' is not connected",
+      "block": "MyModel/Out1",
+      "suggestion": "Add a signal line connecting to this input port"
+    }
+  ],
+  "reportJson": "{...}",
+  "reportComment": "%% Model Status Snapshot\n%% Model: MyModel\n..."
+}
+```
+
+### 诊断代码说明
+
+| 代码 | 级别 | 说明 |
+|------|------|------|
+| `PORT_UNCONNECTED` | WARNING | 模块端口未连接 |
+| `GOTO_FROM_UNPAIRED` | ERROR | From 模块的 GotoTag 为空 |
+| `GOTO_FROM_NO_MATCH` | ERROR | From 模块引用的 GotoTag 无对应 Goto |
+| `GOTO_NO_FROM` | WARNING | Goto 模块无对应 From |
+| `SUBSYSTEM_NO_INTERFACE` | WARNING | 子系统无 Inport/Outport |
+
+### 使用示例
+
+```bash
+# POST 方式
+POST /api/matlab/simulink/model_status
+{"modelName": "MyModel", "format": "both", "depth": 1}
+
+# GET 方式（轻量查询）
+GET /api/matlab/simulink/model_status?modelName=MyModel&format=comment&depth=1
+
+# 全深度扫描（含子系统内部）
+GET /api/matlab/simulink/model_status?modelName=MyModel&depth=0&includeHidden=true
+```
+
+---
+
+## 41. _verification — 写操作自动验证字段 (v8.0)
+
+> **v8.0 强制验证-执行循环的核心机制 — Bridge 层自动注入，AI 不可绕过**
+
+### 触发条件
+
+以下 14 个写操作在 Bridge 层执行成功后，自动调用 `sl_model_status_snapshot` 获取模型状态并注入 `_verification` 字段：
+
+| 命令 | 验证类型 |
+|------|----------|
+| `sl_add_block` | block |
+| `sl_add_line` | line |
+| `sl_set_param` | param |
+| `sl_delete` | block |
+| `sl_replace_block` | block |
+| `sl_subsystem_create` | subsystem |
+| `sl_subsystem_mask` | subsystem |
+| `sl_config_set` | param |
+| `sl_bus_create` | block |
+| `sl_block_position` | block |
+| `sl_auto_layout` | model |
+| `sl_signal_config` | param |
+| `sl_signal_logging` | param |
+| `sl_callback_set` | param |
+
+### _verification 返回结构
+
+```json
+{
+  "_verification": {
+    "verified": true,
+    "verifyType": "block",
+    "command": "sl_add_block",
+    "checks": [
+      { "check": "block_exists", "passed": true, "detail": "MyModel/Gain exists (Type: Gain)" },
+      { "check": "all_ports_connected", "passed": false, "detail": "2 unconnected port(s) on MyModel/Sum" },
+      { "check": "model_unconnected_ports", "passed": false, "detail": "3 unconnected port(s) in model MyModel" }
+    ],
+    "allPassed": false,
+    "warnings": [
+      "MyModel/Sum Port-1(input) is UNCONNECTED",
+      "MyModel/Sum Port-2(input) is UNCONNECTED"
+    ],
+    "suggestions": [
+      "Add signal line to connect MyModel/Sum input port 1",
+      "Connect remaining 3 unconnected port(s) before declaring task complete"
+    ]
+  },
+  "verifyStatus": "ISSUES_FOUND",
+  "verifyMessage": "2 warning(s), 2 suggestion(s)",
+  "reportComment": "%% -- Auto Verification --\n%% [ISSUES FOUND] 1/3 checks passed\n%%   [PASS] block_exists: MyModel/Gain exists\n%%   [FAIL] all_ports_connected: 2 unconnected\n%% [WARNING] MyModel/Sum Port-1(input) is UNCONNECTED\n%% [ACTION] Add signal line to connect..."
+}
+```
+
+### 各验证类型检查项
+
+| 验证类型 | 检查项 |
+|----------|--------|
+| block | block_exists, all_ports_connected, model_unconnected_ports |
+| line | source_port_connected, dest_port_connected |
+| param | param_applied |
+| subsystem | subsystem_exists, subsystem_has_interface |
+| model | model_integrity (blocks_count, lines_count) |
+
+### AI 必须遵守的验证流程
+
+1. 写操作返回后，检查 `verifyStatus` 字段
+2. 如果 `verifyStatus === 'ISSUES_FOUND'`：
+   - 读取 `warnings` 和 `suggestions`
+   - 根据建议修复问题
+   - 修复后再次检查
+3. 不允许在有未连接端口时声明建模完成
+4. 可使用 `GET /api/matlab/simulink/model_status?modelName=xxx` 主动查询完整状态
+
+### 跳过验证（仅调试用）
+
+在请求参数中添加 `"_skip_verify": true` 可跳过自动验证。**生产环境禁止使用！**
+
+---
+
+## 42. _auto_layout — 自动排版字段 (v9.0)
+
+> **v9.0 标准化建模工作流的核心机制 — Bridge 层自动触发排版，AI 不需要主动调用 sl_auto_layout**
+
+### 触发条件
+
+以下条件满足任一时，Bridge 层自动调用 `sl_auto_layout`（即 `Simulink.BlockDiagram.arrangeSystem`）排版模型：
+
+| 规则 | 触发条件 | 说明 |
+|------|---------|------|
+| 规则1 | 连续 3+ 次 add 操作 | 连线/建模阶段可能结束 |
+| 规则2 | 从 add 切换到 set_param | 建模阶段可能结束 |
+| 规则3 | sl_subsystem_create 后 | 子系统需定位 |
+| 防抖 | 距上次排版 <5秒 | 跳过排版，避免频繁调用 |
+
+### _auto_layout 返回结构
+
+```json
+{
+  "_auto_layout": {
+    "arranged": true,
+    "phase": "framework",
+    "integrityOk": true,
+    "message": "Auto-arranged v9_test_model (framework phase)",
+    "reason": "3 consecutive add operations detected"
+  }
+}
+```
+
+### 字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| arranged | boolean | 排版是否成功执行 |
+| phase | string | 触发排版时的建模阶段 (framework/subsystem/simulation) |
+| integrityOk | boolean | 排版后模型完整性（块数是否不变） |
+| message | string | 排版结果描述 |
+| reason | string | 触发排版的原因 |
+
+### 安全保护
+
+- 排版前自动 `save_system`（防踩坑 #31: arrangeSystem 可能清空模型）
+- 排版后验证块数不变（integrityOk=false 时警告）
+
+---
+
+## 43. _workflow — 工作流状态字段 (v9.0)
+
+> **v9.0 标准化建模工作流的核心机制 — 每个写操作后自动注入工作流阶段和建议**
+
+### 三层迭代建模流程
+
+```
+第一层（framework）：建立大框架
+  → In/Out、子系统占位、总线信号占位
+
+第二层（subsystem）：填充每个子系统
+  → 内部模块和连线
+
+第三层（simulation）：总体检查与仿真
+  → 验证→设参数→运行→查看结果
+```
+
+### _workflow 返回结构
+
+```json
+{
+  "_workflow": {
+    "model": "v9_test_model",
+    "phase": "framework",
+    "phaseStep": "building",
+    "nextSuggestedAction": "Connect 4 remaining port(s) in the framework",
+    "subsystemQueue": ["v9_test_model/Controller", "v9_test_model/Plant"],
+    "subsystemDone": [],
+    "checksRemaining": ["4 unconnected port(s)", "2 empty subsystem(s) need content"]
+  }
+}
+```
+
+### 字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| model | string | 模型名称 |
+| phase | string | 当前阶段: framework / subsystem / simulation |
+| phaseStep | string | 当前步骤: building / layout / checking / simulation |
+| nextSuggestedAction | string | 建议的下一步操作（AI 必须遵循） |
+| subsystemQueue | string[] | 待填充的空子系统路径列表 |
+| subsystemDone | string[] | 已完成的子系统路径列表 |
+| checksRemaining | string[] | 待解决的事项列表 |
+
+### 阶段转换逻辑
+
+| 当前阶段 | 条件 | 下一阶段 |
+|---------|------|---------|
+| framework | 未连接端口=0 且有空子系统 | subsystem |
+| framework | 未连接端口=0 且无子系统 | simulation |
+| subsystem | 所有子系统已填充 | simulation |
+| simulation | 发现未连接端口 | framework（回退） |
+
+### AI 必须遵守的工作流规则
+
+1. **必须遵循 `nextSuggestedAction` 的建议**
+2. **不允许在有未连接端口时声明建模完成**
+3. **排版由代码自动触发，AI 不需要主动调用 sl_auto_layout**
+4. **子系统必须先建空壳（第一层），再填充内容（第二层）**
+
+---
+
+| 版本 | 日期 | 变更内容 |
+|------|------|----------|
+| v15.0 | 2026-04-20 | **v9.0 标准化建模工作流**: (1) 新增 _auto_layout 自动排版字段说明（#42），(2) 新增 _workflow 工作流状态字段说明（#43），(3) 三层迭代建模流程，(4) 阶段自动检测和转换，(5) 子系统队列追踪，(6) 排版5秒防抖机制 |
+| v14.0 | 2026-04-20 | **v8.0 强制验证-执行循环**: (1) 新增 sl_model_status_snapshot API 说明（#40），(2) 新增 _verification 自动验证字段说明（#41），(3) 14 个写操作自动注入验证结果，(4) model_status GET/POST 双端点，(5) AI 验证流程规范 |
 
 ---
 

@@ -206,17 +206,30 @@ end
 
 function r = set_port_data_type(portHandle, dataType, portType)
 % SET_PORT_DATA_TYPE 设置端口数据类型
+%   对于封装子系统端口，可能不支持此参数
 
     r = struct('property', 'dataType', 'success', false, 'setValue', dataType, 'message', '', 'paramName', '');
 
     try
         if strcmpi(portType, 'outport')
-            set_param(portHandle, 'OutDataTypeStr', dataType);
-            r.paramName = 'OutDataTypeStr';
+            paramName = 'OutDataTypeStr';
         else
-            set_param(portHandle, 'InDataTypeStr', dataType);
-            r.paramName = 'InDataTypeStr';
+            paramName = 'InDataTypeStr';
         end
+        
+        % 先检查端口是否支持此参数
+        try
+            currentVal = get_param(portHandle, paramName);
+        catch
+            % 封装端口可能不支持此参数
+            r.message = ['Not supported: port does not have parameter ' paramName];
+            r.paramName = paramName;
+            r.success = false;
+            return;
+        end
+        
+        set_param(portHandle, paramName, dataType);
+        r.paramName = paramName;
         r.success = true;
         r.message = 'Data type set successfully';
     catch ME

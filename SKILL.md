@@ -784,6 +784,67 @@ skills/matlab-agent/
 
 > **每次踩坑都是一次学习机会。以下流程确保经验不丢失。**
 
+### 27. [CRITICAL] 强制验证-执行循环（v8.0 — 解决 AI 建模不检查结果的核心问题）
+
+> **AI 大模型每步建模操作后不检查模型状态，模型没建完整就汇报完成。v8.0 从底层强制注入验证。**
+
+**问题本质**：AI 调用 `sl_add_block` / `sl_add_line` 等写操作后，只能看到 API 返回的截断 JSON，无法确认：
+- 模块是否真正存在于模型中
+- 端口是否已连接
+- 模型是否有未连接端口
+- goto/from 是否配对
+- 子系统是否有接口
+
+**v8.0 解决方案 — Bridge 层自动验证（不可绕过）**：
+
+1. **底层自动注入**：每个写操作（sl_add_block, sl_add_line, sl_set_param, sl_delete, sl_replace_block, sl_subsystem_create, sl_subsystem_mask, sl_config_set, sl_bus_create, sl_block_position, sl_auto_layout, sl_signal_config, sl_signal_logging, sl_callback_set）在 Bridge 层执行成功后，自动调用 `sl_model_status_snapshot` 获取模型状态，注入 `_verification` 字段
+2. **AI 不可绕过**：验证结果由 Bridge 层自动注入，AI 无法跳过或禁用
+3. **Controller 层转换**：`executeBridgeCommandWithVerify` 将 `_verification` 转为 AI 可读的 `reportComment` 文本
+4. **验证结果格式**：
+
+```
+%% -- Auto Verification --
+%% [VERIFIED] 3/4 checks passed
+%%   [PASS] block_exists: model/Gain exists (Type: Gain)
+%%   [PASS] block_exists: model/Sum exists (Type: Sum)
+%%   [FAIL] all_ports_connected: 2 unconnected port(s) on model/Sum
+%%   [PASS] model_unconnected_ports: 0 unconnected port(s) in model
+%% [WARNING] model/Sum Port-1(input) is UNCONNECTED
+%% [ACTION] Add signal line to connect model/Sum input port 1
+```
+
+**AI 建模强制流程（v8.0 必须遵守！）**：
+
+```
+1. 每个写操作返回后，必须检查 _verification 字段或 reportComment
+2. 如果 verifyStatus === 'ISSUES_FOUND'：
+   a. 读取 warnings 和 suggestions
+   b. 根据建议修复问题（如添加缺失连线）
+   c. 修复后再次检查验证结果
+3. 不允许在有未连接端口时声明建模完成
+4. 使用 GET /api/matlab/simulink/model_status?modelName=xxx 主动查询模型状态
+5. 建模完成后必须调用 sl_model_status_snapshot 确认：
+   - 所有端口已连接
+   - 无 goto/from 配对错误
+   - 子系统有完整接口
+```
+
+**验证检查项说明**：
+
+| 操作类型 | 自动检查项 |
+|----------|-----------|
+| sl_add_block / sl_replace_block / sl_bus_create / sl_block_position | 模块存在性、端口连接状态、模型未连接端口总数 |
+| sl_add_line | 源端口已连接、目标端口已连接、连线完整性 |
+| sl_set_param / sl_signal_config / sl_signal_logging / sl_callback_set / sl_config_set | 参数是否生效 |
+| sl_subsystem_create / sl_subsystem_mask | 子系统存在性、接口完整性（In1/Out1） |
+| sl_delete | 模块确实已删除 |
+| sl_auto_layout | 模型完整性（块数不变、线数不变） |
+
+**手动查询 API**：
+- `POST /api/matlab/simulink/model_status` — 获取模型完整状态快照
+- `GET /api/matlab/simulink/model_status?modelName=xxx&format=comment` — 轻量查询（AI 可解析注释格式）
+- `GET /api/matlab/simulink/model_status?modelName=xxx&depth=0` — 全深度扫描（含子系统内部）
+
 **错误发生时（自动）**:
 1. `_handle_sl_command()` 执行失败 → 调用 `_log_error_context()` 记录到 `.learnings/ERRORS.md`
 2. Bridge 检测到参数格式常见错误 → `_auto_fix_args()` 尝试自动修正
@@ -816,6 +877,37 @@ skills/matlab-agent/
 | sl_best_practices 缺参数 | 无参数调用 | 自动设置 shortName='' |
 | blockPath 缺模型前缀 | 路径不含 '/' | 从 modelName 自动补全 |
 
+### 28. [CRITICAL] 标准化建模工作流（v9.0 — 代码底层强制执行）
+
+> **v8.0 解决了"每步操作后不检查"的问题，v9.0 解决了"不知道下一步该做什么"和"忘记排版"的问题。**
+
+**三层迭代建模**：
+
+一、建立大框架（顶层 In/Out、子系统占位、总线信号占位）
+   - 迭代：建模块→[AUTO]检查→设参数→[AUTO]检查→连线→[AUTO]检查→[AUTO]In/Out检查→[AUTO]Goto/From检查→[AUTO]排布
+
+二、填充每个子系统（内部模块和连线）
+   - 迭代：同上（在子系统内部执行）
+
+三、总体检查→设仿真参数→运行仿真→检查结果→（不符合则回到一）
+
+**代码强制机制（不可绕过）**：
+1. **自动排版**：连续 3 次 add 操作后自动触发 arrangeSystem（5 秒防抖）
+2. **工作流状态**：每次操作返回 `_workflow` 字段，告知 AI 当前阶段和建议下一步
+3. **阶段检测**：Bridge 自动检测 framework→subsystem→simulation 的阶段转换
+4. **排布验证**：排版后自动验证模型完整性（块数不变）
+5. **子系统队列**：自动检测空子系统，生成 subsystemQueue 引导 AI 按序填充
+
+**API 返回新增字段**：
+- `_auto_layout`: `{ arranged, phase, integrityOk, message, reason }` — 自动排版状态
+- `_workflow`: `{ model, phase, phaseStep, nextSuggestedAction, subsystemQueue, subsystemDone, checksRemaining }` — 工作流状态
+
+**AI 必须遵守**：
+- 必须遵循 `_workflow.nextSuggestedAction` 的建议
+- 不允许在有未连接端口时声明建模完成
+- 排版由代码自动触发，AI 不需要主动调用 sl_auto_layout
+- 子系统必须先建空壳（第一层），再填充内容（第二层）
+
 ## 性能指标
 
 | 操作 | 耗时 | 说明 |
@@ -835,11 +927,11 @@ matlab-agent/
 ├── app/                        # 完整应用源码
 │   ├── server/
 │   │   ├── index.ts            # Express 服务器入口（含 v5.0 quickstart API）
-│   │   ├── matlab-controller.ts # MATLAB 控制器（v5.0: diary + 相对路径修复 + quickstart）
-│   │   ├── system-prompts.ts   # AI 系统提示词（v5.0: Simulink 建模经验固化）
+│   │   ├── matlab-controller.ts # MATLAB 控制器（v9.0: 工作流状态 + 自动排版摘要）
+│   │   ├── system-prompts.ts   # AI 系统提示词（v9.0: 三层迭代标准化建模工作流）
 │   │   └── db.ts               # SQLite 数据库
 │   ├── matlab-bridge/
-│   │   └── matlab_bridge.py    # Python-MATLAB 桥接（v5.0: diary 替代 evalc + UTF-8 输出）
+│   │   └── matlab_bridge.py    # Python-MATLAB 桥接（v9.0: 工作流状态机 + 自动排版 + 阶段追踪）
 │   ├── src/                    # React 前端
 │   │   ├── App.tsx
 │   │   ├── components/

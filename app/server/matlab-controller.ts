@@ -384,6 +384,7 @@ function getTimeout(command: MATLABCommand): number {
     case 'sl_profile_sim': return TIMEOUTS.slProfileSim;
     case 'sl_profile_solver': return TIMEOUTS.slProfileSolver;
     case 'sl_best_practices': return TIMEOUTS.slBestPractices;
+    case 'sl_model_status': return TIMEOUTS.slSnapshot;  // 复用 snapshot 超时
     default: return TIMEOUTS.default;
   }
 }
@@ -475,7 +476,9 @@ function ensureBridgeProcess(): void {
           }
         }
       } catch {
-        // 非 JSON 行，忽略
+        // [P1-4 FIX] 非 JSON 行 — 记录到日志，不静默丢弃
+        // Bridge 异常输出（Python traceback 等）可能包含关键诊断信息
+        console.warn('[MATLAB Bridge] Non-JSON output:', line.trim().substring(0, 200));
       }
     }
   });
@@ -603,6 +606,7 @@ function processQueue(): void {
 
 /** 重启桥接进程（切换 MATLAB 版本时使用）
  * v5.1.1: stop 命令加 5 秒超时，避免卡住
+ * [P1-3 FIX]: 使用 taskkill /F /T 杀进程树，确保孤儿 MATLAB Engine 也被终止
  */
 export async function restartBridge(): Promise<MATLABResult> {
   console.log('[MATLAB Bridge] Restarting bridge with new MATLAB_ROOT...');
@@ -618,7 +622,18 @@ export async function restartBridge(): Promise<MATLABResult> {
       // 超时或错误，直接 kill
     }
     try {
-      bridgeProcess.kill();
+      // [P1-3 FIX] 在 Windows 上使用 taskkill /F /T 杀进程树
+      // 确保 MATLAB Engine 子进程也被终止，避免孤儿进程
+      if (process.platform === 'win32' && bridgeProcess.pid) {
+        exec(`taskkill /F /T /PID ${bridgeProcess.pid}`, (err) => {
+          if (err) {
+            // taskkill 失败，fallback 到普通 kill
+            try { bridgeProcess!.kill(); } catch {}
+          }
+        });
+      } else {
+        bridgeProcess.kill();
+      }
     } catch {
       // 忽略 kill 错误
     }
@@ -845,11 +860,12 @@ export async function routeFilePath(filename: string, forceWorkspace: boolean = 
 }
 
 /**
- * 清理 Agent 工作空间中的中间执行文件
+ * 清理 Agent 工作空间中的中间执行文件（v10.1 增强）
  * 默认保留结果文件（.c/.h/.dll/.exe/.txt/.json），只删除真正的中间文件（.obj/.log/.bak 等）
+ * deepClean=true 时额外清理工作目录中散落的 slprj/ 和中间文件
  */
-export async function cleanupAgentWorkspace(keepResults: boolean = true): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'cleanup_workspace', params: { keep_results: keepResults } });
+export async function cleanupAgentWorkspace(keepResults: boolean = true, deepClean: boolean = false): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'cleanup_workspace', params: { keep_results: keepResults, deep_clean: deepClean } });
 }
 
 // ============= Quickstart API（v5.0 新增）=============
@@ -933,24 +949,24 @@ export async function simulinkInspect(params: Record<string, any>): Promise<MATL
   return executeBridgeCommand({ action: 'sl_inspect', params });
 }
 
-/** sl_add_block — 安全添加模块 */
+/** sl_add_block — 安全添加模块（v8.0: 写操作自动验证） */
 export async function simulinkAddBlock(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_add_block', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_add_block', params });
 }
 
-/** sl_add_line — 安全连线 */
+/** sl_add_line — 安全连线（v8.0: 写操作自动验证） */
 export async function simulinkAddLine(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_add_line', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_add_line', params });
 }
 
-/** sl_set_param — 安全设置参数 */
+/** sl_set_param — 安全设置参数（v8.0: 写操作自动验证） */
 export async function simulinkSetParam(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_set_param', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_set_param', params });
 }
 
-/** sl_delete — 安全删除模块 */
+/** sl_delete — 安全删除模块（v8.0: 写操作自动验证） */
 export async function simulinkDelete(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_delete', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_delete', params });
 }
 
 /** sl_find_blocks — 高级查找模块 */
@@ -958,14 +974,14 @@ export async function simulinkFindBlocks(params: Record<string, any>): Promise<M
   return executeBridgeCommand({ action: 'sl_find_blocks', params });
 }
 
-/** sl_replace_block — 替换模块 */
+/** sl_replace_block — 替换模块（v8.0: 写操作自动验证） */
 export async function simulinkReplaceBlock(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_replace_block', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_replace_block', params });
 }
 
-/** sl_bus_create — 创建总线 */
+/** sl_bus_create — 创建总线（v8.0: 写操作自动验证） */
 export async function simulinkBusCreate(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_bus_create', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_bus_create', params });
 }
 
 /** sl_bus_inspect — 检查总线 */
@@ -973,24 +989,24 @@ export async function simulinkBusInspect(params: Record<string, any>): Promise<M
   return executeBridgeCommand({ action: 'sl_bus_inspect', params });
 }
 
-/** sl_signal_config — 信号配置 */
+/** sl_signal_config — 信号配置（v8.0: 写操作自动验证） */
 export async function simulinkSignalConfig(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_signal_config', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_signal_config', params });
 }
 
-/** sl_signal_logging — 信号记录 */
+/** sl_signal_logging — 信号记录（v8.0: 写操作自动验证） */
 export async function simulinkSignalLogging(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_signal_logging', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_signal_logging', params });
 }
 
-/** sl_subsystem_create — 创建子系统 */
+/** sl_subsystem_create — 创建子系统（v8.0: 写操作自动验证） */
 export async function simulinkSubsystemCreate(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_subsystem_create', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_subsystem_create', params });
 }
 
-/** sl_subsystem_mask — 子系统 Mask */
+/** sl_subsystem_mask — 子系统 Mask（v8.0: 写操作自动验证） */
 export async function simulinkSubsystemMask(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_subsystem_mask', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_subsystem_mask', params });
 }
 
 /** sl_subsystem_expand — 展开子系统 */
@@ -1003,9 +1019,9 @@ export async function simulinkConfigGet(params: Record<string, any>): Promise<MA
   return executeBridgeCommand({ action: 'sl_config_get', params });
 }
 
-/** sl_config_set — 设置模型配置 */
+/** sl_config_set — 设置模型配置（v8.0: 写操作自动验证） */
 export async function simulinkConfigSet(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_config_set', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_config_set', params });
 }
 
 /** sl_sim_run — 运行仿真 */
@@ -1018,9 +1034,9 @@ export async function simulinkSimResults(params: Record<string, any>): Promise<M
   return executeBridgeCommand({ action: 'sl_sim_results', params });
 }
 
-/** sl_callback_set — 设置回调 */
+/** sl_callback_set — 设置回调（v8.0: 写操作自动验证） */
 export async function simulinkCallbackSet(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_callback_set', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_callback_set', params });
 }
 
 /** sl_sim_batch — 批量仿真 */
@@ -1038,14 +1054,14 @@ export async function simulinkParseError(params: Record<string, any>): Promise<M
   return executeBridgeCommand({ action: 'sl_parse_error', params });
 }
 
-/** sl_block_position — 模块位置 */
+/** sl_block_position — 模块位置（v8.0: 写操作自动验证） */
 export async function simulinkBlockPosition(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_block_position', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_block_position', params });
 }
 
-/** sl_auto_layout — 自动排版 */
+/** sl_auto_layout — 自动排版（v8.0: 写操作自动验证） */
 export async function simulinkAutoLayout(params: Record<string, any>): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'sl_auto_layout', params });
+  return executeBridgeCommandWithVerify({ action: 'sl_auto_layout', params });
 }
 
 /** sl_snapshot — 模型快照 */
@@ -1078,6 +1094,175 @@ export async function simulinkSelfImprove(params: Record<string, any>): Promise<
   return executeBridgeCommand({ action: 'sl_self_improve', params });
 }
 
+/** v8.0: 结构化状态报告 — 获取模型完整状态快照(含端口坐标) */
+export async function simulinkModelStatus(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_model_status', params });
+}
+
+// ============= v8.0: 写操作后自动验证摘要提取 =============
+
+/**
+ * 写操作命令集合 — 这些操作在 Bridge 层已自动追加 _verification 字段
+ * Controller 层负责将 _verification 转换为 AI 可读的文本摘要
+ */
+const WRITE_ACTIONS = new Set([
+  'sl_add_block', 'sl_add_line', 'sl_set_param', 'sl_delete',
+  'sl_replace_block', 'sl_subsystem_create', 'sl_subsystem_mask',
+  'sl_config_set', 'sl_bus_create', 'sl_block_position',
+  'sl_auto_layout', 'sl_signal_config', 'sl_signal_logging',
+  'sl_callback_set',
+]);
+
+/**
+ * 从 _verification 字段提取 AI 可读的验证摘要
+ * 将结构化的检查结果转换为简洁的注释格式文本
+ */
+function extractVerificationSummary(verification: Record<string, any>): string {
+  if (!verification) return '';
+  
+  const lines: string[] = [];
+  const { checks = [], allPassed = true, warnings = [], suggestions = [] } = verification;
+  
+  lines.push('%% -- Auto Verification --');
+  
+  // 检查结果摘要
+  const passedCount = checks.filter((c: any) => c.passed).length;
+  const failedCount = checks.length - passedCount;
+  const statusIcon = allPassed ? 'VERIFIED' : 'ISSUES FOUND';
+  lines.push(`%% [${statusIcon}] ${passedCount}/${checks.length} checks passed`);
+  
+  // 显示每个检查结果
+  for (const check of checks) {
+    const icon = check.passed ? 'PASS' : 'FAIL';
+    lines.push(`%%   [${icon}] ${check.check}: ${check.detail || ''}`);
+  }
+  
+  // 警告
+  if (warnings.length > 0) {
+    lines.push('%% [WARNING] ' + warnings.join('; '));
+  }
+  
+  // 建议
+  if (suggestions.length > 0) {
+    lines.push('%% [ACTION] ' + suggestions.join('; '));
+  }
+  
+  return lines.join('\n');
+}
+
+/**
+ * v9.0: 从 _auto_layout 字段提取自动排版摘要
+ */
+function extractAutoLayoutSummary(autoLayout: Record<string, any>): string {
+  if (!autoLayout) return '';
+  
+  const lines: string[] = [];
+  lines.push('%% -- Auto Layout --');
+  
+  if (autoLayout.arranged) {
+    lines.push(`%% [LAYOUT] Model arranged (${autoLayout.phase || 'unknown'} phase)`);
+    if (autoLayout.integrityOk === false) {
+      lines.push(`%% [WARNING] Layout integrity check failed: ${autoLayout.message || ''}`);
+    }
+  } else {
+    lines.push(`%% [LAYOUT] Auto-arrange skipped: ${autoLayout.message || 'unknown reason'}`);
+  }
+  
+  if (autoLayout.reason) {
+    lines.push(`%% [REASON] ${autoLayout.reason}`);
+  }
+  
+  return lines.join('\n');
+}
+
+/**
+ * v9.0: 从 _workflow 字段提取工作流状态摘要
+ */
+function extractWorkflowSummary(workflow: Record<string, any>): string {
+  if (!workflow) return '';
+  
+  const lines: string[] = [];
+  lines.push('%% -- Workflow State --');
+  lines.push(`%% Phase: ${workflow.phase || 'unknown'} / ${workflow.phaseStep || 'unknown'}`);
+  
+  if (workflow.nextSuggestedAction) {
+    lines.push(`%% [NEXT] ${workflow.nextSuggestedAction}`);
+  }
+  
+  if (workflow.checksRemaining && workflow.checksRemaining.length > 0) {
+    lines.push(`%% [TODO] ${workflow.checksRemaining.join('; ')}`);
+  }
+  
+  if (workflow.subsystemQueue && workflow.subsystemQueue.length > 0) {
+    lines.push(`%% [SUBSYSTEMS] Remaining: ${workflow.subsystemQueue.join(', ')}`);
+  }
+  
+  if (workflow.subsystemDone && workflow.subsystemDone.length > 0) {
+    lines.push(`%% [SUBSYSTEMS] Done: ${workflow.subsystemDone.join(', ')}`);
+  }
+  
+  return lines.join('\n');
+}
+
+/**
+ * v8.0: 带自动验证的 Bridge 命令执行
+ * 
+ * 对于写操作，自动从结果中提取 _verification 并转为 AI 可读文本
+ * 注入到 reportComment 字段中，确保 AI 能看到验证结果
+ */
+export async function executeBridgeCommandWithVerify(
+  command: MATLABCommand
+): Promise<MATLABResult> {
+  const result = await executeBridgeCommand(command);
+  
+  // v8.0: 写操作后提取验证摘要
+  if (WRITE_ACTIONS.has(command.action) && result._verification) {
+    const verifySummary = extractVerificationSummary(result._verification);
+    if (verifySummary) {
+      // 追加到 reportComment 字段（如果已有内容则追加，否则新建）
+      if (result.reportComment) {
+        result.reportComment = result.reportComment + '\n' + verifySummary;
+      } else {
+        result.reportComment = verifySummary;
+      }
+      
+      // 同时在顶层添加简短的验证状态摘要
+      if (!result._verification.allPassed) {
+        result.verifyStatus = 'ISSUES_FOUND';
+        result.verifyMessage = `${result._verification.warnings?.length || 0} warning(s), ${result._verification.suggestions?.length || 0} suggestion(s)`;
+      } else {
+        result.verifyStatus = 'ALL_PASSED';
+      }
+    }
+  }
+  
+  // v9.0: 注入自动排版摘要
+  if (result._auto_layout) {
+    const layoutSummary = extractAutoLayoutSummary(result._auto_layout);
+    if (layoutSummary) {
+      if (result.reportComment) {
+        result.reportComment = result.reportComment + '\n' + layoutSummary;
+      } else {
+        result.reportComment = layoutSummary;
+      }
+    }
+  }
+  
+  // v9.0: 注入工作流状态摘要
+  if (result._workflow) {
+    const workflowSummary = extractWorkflowSummary(result._workflow);
+    if (workflowSummary) {
+      if (result.reportComment) {
+        result.reportComment = result.reportComment + '\n' + workflowSummary;
+      } else {
+        result.reportComment = workflowSummary;
+      }
+    }
+  }
+  
+  return result;
+}
+
 // ============= 辅助函数 =============
 
 export function ensureWorkspace(workDir?: string): string {
@@ -1086,14 +1271,59 @@ export function ensureWorkspace(workDir?: string): string {
   return dir;
 }
 
-export function createMFile(filePath: string, content: string): { success: boolean; message: string } {
+// ============= v10.1 强制文件隔离路由（同步版） =============
+// 关键区分:
+//   ✅ 留在工作目录: 智能体编写的 .m/.slx/.mat 等任务产出文件
+//   🔒 隔离到 .matlab_agent_tmp/: 运行时自动产生的中间临时文件
+
+// 允许留在工作目录的文件扩展名（任务产出文件 / MATLAB 原生文件）
+const KEEP_IN_WORKSPACE_EXTS = new Set(['.m', '.slx', '.mdl', '.mat', '.fig', '.xlsx', '.xls', '.csv', '.docx', '.pdf']);
+
+/**
+ * [v10.1] 同步版文件路径路由 — 强制将中间文件路由到 .matlab_agent_tmp/ 子目录
+ * 
+ * 与 Bridge 层 route_file_path() 逻辑一致，但同步执行，
+ * 供 createMFile 等同步函数使用。
+ * 
+ * 规则:
+ *   - .m/.slx/.mdl/.mat/.fig/.xlsx/.csv/.docx/.pdf → 留在工作目录
+ *   - 其他扩展名 → 强制路由到 .matlab_agent_tmp/
+ */
+function routeFilePathSync(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  
+  // 用户项目原生文件 → 留在工作目录
+  if (KEEP_IN_WORKSPACE_EXTS.has(ext)) {
+    return filePath;
+  }
+  
+  // 中间执行文件 → 路由到 .matlab_agent_tmp/
+  const projectDir = _cachedProjectDir;
+  if (projectDir) {
+    const tmpDir = path.join(projectDir, '.matlab_agent_tmp');
+    if (!fs.existsSync(tmpDir)) { fs.mkdirSync(tmpDir, { recursive: true }); }
+    return path.join(tmpDir, path.basename(filePath));
+  }
+  
+  // 无项目目录时保持原路径
+  return filePath;
+}
+
+export function createMFile(filePath: string, content: string): { success: boolean; message: string; routedPath?: string } {
   try {
-    const dir = path.dirname(filePath);
+    // [v10.1] 强制路由：中间文件自动放入 .matlab_agent_tmp/
+    const routedPath = routeFilePathSync(filePath);
+    const dir = path.dirname(routedPath);
     if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
     const bom = Buffer.from([0xEF, 0xBB, 0xBF]);
     const contentBuffer = Buffer.from(content, 'utf-8');
-    fs.writeFileSync(filePath, Buffer.concat([bom, contentBuffer]));
-    return { success: true, message: `M 文件已创建: ${filePath}` };
+    fs.writeFileSync(routedPath, Buffer.concat([bom, contentBuffer]));
+    const wasRouted = routedPath !== filePath;
+    return { 
+      success: true, 
+      message: `M 文件已创建: ${routedPath}${wasRouted ? ' (已自动路由到隔离目录)' : ''}`,
+      routedPath 
+    };
   } catch (error: any) {
     return { success: false, message: `创建 M 文件失败: ${error.message}` };
   }
@@ -1231,10 +1461,12 @@ export async function execSmartMATLAB(options: {
   // 1. 自动添加 sl_toolbox 路径
   let fullCode = '';
   if (autoAddpath) {
+    // [P1-8 FIX] 用 workspace 传路径变量，避免拼接 MATLAB 字符串导致注入
+    // 先通过 setWorkspaceVar 传递路径，然后在 MATLAB 代码中引用变量
     const slToolboxDir = path.join(__dirname, '..', 'matlab-bridge', 'sl_toolbox');
-    const slPathSafe = slToolboxDir.replace(/\\/g, '/');
-    // 用 workspace 变量方式传递路径（避免中文路径问题）
-    fullCode += `sl_toolbox_dir = '${slPathSafe}'; addpath(sl_toolbox_dir); sl_init; `;
+    // 将路径设置为 MATLAB workspace 变量，避免在代码中拼接字符串
+    const setPathCode = `sl_toolbox_dir = '${slToolboxDir.replace(/\\/g, '/').replace(/'/g, "''")}'; addpath(sl_toolbox_dir); sl_init; `;
+    fullCode += setPathCode;
   }
   fullCode += code;
   

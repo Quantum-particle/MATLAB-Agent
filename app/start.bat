@@ -57,17 +57,24 @@ if not exist "..\data\matlab-config.json" (
 REM ====== 5. 彻底清理端口 3000 上的旧进程（最优先！启动前必须确保环境干净！） ======
 echo [INFO] Scanning port 3000 for residual processes...
 set KILLED=0
+REM [P1-9 FIX] 先检查进程名是否匹配 node/tsx/ts-node，避免误杀无关进程
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3000 " ^| findstr "LISTENING" 2^>nul') do (
-    echo [INFO] Killing old process on port 3000 (PID %%a)
-    taskkill /F /PID %%a >nul 2>&1
-    set /a KILLED+=1
+    REM 检查进程名是否包含 node/tsx/ts-node（MATLAB Agent 相关进程）
+    for /f "tokens=1" %%p in ('tasklist /FI "PID eq %%a" /NH 2^>nul ^| findstr /I "node tsx ts-node"') do (
+        echo [INFO] Killing old MATLAB Agent process on port 3000 (PID %%a, %%p)
+        taskkill /F /PID %%a >nul 2>&1
+        set /a KILLED+=1
+    )
 )
 
 REM 杀掉 TIME_WAIT / CLOSE_WAIT 状态的残留连接进程
+REM [P1-9 FIX] 同样检查进程名，避免误杀
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":3000 " ^| findstr /V "LISTENING" 2^>nul') do (
     REM 只杀非0的PID（0是系统空闲进程，不能杀）
     if %%a neq 0 (
-        taskkill /F /PID %%a >nul 2>&1
+        for /f "tokens=1" %%p in ('tasklist /FI "PID eq %%a" /NH 2^>nul ^| findstr /I "node tsx ts-node python"') do (
+            taskkill /F /PID %%a >nul 2>&1
+        )
     )
 )
 

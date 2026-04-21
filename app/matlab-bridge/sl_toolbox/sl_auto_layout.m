@@ -29,7 +29,8 @@ function result = sl_auto_layout(modelName, varargin)
         'target', 'top', ...
         'routeExistingLines', true, ...
         'resizeBlocks', false, ...
-        'loadModelIfNot', true);
+        'loadModelIfNot', true, ...
+        'recursive', true);  % v11.1: 默认递归排版子系统内部
     
     idx = 1;
     while idx <= length(varargin)
@@ -181,6 +182,44 @@ function result = layout_native(targetPath, blockPaths, opts, hasRouteLine, hasR
             errors{end+1} = ['routeLine failed: ' ME.message]; %#ok<AGROW>
         end
     end
+    
+    % 3. 递归排版子系统内部（v11.1 新增）
+    % arrangeSystem 只排版当前层级，需要手动递归处理子系统
+    totalSubBlocks = 0;
+    if opts.recursive
+        try
+            subSystems = find_system(targetPath, 'SearchDepth', 1, ...
+                'LookUnderMasks', 'all', 'BlockType', 'SubSystem');
+            for si = 1:length(subSystems)
+                subPath = subSystems{si};
+                % 跳过当前层级自身
+                if strcmp(subPath, targetPath)
+                    continue;
+                end
+                try
+                    Simulink.BlockDiagram.arrangeSystem(subPath, 'FullLayout', 'true');
+                    % 统计子系统内部 blocks
+                    subBlks = find_system(subPath, 'SearchDepth', 1, 'LookUnderMasks', 'none');
+                    totalSubBlocks = totalSubBlocks + length(subBlks) - 1; % 减1排除子系统自身
+                    % 递归路由子系统内部线
+                    if hasRouteLine
+                        subLines = find_system(subPath, 'SearchDepth', 1, ...
+                            'FindAll', 'on', 'Type', 'Line');
+                        if ~isempty(subLines)
+                            Simulink.BlockDiagram.routeLine(subLines);
+                        end
+                    end
+                catch
+                    % 某些子系统可能不支持排版（如库链接），跳过
+                end
+            end
+        catch ME
+            errors{end+1} = ['Recursive layout failed: ' ME.message]; %#ok<AGROW>
+        end
+    end
+    
+    % 更新 blocksRearranged 统计（包含子系统内部）
+    blocksRearranged = blocksRearranged + totalSubBlocks;
     
     % 3. R2024b+: resizeBlocksToFitContent
     if opts.resizeBlocks && hasResizeBlocks

@@ -108,23 +108,40 @@ export function getMATLABSystemPrompt(): string {
     '',
     '## 🔄 工作流程',
     '',
-    '### 🔴 工作空间隔离规范（v5.4 必须严格遵守！）',
+    '### 🔴 工作空间隔离规范（v10.1 强制隔离！必须严格遵守！）',
     '',
-    '**从 set_project 设置项目目录的那一刻起，所有中间执行文件必须自动隔离！**',
+    '**核心原则：只有「非项目原生的中间临时文件」才隔离到 .matlab_agent_tmp/，任务产出文件留在工作目录！**',
     '',
-    '**留在项目工作目录**: .m, .slx, .mdl, .mat, .fig, .xlsx, .csv, .docx, .pdf',
+    '**区分标准：**',
+    '- ✅ **留在工作目录**（任务产出文件，用户/智能体主动创建的）:',
+    '  - 你编写的 .m 脚本和函数文件（如 my_controller.m、test_pendulum.m）',
+    '  - 你创建的 Simulink 模型（.slx/.mdl）',
+    '  - 保存的数据文件（.mat）、图形（.fig）、表格（.xlsx/.csv）',
+    '  - 其他用户可直接在 MATLAB 中打开的文件',
     '',
-    '**隔离到 .matlab_agent_tmp/**: .json, .c, .h, .cpp, .dll, .exe, .bat, .py, .js, .ts, .txt, .log, .bak, .tmp 等',
+    '- 🔒 **强制隔离到 .matlab_agent_tmp/**（运行时自动产生的临时/中间文件）:',
+    '  - Bridge 层内部执行用的临时 .m 脚本（如 _matlab_agent_tmp.m）',
+    '  - Bridge 层临时 .py/.json/.txt 文件（不是你写的，是底层自动生成的）',
+    '  - Simulink 编译缓存: slprj/ 目录、.c/.h/.dll/.obj/.tlc 等',
+    '  - 日志/备份/临时文件: .log/.bak/.tmp 等',
     '',
-    '1. **自动初始化**: set_project 时自动创建 .matlab_agent_tmp/',
-    '2. **自动路由**: POST /api/matlab/workspace/isolation/route { filename }',
-    '3. **自动清理**: POST /api/matlab/workspace/isolation/cleanup { keepResults: true }',
+    '**简记：你自己写的 .m/.slx/.mat → 留在工作目录；底层自动产生的杂文件 → 隔离**',
     '',
-    '### 🔴 任务完成收尾（v5.4 必须执行！）',
+    '**隔离机制（全自动，无需手动干预）：**',
+    '1. **自动初始化**: set_project 时自动创建 .matlab_agent_tmp/ + 设置 Simulink 编译目录',
+    '2. **自动路由**: Bridge 层写临时文件时自动路由到隔离目录',
+    '3. **自动清理**: 任务结束时调用 cleanup API 统一删除',
+    '',
+    '**手动 API（仅在特殊情况下需要）：**',
+    '- `POST /api/matlab/workspace/isolation/route { filename }` — 查询文件应写到哪',
+    '- `POST /api/matlab/workspace/isolation/cleanup { keepResults: true, deepClean: false }` — 清理',
+    '  - `deepClean: true` 会额外清理工作目录中散落的 slprj/ 和中间文件',
+    '',
+    '### 🔴 任务完成收尾（v10.1 必须执行！）',
     '',
     '**每个任务完成后，必须执行清理步骤！**',
-    '1. 调用 POST /api/matlab/workspace/isolation/cleanup { keepResults: true }',
-    '2. 告知用户哪些中间文件已清理、哪些结果文件已保留',
+    '1. 调用 `POST /api/matlab/workspace/isolation/cleanup { keepResults: true, deepClean: true }`',
+    '2. 告知用户哪些中间文件已清理、哪些任务产出文件已保留',
     '',
     '## 📊 实时可视化规范',
     '',
@@ -226,9 +243,11 @@ export function getMATLABSystemPrompt(): string {
     '3. 说明执行后用户将在 MATLAB 中看到什么',
     '4. 数据建议保存为 .mat 格式（除非用户另有要求）',
     '',
-    '### 🔴 任务收尾规范（v5.4 必须执行！）',
+    '### 🔴 任务收尾规范（v10.1 必须执行！）',
     '',
-    '**每个任务完成后，必须调用 cleanup API 清理 .matlab_agent_tmp/ 中的中间文件！**',
+    '**每个任务完成后，必须调用 cleanup API 清理 .matlab_agent_tmp/ 中的中间临时文件！**',
+    '注意：你编写的 .m 脚本、创建的 .slx 模型、保存的 .mat 数据属于任务产出，不会被清理。',
+    '`POST /api/matlab/workspace/isolation/cleanup { keepResults: true, deepClean: true }`',
   ].join('\n');
 }
 
@@ -329,32 +348,70 @@ function getCorePrompt(): string {
 // =====================================================================
 
 function getSimulinkModelingPrompt(): string {
-  return `## Simulink 建模场景最佳实践
+  return `## Simulink 标准化建模工作流（v9.0 — 代码强制）
 
-### 逐个添加工作流（推荐）
-1. 一次只添加一个块 → 验证成功 → 再添加下一个
-2. 先添加所有块 → 再逐个连线 → 最后设置参数
-3. 使用 block-position 设置位置 → 避免裸 Position 向量
+### 三层迭代建模流程
 
-### 模块选择优先级
-- 加法: Add > Sum
-- 减法: Subtract > Sum
-- 信号记录: Signal Logging > To Workspace
-- 连线: connectBlocks (R2024b+) > add_line
-- 子系统: createSubsystem (R2017a+) > 手动分组
+**每个写操作的返回结果中包含三个自动注入字段：**
+- \`_verification\`: 操作验证结果（v8.0，不可绕过）
+- \`_auto_layout\`: 自动排版状态（v9.0，自动触发，连续3次add操作后自动arrangeSystem）
+- \`_workflow\`: 当前工作流阶段和建议（v9.0，代码生成，必须遵循）
 
-### SubSystem 端口管理（极其重要！）
-- 新建 SubSystem 自动包含 In1/Out1，**不能删除，只能重命名**
-- 默认 In1→Out1 已被自动连线，需要先 delete_line 再 add_line
+#### 第一层：建立大框架
+目标：模型顶层架构（In/Out、子系统占位、总线信号占位）
+
+迭代循环（每步都有自动验证）：
+1. sl_add_block / sl_subsystem_create → 建立模块/子系统
+2. [AUTO] 检查模块/子系统是否建立成功 (_verification)
+3. sl_set_param → 模块设置参数
+4. [AUTO] 检查参数是否设置成功 (_verification)
+5. sl_add_line → 连线
+6. [AUTO] 检查连线是否成功/正确 (_verification)
+7. [AUTO] 检查 In/Out 连线 (_verification.warnings)
+8. [AUTO] 检查 Goto/From 配对 (_verification.warnings)
+9. [AUTO] 模块排布（连续3次add操作后自动触发 arrangeSystem）
+
+大框架完成条件：_workflow.phase 变为 'subsystem' 或 'simulation'
+
+#### 第二层：填充每个子系统
+目标：进入每个子系统，用相同迭代循环建立内部模块
+
+对 _workflow.subsystemQueue 中的每个子系统：
+1~9 步骤同上（在子系统内部执行）
+
+子系统完成条件：_workflow.subsystemQueue 为空
+
+#### 第三层：总体检查与仿真
+1. [AUTO] 全模型完整性检查
+2. [AUTO] 全端口连接检查
+3. [AUTO] 全 Goto/From 配对检查
+4. [AUTO] 全子系统接口完整性检查
+5. sl_config_set → 设置仿真参数
+6. sl_sim_run → 运行仿真
+7. sl_sim_results → 查看结果
+8. 结果不符合预期 → 回到第一层迭代
+
+### 关键规则（代码强制，不可绕过）
+- **必须遵循 _workflow.nextSuggestedAction 的建议**
+- **不允许在有未连接端口时声明建模完成**
+- **排版由代码自动触发，AI 不需要主动调用 sl_auto_layout**
+- **子系统必须先建空壳（第一层），再填充内容（第二层）**
+- **_workflow.phase 指示当前阶段，phase 转换由代码自动检测**
+
+### SubSystem 端口管理
+- sl_subsystem_create empty 模式无默认 In1→Out1 连线
 - 复杂模型用 From/Goto 传递信号，不是直接连线
 - 端口编号从1开始，按添加顺序递增
+
+### 模块选择优先级
+- 加法: Add > Sum | 减法: Subtract > Sum
+- 信号记录: Signal Logging > To Workspace
+- 子系统: sl_subsystem_create > 手动 add_block SubSystem
 
 ### 常见建模错误避免
 - 不要用 Sum 块做简单加减法 → 用 Add/Subtract
 - 不要用 To Workspace 记录信号 → 用 Signal Logging
-- 不要同时添加多个块再连线 → 逐个添加并验证
-- 不要设裸 Position → 用 block-position
-- 模型构建完成后必须调用 auto-layout 排版！
+- 不要一次添加多个块再连线 → 逐个添加并验证
 
 ### 模块路径速查（常用）
 
