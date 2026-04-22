@@ -958,6 +958,16 @@ app.post("/api/matlab/simulink/self_improve", async (req, res) => {
   }
 });
 
+// v10.1: 物理建模设计 API
+app.post("/api/matlab/simulink/model_design", async (req, res) => {
+  try {
+    const result = await matlab.simulinkModelDesign(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
 // v8.0: 结构化状态报告 API
 app.post("/api/matlab/simulink/model_status", async (req, res) => {
   try {

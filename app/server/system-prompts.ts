@@ -348,7 +348,7 @@ function getCorePrompt(): string {
 // =====================================================================
 
 function getSimulinkModelingPrompt(): string {
-  return `## Simulink 标准化建模工作流（v9.0 — 代码强制）
+  return `## Simulink 标准化建模工作流（v10.1 — 代码强制）
 
 ### 三层迭代建模流程
 
@@ -356,6 +356,27 @@ function getSimulinkModelingPrompt(): string {
 - \`_verification\`: 操作验证结果（v8.0，不可绕过）
 - \`_auto_layout\`: 自动排版状态（v9.0，自动触发，连续3次add操作后自动arrangeSystem）
 - \`_workflow\`: 当前工作流阶段和建议（v9.0，代码生成，必须遵循）
+
+#### Step 0.5：物理建模设计（代码强制门控，不可跳过）
+**在未完成设计审批前，所有 sl_add_block / sl_add_line 等修改命令将被 Bridge 拦截！**
+
+执行流程：
+1. **sl_model_design**(taskDescription) → 获取结构化设计方案 + 物理域知识库匹配
+2. 阅读返回结果，检查 design.researchNeeded：
+   - researchNeeded=false → AI 对方案有信心，可直接 approve
+   - researchNeeded=true → 必须执行组合拳（至少一轮）：
+     a. **网络搜索**: 用 web_search 搜索 design.researchTopics 中的主题
+     b. **深度调研**: 如需更深入分析，调用 research skill
+     c. **用户确认**: 将设计方案呈现给用户，请用户确认/修改物理方程
+3. 确认方案后 → **sl_model_design**(action='approve')
+4. 然后才能开始 Step 1（准备）→ Step 2（构建）
+
+**快速通过机制**：如果只是给已有模型加一个 Gain/Scope 等简单操作，可以在 sl_add_block 等命令中传 skipDesign: true 快速跳过设计阶段（仅限已有模型的增量修改，不适用新建模型）。
+
+**关键原则**：
+- 设计方案的核心是物理方程和数学形式，不是模块选择
+- 很多建模任务不涉及控制器，但都需要物理方程理解
+- 宁可多花1分钟确认物理方程，也不要花10分钟建一个物理含义错误的模型
 
 #### 第一层：建立大框架
 目标：模型顶层架构（In/Out、子系统占位、总线信号占位）

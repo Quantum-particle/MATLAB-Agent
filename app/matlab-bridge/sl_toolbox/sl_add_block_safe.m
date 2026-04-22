@@ -165,17 +165,28 @@ function result = sl_add_block_safe(modelName, sourceBlock, varargin)
         for i = 1:length(paramNames)
             try
                 val = opts.params.(paramNames{i});
-                if isnumeric(val)
-                    set_param(actualPath, paramNames{i}, num2str(val));
-                elseif islogical(val)
-                    if val
-                        set_param(actualPath, paramNames{i}, 'on');
+                % v10.1: 使用 sl_format_param_value 统一处理，支持矩阵/向量
+                try
+                    valStr = sl_format_param_value(actualPath, paramNames{i}, val);
+                catch
+                    % 兜底：如果 sl_format_param_value 失败，使用原有逻辑
+                    if isnumeric(val)
+                        if isscalar(val)
+                            valStr = num2str(val);
+                        else
+                            valStr = mat2str(val);
+                        end
+                    elseif islogical(val)
+                        if val
+                            valStr = 'on';
+                        else
+                            valStr = 'off';
+                        end
                     else
-                        set_param(actualPath, paramNames{i}, 'off');
+                        valStr = val;
                     end
-                else
-                    set_param(actualPath, paramNames{i}, val);
                 end
+                set_param(actualPath, paramNames{i}, valStr);
             catch ME
                 paramErrors{end+1} = [paramNames{i} ': ' ME.message]; %#ok<AGROW>
             end

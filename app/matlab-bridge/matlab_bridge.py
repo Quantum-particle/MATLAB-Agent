@@ -276,6 +276,390 @@ def _list_to_matlab_cell(lst, _depth=0):
     return f"{{{','.join(items)}}}"
 
 
+# ============= Phase 1A: 智能参数转换引擎 (v10.1) =============
+# 解决矩阵/向量参数传递断裂问题 — 所有复杂 Simulink 模块参数支持
+
+def _is_nested_list(lst):
+    """检测 list 是否为嵌套列表（矩阵）"""
+    return any(isinstance(item, list) for item in lst)
+
+def _is_flat_numeric_list(lst):
+    """检测 list 是否为扁平数值列表（向量）"""
+    return all(isinstance(x, (int, float)) for x in lst)
+
+def _list_to_matlab_matrix(lst):
+    """Python 嵌套 list → MATLAB 矩阵字符串 [[1,0],[0,1]] → '[1,0;0,1]'"""
+    if _is_nested_list(lst):
+        rows = []
+        for row in lst:
+            if isinstance(row, list):
+                rows.append(','.join(str(x) for x in row))
+            else:
+                rows.append(str(row))
+        return '[' + ';'.join(rows) + ']'
+    else:
+        return '[' + ','.join(str(x) for x in lst) + ']'
+
+def _list_to_matlab_vector(lst):
+    """Python list → MATLAB 行向量字符串 [1, 2, 3] → '[1,2,3]'"""
+    return '[' + ','.join(str(x) for x in lst) + ']'
+
+def _looks_like_matlab_expr(s):
+    """检测字符串是否像 MATLAB 表达式"""
+    s = s.strip()
+    if s.startswith('[') and s.endswith(']'):
+        return True
+    if re.match(r'^[a-zA-Z_]\w*$', s):
+        return True
+    return False
+
+# ============================================================================
+# _MATRIX_PARAM_PATTERNS: 参数名 → MATLAB 类型映射 (v10.2)
+# ============================================================================
+_MATRIX_PARAM_PATTERNS = {
+    'exact': {
+        'A': 'matrix', 'B': 'matrix', 'C': 'matrix', 'D': 'matrix', 'E': 'matrix',
+        'Numerator': 'vector', 'Denominator': 'vector', 'Zeros': 'vector', 'Poles': 'vector',
+        'Gain': 'scalar_or_matrix', 'InitialCondition': 'vector_or_matrix',
+        'Coefficients': 'vector', 'Table': 'matrix', 'SampleTime': 'scalar',
+        'Amplitude': 'scalar', 'Frequency': 'scalar', 'Phase': 'scalar', 'Offset': 'scalar',
+        'Before': 'scalar', 'After': 'scalar', 'StartTime': 'scalar', 'Slope': 'scalar',
+        'StartTime1': 'scalar', 'Period': 'scalar', 'PulseWidth': 'scalar', 'PhaseDelay': 'scalar',
+        'Mean': 'scalar', 'Variance': 'scalar', 'Seed': 'scalar',
+        'Inputs': 'scalar_or_string', 'Multiplication': 'enum', 'NumberOfInputs': 'scalar',
+        'CollapseMode': 'enum', 'CollapseDim': 'scalar',
+        'BreakpointsForDimension1': 'vector', 'BreakpointsForDimension2': 'vector',
+        'BreakpointsForDimension3': 'vector', 'BreakpointsForDimension4': 'vector',
+        'BreakpointsForDimension5': 'vector', 'InterpMethod': 'enum', 'ExtrapMethod': 'enum',
+        'Threshold': 'scalar', 'IndexMode': 'enum', 'Indices': 'vector_or_string',
+        'Operator': 'enum', 'LogicDataType': 'enum', 'Relop': 'enum',
+        'Function': 'enum', 'FunctionName': 'string', 'Parameters': 'string', 'Expr': 'string',
+        'DelayLen': 'scalar_or_string', 'InitialOutput': 'scalar_or_string', 'InitialBufferSize': 'scalar',
+        'MaximumDelay': 'scalar', 'PadeOrder': 'scalar', 'DelayTime': 'scalar_or_string',
+        'OutDataTypeStr': 'enum', 'OutMin': 'scalar_or_string', 'OutMax': 'scalar_or_string',
+        'Min': 'scalar_or_string', 'Max': 'scalar_or_string', 'EnableAssert': 'bool', 'Callback': 'string',
+        'Solver': 'enum', 'StopTime': 'scalar_or_string', 'MaxStep': 'scalar_or_string',
+        'MinStep': 'scalar_or_string', 'InitialStep': 'scalar_or_string',
+        'RelTol': 'scalar_or_string', 'AbsTol': 'scalar_or_string',
+        # v10.2 新增参数
+        'Floating': 'bool', 'Decimation': 'scalar', 'MaxDataPoints': 'scalar',
+        'TagVisibility': 'enum', 'ProbeWidth': 'bool', 'Enabled': 'bool',
+        'NumInputPorts': 'scalar', 'VariableName': 'string',
+        'IconDisplay': 'string', 'NumInputs': 'scalar', 'CaseConditions': 'string',
+        'IC': 'scalar', 'Bias': 'scalar', 'Bit': 'scalar',
+        # [FIX v10.2.1] 缺失的 enum 参数类型（来自 _PARAM_ENUM_VALUES）
+        'WaveForm': 'enum',  # Signal Generator
+        'Operator': 'enum',  # Logical Operator, Relational Operator, etc.
+        'Function': 'enum',  # MinMax, Math Function
+        'ShiftType': 'enum',  # Shift Arithmetic
+        'InterpMethod': 'enum',  # Lookup Tables
+        'ExtrapMethod': 'enum',  # Lookup Tables
+        'TagVisibility': 'enum',  # Goto
+        'RateTransition': 'enum',  # Rate Transition
+        'OutputSignalType': 'enum',  # Trigonometric Function
+        'GotoTag': 'string',  # Goto (string type, not enum)
+        'MATLABFunction': 'string',  # Interpreted MATLAB Function
+    },
+    'prefix': {
+        'Num': 'vector', 'Den': 'vector', 'BreakpointsForDimension': 'vector',
+    },
+    'block_param': {
+        ('State-Space', 'A'): 'matrix', ('State-Space', 'B'): 'matrix',
+        ('State-Space', 'C'): 'matrix', ('State-Space', 'D'): 'matrix',
+        ('State-Space', 'x0'): 'vector',
+        ('Transfer Fcn', 'Numerator'): 'vector', ('Transfer Fcn', 'Denominator'): 'vector',
+        ('Zero-Pole', 'Zeros'): 'vector', ('Zero-Pole', 'Poles'): 'vector',
+        ('Zero-Pole', 'Gain'): 'scalar_or_matrix',
+        ('Discrete State-Space', 'A'): 'matrix', ('Discrete State-Space', 'B'): 'matrix',
+        ('Discrete State-Space', 'C'): 'matrix', ('Discrete State-Space', 'D'): 'matrix',
+        ('Discrete State-Space', 'x0'): 'vector',
+        ('Discrete Transfer Fcn', 'Numerator'): 'vector', ('Discrete Transfer Fcn', 'Denominator'): 'vector',
+        ('Discrete Filter', 'Numerator'): 'vector', ('Discrete Filter', 'Denominator'): 'vector',
+        ('Discrete PID Controller', 'P'): 'string', ('Discrete PID Controller', 'I'): 'string',
+        ('Discrete PID Controller', 'D'): 'string', ('Discrete PID Controller', 'N'): 'string',
+        ('Discrete PID Controller (2DOF)', 'P'): 'string', ('Discrete PID Controller (2DOF)', 'I'): 'string',
+        ('Discrete PID Controller (2DOF)', 'D'): 'string', ('Discrete PID Controller (2DOF)', 'N'): 'string',
+        ('Gain', 'Gain'): 'scalar_or_matrix',
+        ('Product', 'Multiplication'): 'enum', ('Sum', 'Inputs'): 'scalar_or_string',
+        ('Add', 'Inputs'): 'scalar_or_string', ('Subtract', 'Inputs'): 'scalar_or_string',
+        ('Step', 'Before'): 'scalar_or_string', ('Step', 'After'): 'scalar_or_string', ('Step', 'Time'): 'scalar_or_string',
+        ('Sine Wave', 'Amplitude'): 'scalar_or_string', ('Sine Wave', 'Frequency'): 'scalar_or_string',
+        ('Band-Limited White Noise', 'Cov'): 'scalar_or_matrix',
+        ('Repeating Sequence', 'OutputValues'): 'vector', ('Repeating Sequence', 'TimeValues'): 'vector',
+        ('Scope', 'NumInputPorts'): 'scalar',
+        ('1-D Lookup Table', 'Table'): 'vector', ('1-D Lookup Table', 'BreakpointsForDimension1'): 'vector',
+        ('2-D Lookup Table', 'Table'): 'matrix', ('2-D Lookup Table', 'BreakpointsForDimension1'): 'vector',
+        ('2-D Lookup Table', 'BreakpointsForDimension2'): 'vector',
+        ('Prelookup', 'BreakpointsForDimension1'): 'vector',
+        ('Interpolation Using Prelookup', 'Table'): 'vector_or_matrix',
+        ('Transport Delay', 'DelayTime'): 'scalar_or_string', ('Transport Delay', 'PadeOrder'): 'scalar',
+        ('Unit Delay', 'InitialCondition'): 'scalar_or_string', ('Unit Delay', 'SampleTime'): 'scalar_or_string',
+        ('Integrator', 'InitialCondition'): 'scalar_or_string', ('Integrator', 'LimitOutput'): 'bool',
+        ('Integrator', 'UpperSaturationLimit'): 'scalar_or_string', ('Integrator', 'LowerSaturationLimit'): 'scalar_or_string',
+        ('Constant', 'Value'): 'scalar_or_string',
+    },
+}
+
+# ============================================================================
+# _PARAM_ENUM_VALUES: 枚举参数的有效值映射 (v10.2)
+# AI 大模型设置参数时查阅此表获取有效枚举值
+# ============================================================================
+_PARAM_ENUM_VALUES = {
+    # 逻辑运算符
+    ('Logical Operator', 'Operator'): ['AND', 'OR', 'NOT', 'NAND', 'NOR', 'XOR', 'NXOR'],
+    # 关系运算符
+    ('Relational Operator', 'Operator'): ['==', '~=', '<', '>', '<=', '>='],
+    # 比较常量运算符
+    ('Compare To Constant', 'RelOp'): ['==', '~=', '<', '>', '<=', '>='],
+    ('Compare To Zero', 'Operator'): ['==', '~=', '<', '>', '<=', '>='],
+    # 数学/三角运算符
+    ('Math Function', 'Operator'): ['sqrt', 'log', 'log10', 'ln', 'exp', 'pow', 'abs', 'conj', 'inv', 'transpose', 'real', 'imag', 'complex', 'fold', 'unfold'],
+    ('Trigonometric Function', 'Operator'): ['sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh'],
+    # MinMax
+    ('MinMax', 'Function'): ['min', 'max'],
+    # Goto TagVisibility
+    ('Goto', 'TagVisibility'): ['local', 'scoped', 'global'],
+    ('From', 'GotoTag'): None,  # string type, no enum restriction
+    # DataType
+    ('Data Type Conversion', 'OutDataTypeStr'): ['double', 'single', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'boolean', 'auto'],
+    # RateTransition
+    ('Rate Transition', 'RateTransition'): ['Inherit', 'uint8', 'uint16', 'uint32', 'int8', 'int16', 'int32', 'single', 'double', 'Automatically determine'],
+    # Probe
+    ('Probe', 'ProbeWidth'): ['on', 'off'],
+    # Assertion
+    ('Assertion', 'Enabled'): ['on', 'off'],
+    # Scope Floating
+    ('Scope', 'Floating'): ['on', 'off'],
+    # Shift Arithmetic ShiftType
+    ('Shift Arithmetic', 'ShiftType'): ['arithmetic', 'logical', 'circular', 'shift'],
+    # Signal Generator WaveForm
+    ('Signal Generator', 'WaveForm'): ['sine', 'square', 'sawtooth', 'random'],
+    # InterpMethod / ExtrapMethod
+    ('1-D Lookup Table', 'InterpMethod'): ['linear', 'lower', 'upper', 'clipped', 'native'],
+    ('2-D Lookup Table', 'InterpMethod'): ['linear', 'linear', 'cubic', 'lag', 'nearest', 'bilinear', 'bicubic'],
+    ('Prelookup', 'InterpMethod'): [' Clair', 'binary', 'linear', 'even', 'InterpolationUsingLastValue'],
+    ('Interpolation Using Prelookup', 'InterpMethod'): ['linear', 'cubic', 'piecewise', 'Akima', 'spline', 'pchip'],
+    # 通用 enum 型参数（作为 fallback）
+    'Multiplication': ['Element-wise(K.*u)', 'Matrix(K*u)', 'Element-wise(u.*K)', 'Matrix(u*K)'],
+    'InterpMethod': ['linear', 'cubic', 'Clair', 'nearest', 'binary'],
+    'ExtrapMethod': ['clip', 'linear', 'Clair', 'periodic'],
+}
+
+def _get_param_hints(block_type, param_name):
+    """获取参数的提示信息
+
+    Returns:
+        dict: 包含 param_type, enum_values, description
+    """
+    hints = {}
+
+    # 1. 获取参数类型
+    hints['param_type'] = _infer_param_type(param_name, block_type)
+
+    # 2. 获取枚举值
+    key = (block_type, param_name)
+    if key in _PARAM_ENUM_VALUES:
+        hints['enum_values'] = _PARAM_ENUM_VALUES[key]
+    elif param_name in ['Operator', 'Function', 'Multiplication', 'WaveForm', 'ShiftType', 'InterpMethod', 'ExtrapMethod']:
+        # 全局参数名的枚举值
+        hints['enum_values'] = _PARAM_ENUM_VALUES.get(param_name, None)
+
+    # 3. 参数描述
+    _PARAM_DESCRIPTIONS = {
+        'Gain': '增益值',
+        'Amplitude': '幅值',
+        'Frequency': '频率',
+        'Phase': '初相',
+        'Bias': '偏置',
+        'Time': '时间',
+        'Before': '初始值',
+        'After': '最终值',
+        'Slope': '斜率',
+        'Threshold': '阈值',
+        'A': 'A 矩阵',
+        'B': 'B 矩阵',
+        'C': 'C 矩阵',
+        'D': 'D 矩阵',
+    }
+    hints['description'] = _PARAM_DESCRIPTIONS.get(param_name, '')
+
+    return hints
+
+def _format_as_matlab_string(value):
+    """将值格式化为 MATLAB 字符串"""
+    if isinstance(value, list):
+        if _is_nested_list(value):
+            return _list_to_matlab_matrix(value).strip('[]')
+        else:
+            return ' '.join(str(x) for x in value)
+    return str(value)
+
+def _infer_param_type(param_name, block_type=''):
+    """根据参数名+模块类型推断目标 MATLAB 类型"""
+    # 优先: 模块类型+参数名组合
+    if block_type:
+        key = (block_type, param_name)
+        if key in _MATRIX_PARAM_PATTERNS.get('block_param', {}):
+            return _MATRIX_PARAM_PATTERNS['block_param'][key]
+    # 次优: 精确参数名匹配
+    if param_name in _MATRIX_PARAM_PATTERNS.get('exact', {}):
+        return _MATRIX_PARAM_PATTERNS['exact'][param_name]
+    # 最后: 前缀匹配
+    for prefix, ptype in _MATRIX_PARAM_PATTERNS.get('prefix', {}).items():
+        if param_name.startswith(prefix):
+            return ptype
+    # 兜底
+    return 'cell'
+
+def _smart_param_convert(param_name, param_value, block_type=''):
+    """智能参数类型转换 — 根据参数名+模块类型自动判断目标 MATLAB 格式
+    
+    转换规则（优先级从高到低）:
+    1. __matlab_expr__ 标记: 用户/AI 显式指定 MATLAB 表达式
+    2. __workspace_var__ 标记: 工作区变量引用
+    3. 参数名模式匹配: A/B/C/D/Numerator/Denominator 等
+    4. 模块类型+参数名组合: PID Controller 的 P/I/D 参数
+    5. 兜底: 原有 _python_to_matlab_value 行为
+    
+    Returns:
+        str: MATLAB 表达式字符串
+    """
+    # === 规则 1: 显式 MATLAB 表达式标记 ===
+    if isinstance(param_value, dict) and '__matlab_expr__' in param_value:
+        return param_value['__matlab_expr__']
+    
+    # === 规则 2: 工作区变量引用标记 ===
+    # 返回 evalin('base', 'var_name') 表达式，让 MATLAB 在 struct 创建时获取实际值
+    # 而不是传字符串 'var_name'（Simulink set_param 不支持变量名字符串作为矩阵参数）
+    if isinstance(param_value, dict) and '__workspace_var__' in param_value:
+        var_name = param_value['__workspace_var__']
+        escaped_name = var_name.replace("'", "''")
+        return f"evalin('base','{escaped_name}')"
+    
+    # === 规则 3: 纯字符串 → 先查询参数类型注册表 ===
+    if isinstance(param_value, str):
+        # [FIX v10.2.1] 先查询参数类型注册表
+        # 确保 string/enum/bool 类型的参数一定加引号
+        param_type = _infer_param_type(param_name, block_type)
+
+        # 如果是 string/enum/bool 类型，必须加引号
+        if param_type in ('string', 'enum', 'bool'):
+            escaped = param_value.replace("'", "''")
+            return f"'{escaped}'"
+
+        # 如果是矩阵/向量表达式（如 '[1 2 3]'），直接透传
+        if param_value.startswith('[') and param_value.endswith(']'):
+            return param_value
+
+        # 如果看起来像 MATLAB 变量名（纯字母数字下划线），不加引号让 MATLAB 解析
+        if _looks_like_matlab_expr(param_value):
+            return param_value
+
+        # 其他情况加引号
+        escaped = param_value.replace("'", "''")
+        return f"'{escaped}'"
+    
+    # === 规则 4: 数值标量 → 直接转字符串 ===
+    if isinstance(param_value, (int, float)):
+        if isinstance(param_value, float) and (param_value != param_value):  # NaN
+            return 'NaN'
+        if isinstance(param_value, float) and (param_value == float('inf')):
+            return 'Inf'
+        if isinstance(param_value, float) and (param_value == float('-inf')):
+            return '-Inf'
+        return str(param_value)
+    
+    # === 规则 5: 布尔值 → 'on'/'off' ===
+    if isinstance(param_value, bool):
+        return 'on' if param_value else 'off'
+    
+    # === 规则 6: list → 自动判断矩阵/向量/Cell ===
+    if isinstance(param_value, list):
+        target_type = _infer_param_type(param_name, block_type)
+        if target_type == 'matrix':
+            return _list_to_matlab_matrix(param_value)
+        elif target_type == 'vector':
+            return _list_to_matlab_vector(param_value)
+        elif target_type == 'scalar_or_matrix':
+            if _is_nested_list(param_value):
+                return _list_to_matlab_matrix(param_value)
+            elif _is_flat_numeric_list(param_value):
+                if len(param_value) == 1:
+                    return str(param_value[0])
+                return _list_to_matlab_vector(param_value)
+            else:
+                return _python_to_matlab_value(param_value)
+        elif target_type == 'scalar_or_string':
+            if _is_flat_numeric_list(param_value):
+                if len(param_value) == 1:
+                    return str(param_value[0])
+                return _list_to_matlab_vector(param_value)
+            return _python_to_matlab_value(param_value)
+        elif target_type == 'vector_or_string':
+            if _is_flat_numeric_list(param_value):
+                return _list_to_matlab_vector(param_value)
+            elif len(param_value) == 1 and isinstance(param_value[0], str):
+                escaped = param_value[0].replace("'", "''")
+                return f"'{escaped}'"
+            return _python_to_matlab_value(param_value)
+        elif target_type == 'vector_or_matrix':
+            if _is_nested_list(param_value):
+                return _list_to_matlab_matrix(param_value)
+            elif _is_flat_numeric_list(param_value):
+                return _list_to_matlab_vector(param_value)
+            return _python_to_matlab_value(param_value)
+        elif target_type == 'scalar_or_matrix':
+            if _is_nested_list(param_value):
+                return _list_to_matlab_matrix(param_value)
+            elif _is_flat_numeric_list(param_value):
+                if len(param_value) == 1:
+                    return str(param_value[0])
+                return _list_to_matlab_vector(param_value)
+            return _python_to_matlab_value(param_value)
+        elif target_type == 'string':
+            return f"'{_format_as_matlab_string(param_value)}'"
+        elif target_type == 'enum':
+            if isinstance(param_value, list) and len(param_value) == 1:
+                return f"'{param_value[0]}'"
+            return f"'{_format_as_matlab_string(param_value)}'"
+        else:
+            return _python_to_matlab_value(param_value)  # fallback to cell
+    
+    # === 规则 7: dict → 检查是否有特殊标记，否则 struct ===
+    if isinstance(param_value, dict):
+        if '__matlab_expr__' in param_value:
+            return param_value['__matlab_expr__']
+        if '__workspace_var__' in param_value:
+            var_name = param_value['__workspace_var__']
+            return f"'{var_name}'"  # 返回 "'A_ws'" 格式
+        return _python_to_matlab_value(param_value)
+    
+    # === 兜底 ===
+    return _python_to_matlab_value(param_value)
+
+def _extract_block_type(source_block):
+    """'simulink/Continuous/State-Space' → 'State-Space'"""
+    if not source_block:
+        return ''
+    parts = source_block.split('/')
+    return parts[-1] if parts else source_block
+
+def _build_params_struct_expr(params_dict, block_type=''):
+    """构建参数 struct 的 MATLAB 表达式（使用智能转换）"""
+    if not params_dict:
+        return 'struct()'
+    parts = []
+    for k, v in params_dict.items():
+        val_str = _smart_param_convert(k, v, block_type)
+        # 如果值已经是带引号的字符串（MATLAB 表达式），不加重括号
+        # 否则加重括号确保 MATLAB 正确解析
+        if val_str.startswith("'") and val_str.endswith("'"):
+            parts.append(f"'{k}',{val_str}")
+        else:
+            parts.append(f"'{k}',({val_str})")
+    return f"struct({','.join(parts)})"
+
+
 def _safe_json_parse(raw_output):
     """安全 JSON 解析 — 处理 MATLAB 输出中的 NaN/Infinity 等"""
     if not raw_output or not raw_output.strip():
@@ -3281,6 +3665,7 @@ _SL_FUNC_MAP = {
     "sl_command_stats":    "_builtin_stats",  # v6.1: 内置命令，不调用 .m 函数
     "sl_self_improve":     "_builtin_self_improve",  # v7.0: Layer 5 源码级自我改进
     "sl_model_status":      "sl_model_status_snapshot",  # v8.0: 结构化状态报告(含端口坐标)
+    "sl_model_design":      "sl_model_design",  # v10.1: 物理建模设计
 }
 
 # 命令 → 参数构建函数映射（将 API 参数转为 .m 函数参数）
@@ -3308,13 +3693,17 @@ def _build_sl_args(command, params):
     
     elif command == "sl_add_block":
         # sl_add_block_safe(modelName, sourceBlock, varargin)
+        # v10.1: 使用智能参数转换，支持矩阵/向量参数
+        source_block = params.get('sourceBlock', '')
+        raw_params = params.get('params', {})
+        block_type = _extract_block_type(source_block)
         return {
             '_pos_1': model_name,
-            '_pos_2': params.get('sourceBlock', ''),
+            '_pos_2': source_block,
             'destPath': params.get('destPath', ''),
             'position': params.get('position', []),
             'makeNameUnique': params.get('makeNameUnique', True),
-            'params': params.get('params', {}),
+            'params': ('__special__', _build_params_struct_expr(raw_params, block_type)),
         }
     
     elif command == "sl_add_line":
@@ -3345,9 +3734,20 @@ def _build_sl_args(command, params):
     
     elif command == "sl_set_param":
         # sl_set_param_safe(blockPath, params, varargin)
+        # v10.1: 使用智能参数转换，支持矩阵/向量参数
+        block_path = params.get('blockPath', '')
+        raw_params = params.get('params', {})
+        # 优先从 params 中获取 blockType（AI 显式传递），否则从 blockPath 推断
+        block_type = params.get('blockType', '')
+        if not block_type and '/' in block_path:
+            # 从 blockPath 提取模块类型名
+            parts = block_path.split('/')
+            if len(parts) >= 2:
+                # 尝试查 sl_block_registry 获取真实类型
+                block_type = parts[-1]  # 简化处理
         return {
-            '_pos_1': params.get('blockPath', ''),
-            '_pos_2': params.get('params', {}),
+            '_pos_1': block_path,
+            '_pos_2_special': _build_params_struct_expr(raw_params, block_type),
         }
     
     elif command == "sl_delete":
@@ -3624,6 +4024,23 @@ def _build_sl_args(command, params):
             'includeHidden': params.get('includeHidden', False),
         }
 
+    elif command == "sl_model_design":
+        # sl_model_design(taskDescription, varargin)
+        # action: 'design'（默认）或 'approve'（审批设计方案）或 'status'（查询状态）
+        action = params.get('action', 'design')
+        if action == 'approve':
+            # 审批模式：不在 MATLAB 执行，直接更新 Bridge 状态
+            return {'_pos_1_special': '__design_approve__', 'modelName': model_name}
+        elif action == 'status':
+            return {'_pos_1_special': '__design_status__', 'modelName': model_name}
+        else:
+            return {
+                '_pos_1': params.get('taskDescription', ''),
+                'domain': params.get('domain', 'auto'),
+                'approach': params.get('approach', 'auto'),
+                'detailLevel': params.get('detailLevel', 'standard'),
+            }
+
     else:
         return {'_pos_1': model_name}
 
@@ -3674,10 +4091,38 @@ _BUILD_PHASE_TRACKER = {}  # {model_name: ModelWorkflowState}
 
 # [P1-1 FIX] 线程安全的 _BUILD_PHASE_TRACKER 访问函数
 def _get_workflow_state(model_name):
-    """线程安全地获取/创建 ModelWorkflowState"""
+    """线程安全地获取/创建 ModelWorkflowState
+    
+    [P0-FIX] v10.1.1: 创建新状态时从 MATLAB workspace 同步 design_approved 标记。
+    原因: create_simulink/open_simulink 会清理 Python 端的 _BUILD_PHASE_TRACKER，
+    但 sl_model_design(action='approve') 已经将标记存入 MATLAB workspace
+    (assignin('base', ['design_approved_' modelName], true))。
+    这样可以实现工业级的设计批准状态持久化。
+    """
     with _global_lock:
         if model_name not in _BUILD_PHASE_TRACKER:
-            _BUILD_PHASE_TRACKER[model_name] = ModelWorkflowState(model_name)
+            new_state = ModelWorkflowState(model_name)
+            
+            # [P0-FIX] 从 MATLAB workspace 同步 design_approved 标记
+            # sl_model_design.m 在 approve 时调用: assignin('base', ['design_approved_' modelName], true)
+            try:
+                eng = get_engine()
+                if eng is not None:
+                    da_var = f'design_approved_{model_name}'
+                    # 使用 exist() 检查变量是否存在（更可靠）
+                    # exist('varName') 返回 1 表示存在
+                    exists = eng.eval(f"evalin('base', 'exist(''{da_var}'')')", nargout=1)
+                    if exists == 1:
+                        da_value = eng.eval(f"evalin('base', '{da_var}')", nargout=1)
+                        if da_value == True:
+                            new_state.design_approved = True
+                            new_state.phase = 'framework'
+                            new_state.phase_step = 'building'
+            except Exception:
+                # MATLAB workspace 查询失败不影响主流程
+                pass
+            
+            _BUILD_PHASE_TRACKER[model_name] = new_state
         return _BUILD_PHASE_TRACKER[model_name]
 
 def _remove_workflow_state(model_name):
@@ -3705,8 +4150,10 @@ class ModelWorkflowState:
     """
     def __init__(self, model_name):
         self.model_name = model_name
-        self.phase = 'framework'         # framework / subsystem / simulation
-        self.phase_step = 'building'     # building / layout / checking
+        self.phase = 'design'             # design / framework / subsystem / simulation (v10.1: 默认 design)
+        self.phase_step = 'pending'        # pending / researching / approved / building / layout / checking
+        self.design_approved = False       # v10.1: 设计审批标志
+        self.design_result = None          # v10.1: 设计方案缓存
         self.consecutive_adds = 0         # 连续 add 操作计数
         self.last_command = None          # 上一个命令
         self.last_layout_time = 0         # 上次排版时间戳
@@ -4046,7 +4493,48 @@ def _handle_sl_command(command, params):
         
         # 3. 踩坑模式匹配（Layer 3: 预测学习）
         pitfall_matches = _check_pitfall_patterns(command, fixed_params)
-        
+
+        # ===== [v10.1] 设计阶段门控检查 =====
+        # 在 design 阶段，所有 _MODIFY_COMMANDS 被拦截，要求先完成 sl_model_design
+        _gate_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+        if not _gate_mn and command == 'sl_set_param':
+            _gate_mn = fixed_params.get('blockPath', '')
+            if '/' in _gate_mn:
+                _gate_mn = _gate_mn.split('/')[0]
+        if _gate_mn and command in _MODIFY_COMMANDS:
+            try:
+                _gate_state = _get_workflow_state(_gate_mn)
+                if not _gate_state.design_approved and _gate_state.phase == 'design':
+                    # 检查 skipDesign 选项（仅限已有模型的简单修改）
+                    skip_design = fixed_params.get('skipDesign', False)
+                    if not skip_design:
+                        return {
+                            "status": "blocked",
+                            "message": (
+                                "DESIGN_PHASE_REQUIRED: 物理建模设计未完成！\n"
+                                "在构建模型之前，必须先调用 sl_model_design 获取结构化设计方案。\n"
+                                "完成设计后，调用 sl_model_design(action='approve') 审批设计方案。"
+                            ),
+                            "requiredAction": "sl_model_design",
+                            "workflowPhase": "design",
+                            "designApproved": False,
+                            "hint": (
+                                "1. 调用 sl_model_design(taskDescription='你的建模任务描述')\n"
+                                "2. 阅读返回的 design.equations / design.strategy / design.paramMap\n"
+                                "3. 如需深入调研，使用网络搜索或调用其它工具获取物理方程\n"
+                                "4. 确认方案后调用 sl_model_design(action='approve')\n"
+                                "5. 然后才能开始 add_block / add_line 等构建操作"
+                            ),
+                        }
+                    # skipDesign 模式下：add_block 已成功，保守更新状态
+                    # 不依赖快照API（避免超时/失败导致状态不一致）
+                    _gate_state.design_approved = True
+                    _gate_state.phase = 'framework'
+                    _gate_state.phase_step = 'building'
+            except:
+                pass
+        # ===== 设计门控结束 =====
+
         # [P1-5 FIX] sl_new_system 工作流清理移到 _SL_FUNC_MAP 检查之前
         # 因为 sl_new_system 目前不在 _SL_FUNC_MAP 中，如果放在后面会被跳过
         # 但 create_simulink/open_simulink action 已经调用了 _cleanup_workflow_state
@@ -4087,7 +4575,45 @@ def _handle_sl_command(command, params):
         # 5. 获取模型锁（修改型命令）
         need_lock = command in _MODIFY_COMMANDS and model_name
         lock = _get_model_lock(model_name) if need_lock else None
-        
+
+        # ===== [v10.1] sl_model_design 特殊 action 处理 =====
+        special_action = args_dict.get('_pos_1_special', '')
+        if special_action in ('__design_approve__', '__design_status__'):
+            _da_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            if _da_mn:
+                _da_state = _get_workflow_state(_da_mn)
+                if special_action == '__design_approve__':
+                    _da_state.design_approved = True
+                    _da_state.phase = 'framework'
+                    _da_state.phase_step = 'building'
+                    # [P0-FIX] 同时在 MATLAB workspace 设置标记，供后续 _get_workflow_state 同步
+                    # 这样当 create_simulink 清理 Python 状态后，仍能从 MATLAB workspace 恢复
+                    try:
+                        eng = get_engine()
+                        if eng is not None:
+                            da_var = f'design_approved_{_da_mn}'
+                            eng.eval(f"assignin('base', '{da_var}', true)", nargout=0)
+                    except Exception:
+                        pass  # MATLAB workspace 同步失败不影响主流程
+                    result = {
+                        "status": "ok",
+                        "message": "Design approved. You can now start building the model.",
+                        "designApproved": True,
+                        "nextPhase": "framework",
+                        "nextSuggestedAction": "Start adding blocks according to the approved design",
+                    }
+                else:  # '__design_status__'
+                    result = {
+                        "status": "ok",
+                        "designApproved": _da_state.design_approved,
+                        "currentPhase": _da_state.phase,
+                        "designResult": _da_state.design_result,
+                    }
+            else:
+                result = {"status": "error", "message": "modelName required for design action"}
+            return result
+        # ===== 特殊 action 处理结束 =====
+
         # 6. 调用
         if lock:
             with lock:
@@ -4626,18 +5152,37 @@ def _verify_param_operation(model_name, command, params, original_result):
             # 简化比较：将预期值和实际值都转为字符串比较
             expected_str = str(expected_value).strip()
             actual_str = str(actual).strip() if actual is not None else ''
+
+            # 对 __workspace_var__ 和 __matlab_expr__ 标记：信任 MATLAB 表达式求值结果
+            # 这些标记的值已经被 evalin/__matlab_expr__ 正确求值，actual 就是正确值
+            is_special_marker = isinstance(expected_value, dict) and (
+                '__workspace_var__' in expected_value or '__matlab_expr__' in expected_value
+            )
             
             # 参数设置后 MATLAB 可能会规范化值（如 '2' -> 2），做模糊匹配
-            passed = (expected_str == actual_str or 
-                     expected_str in actual_str or 
-                     actual_str in expected_str or
-                     actual_str == '__READ_FAILED__' or
-                     actual is None)  # 读取失败或为 None 不判定为未通过
+            passed = (
+                expected_str == actual_str or
+                expected_str in actual_str or
+                actual_str in expected_str or
+                actual_str == '__READ_FAILED__' or
+                actual is None or  # 读取失败或为 None 不判定为未通过
+                is_special_marker  # __workspace_var__/__matlab_expr__ 标记：actual 就是正确值
+            )
+            
+            # 为 detail 生成更友好的描述
+            if is_special_marker:
+                if '__workspace_var__' in expected_value:
+                    marker_desc = f"evalin('base','{expected_value['__workspace_var__']}')"
+                else:
+                    marker_desc = f"[matlab_expr]"
+                detail_str = f'{param_name}: expected={marker_desc} -> {actual_str} (resolved)'
+            else:
+                detail_str = f'{param_name}: expected={expected_str}, actual={actual_str}'
             
             checks.append({
                 'check': f'param_{param_name}',
                 'passed': passed,
-                'detail': f'{param_name}: expected={expected_str}, actual={actual_str}'
+                'detail': detail_str
             })
             
             if not passed:

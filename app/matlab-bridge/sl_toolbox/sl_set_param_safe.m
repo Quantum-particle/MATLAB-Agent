@@ -116,18 +116,28 @@ function result = sl_set_param_safe(blockPath, params, varargin)
         pValue = params.(pName);
 
         % 确保 value 是字符串（set_param 要求）
-        if isnumeric(pValue)
-            pValueStr = num2str(pValue);
-        elseif islogical(pValue)
-            if pValue
-                pValueStr = 'on';
+        % v10.1: 使用 sl_format_param_value 统一处理，支持矩阵/向量
+        try
+            pValueStr = sl_format_param_value(blockPath, pName, pValue);
+        catch ME
+            % 兜底：如果 sl_format_param_value 失败，使用原有逻辑
+            if isnumeric(pValue)
+                if isscalar(pValue)
+                    pValueStr = num2str(pValue);
+                else
+                    pValueStr = mat2str(pValue);
+                end
+            elseif islogical(pValue)
+                if pValue
+                    pValueStr = 'on';
+                else
+                    pValueStr = 'off';
+                end
+            elseif ischar(pValue)
+                pValueStr = pValue;
             else
-                pValueStr = 'off';
+                pValueStr = char(pValue);
             end
-        elseif ischar(pValue)
-            pValueStr = pValue;
-        else
-            pValueStr = char(pValue);
         end
 
         r = struct('param', pName, 'requestedValue', pValueStr, ...

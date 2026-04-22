@@ -1094,6 +1094,11 @@ export async function simulinkSelfImprove(params: Record<string, any>): Promise<
   return executeBridgeCommand({ action: 'sl_self_improve', params });
 }
 
+/** v10.1: 物理建模设计 — 获取结构化设计方案或审批设计 */
+export async function simulinkModelDesign(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_model_design', params });
+}
+
 /** v8.0: 结构化状态报告 — 获取模型完整状态快照(含端口坐标) */
 export async function simulinkModelStatus(params: Record<string, any>): Promise<MATLABResult> {
   return executeBridgeCommand({ action: 'sl_model_status', params });

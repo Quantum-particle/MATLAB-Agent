@@ -1,7 +1,7 @@
 # sl_toolbox API 使用说明书
 
-> **版本**: v15.0 (v9.0 标准化建模工作流版)  
-> **更新日期**: 2026-04-20  
+> **版本**: v16.0 (v10.1 物理建模设计+智能参数转换)  
+> **更新日期**: 2026-04-21  
 > **适用范围**: 大模型通过 @skill://matlab-agent 调用 Simulink 建模函数时，**必须先阅读本手册**，防止语法错误  
 > **同步规则**: 任何 .m 函数的 API 签名或返回结构变更后，**必须同步更新本手册对应条目**
 
@@ -18,6 +18,12 @@
     |-----------> GET /simulink/prompt/list          列出可用场景和参考主题
     |-----------> GET /simulink/prompt/scenario       获取场景提示词（核心层+场景层）
     |-----------> GET /simulink/prompt/reference      获取参考层技术文档
+    |
+    | Step 0.5: 物理建模设计（v10.1 新增，代码强制门控）
+    |-----------> POST /simulink/model_design         物理建模设计（domain/approach/detailLevel）
+    |            返回: design.researchNeeded / design.blockMap / design.paramMap
+    |            ↳ 若 researchNeeded=true → 执行组合拳（网络搜索/用户确认）
+    |            ↳ 确认后: POST /simulink/model_design(action='approve')
     |
     | Step 1: 准备（初始化 + 查看最佳实践 + 创建模型）
     |-----------> POST /matlab/run  sl_init()         初始化 sl_toolbox
@@ -67,11 +73,12 @@
     | 兜底: POST /matlab/run  { code: "..." }         直接写MATLAB代码（中间件不够用时）
 ```
 
-### 工作流 5 步法速记
+### 工作流 6 步法速记
 
 | 步骤 | 动作 | 核心API | 必做程度 |
 |------|------|---------|---------|
 | Step 0 | 加载提示词 | prompt/list, prompt/scenario, prompt/reference | **每次任务首步！** |
+| **Step 0.5** | **物理建模设计** | **sl_model_design / sl_model_design(action='approve')** | **新建模型必做！** |
 | Step 1 | 准备 | sl_init, best_practices, inspect, create | 必须 |
 | Step 2 | 构建 | bus_create, subsystem_create, add_block, add_line, set_param, ... | 必须 |
 | Step 3 | 配置 | config_get, config_set | 必须 |
