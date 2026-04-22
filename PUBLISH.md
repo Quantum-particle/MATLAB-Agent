@@ -9,7 +9,7 @@
 
 | 项目 | 路径 | 说明 |
 |------|------|------|
-| **Skill 目录**（唯一源码） | `C:\Users\泰坦\.workbuddy\skills\matlab-agent\` | MATLAB Agent 智能体的原始目录 |
+| **Skill 目录**（唯一源码） | `C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\` | MATLAB Agent 智能体的原始目录 |
 | **GitHub 仓库** | https://github.com/Quantum-particle/MATLAB-Agent | 公开源码仓库（文件全量相同，敏感字段脱敏） |
 | **本地 git** | Skill 目录内 `.git/` | 直接在 Skill 目录初始化 git，关联远程仓库 |
 
@@ -31,7 +31,7 @@
 
 | 敏感字段 | 本地值 | GitHub 替换为 | 涉及文件 |
 |----------|--------|---------------|----------|
-| 用户名 | `泰坦` | `泰坦` | 所有含路径的文件 |
+| 用户名 | `泰坦` | `YOUR_USERNAME` | 所有含路径的文件 |
 | Token | （本地保留） | `（已脱敏）` | GITHUB.md |
 | 邮箱 | （本地保留） | `（已脱敏）` | GITHUB.md |
 
@@ -74,7 +74,7 @@ references/troubleshooting.md
 当只修改了部分文件，且修改文件不含敏感信息时：
 
 ```powershell
-cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
+cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent"
 
 # 0. 🔴 更新 README.md（版本号、新特性、变更日志等）
 #    确保首页展示的信息与本次推送一致
@@ -102,7 +102,7 @@ git -c http.proxy="" -c https.proxy="" push origin main
 当修改了 assume-unchanged 保护的文件时：
 
 ```powershell
-cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
+cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent"
 
 # 0. 🔴 更新 README.md（版本号、新特性、变更日志等）
 
@@ -130,7 +130,7 @@ git update-index --assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md a
 当发现 GitHub 上的文件内容与本地不一致（如版本号停留在旧版）：
 
 ```powershell
-cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
+cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent"
 
 # 0. 🔴 更新 README.md（版本号、新特性、变更日志等）
 #    确保首页展示的信息与本次推送一致
@@ -225,6 +225,16 @@ app/matlab-bridge/*.mat
 ---
 
 ## 版本历史
+
+### v10.2.1 — 2026-04-21 参数注册表修复 + 全面模块测试
+
+- 修复 `_smart_param_convert` 字符串参数处理 bug（Rule 3 未查询注册表）
+- 添加缺失的 enum 参数类型：`WaveForm`, `Operator`, `Function`, `ShiftType`, `InterpMethod`, `ExtrapMethod`, `TagVisibility`, `RateTransition`, `OutputSignalType`, `GotoTag`, `MATLABFunction`
+- 新增 `sl_format_param_value.m` 参数格式化函数
+- 新增 `sl_model_design.m` 物理建模设计函数
+- 新增 `references/block-param-registry.md` 参数注册表文档
+- 全量推送：11 files changed, 1432 insertions(+), 39 deletions(-)
+- 清仓重推全量同步至 GitHub
 
 ### v5.4.0 — 2026-04-14 工作空间隔离 + 自动清理
 

@@ -195,6 +195,70 @@ function registry = build_registry()
     % ===== 端口与子系统 - 输出 (重复映射) =====
     % Out1 同时存在于 Sinks 和 Ports & Subsystems，优先用 Ports & Subsystems
     registry('Out1') = 'simulink/Ports & Subsystems/Out1';
+    
+    % ===== 不连续模块 (Discontinuities) - v10.3 新增 =====
+    registry('Saturation') = 'simulink/Discontinuities/Saturation';
+    registry('Saturation Dynamic') = 'simulink/Discontinuities/Saturation Dynamic';
+    registry('Dead Zone') = 'simulink/Discontinuities/Dead Zone';
+    registry('Dead Zone Dynamic') = 'simulink/Discontinuities/Dead Zone Dynamic';
+    registry('Rate Limiter') = 'simulink/Discontinuities/Rate Limiter';
+    registry('Rate Limiter Dynamic') = 'simulink/Discontinuities/Rate Limiter Dynamic';
+    registry('Relay') = 'simulink/Discontinuities/Relay';
+    registry('Quantizer') = 'simulink/Discontinuities/Quantizer';
+    registry('Backlash') = 'simulink/Discontinuities/Backlash';
+    registry('Coulomb and Viscous Friction') = 'simulink/Discontinuities/Coulomb and Viscous Friction';
+    registry('Hit Crossing') = 'simulink/Discontinuities/Hit Crossing';
+    registry('Wrap To Zero') = 'simulink/Discontinuities/Wrap To Zero';
+    
+    % ===== 附加数学与离散 (Additional Math & Discrete) - v10.3 新增 =====
+    % [REMOVED v10.4.1] R2023b 中 'simulink/Additional Math & Discrete' 路径不存在
+    % 这些模块在 R2023b 中不可用，保留注册表结构作为占位符
+    % registry('Weighted Sample Time Math') = 'simulink/Additional Math & Discrete/Weighted Sample Time Math';
+    % registry('Algebraic Constraint') = 'simulink/Additional Math & Discrete/Algebraic Constraint';
+    % registry('Increment Real Image') = 'simulink/Additional Math & Discrete/Increment Real Image';
+    % registry('Decrement Real Image') = 'simulink/Additional Math & Discrete/Decrement Real Image';
+    % registry('Decrement Time') = 'simulink/Additional Math & Discrete/Decrement Time';
+    % registry('Increment Simple') = 'simulink/Additional Math & Discrete/Increment Simple';
+    % registry('Decrement To Zero') = 'simulink/Additional Math & Discrete/Decrement To Zero';
+    
+    % ===== 信号路由扩展 (Signal Routing) - v10.3 新增 =====
+    registry('Bus Assignment') = 'simulink/Signal Routing/Bus Assignment';
+    registry('Bus to Vector') = 'simulink/Signal Routing/Bus to Vector';
+    registry('Vector to Bus') = 'simulink/Signal Routing/Vector to Bus';
+    
+    % ===== 单位转换 (Unit Conversion) - v10.4 新增 =====
+    registry('Unit Conversion') = 'simulink/Signal Attributes/Unit Conversion';
+    registry('PS-Simulink Converter') = 'simscape/Utilities/PS-Simulink Converter';
+    registry('Simulink-PS Converter') = 'simscape/Utilities/Simulink-PS Converter';
+    registry('Degrees to Radians') = 'simulink/Sources/Degrees to Radians';
+    registry('Radians to Degrees') = 'simulink/Sources/Radians to Degrees';
+    
+    % ===== 来源扩展 (Sources) - v10.3 新增 =====
+    registry('From File') = 'simulink/Sources/From File';
+    registry('Repeating Sequence Interpolated') = 'simulink/Sources/Repeating Sequence Interpolated';
+    registry('Repeating Sequence Stair') = 'simulink/Sources/Repeating Sequence Stair';
+    registry('Signal Builder') = 'simulink/Sources/Signal Builder';
+    
+    % ===== 数学运算扩展 (Math Operations) - v10.3 新增 =====
+    registry('Polynomial') = 'simulink/Math Operations/Polynomial';
+    registry('Repeat Vector') = 'simulink/Math Operations/Repeat Vector';
+    registry('Assignment') = 'simulink/Math Operations/Assignment';
+    registry('Matrix Concatenate') = 'simulink/Math Operations/Matrix Concatenate';
+    
+    % ===== 模型验证扩展 (Model Verification) - v10.3 新增 =====
+    registry('Check Static Upper Bound') = 'simulink/Model Verification/Check Static Upper Bound';
+    registry('Check Static Lower Bound') = 'simulink/Model Verification/Check Static Lower Bound';
+    registry('Check Dynamic Gap') = 'simulink/Model Verification/Check Dynamic Gap';
+    registry('Check Input Resolution') = 'simulink/Model Verification/Check Input Resolution';
+    registry('Check Discrete Gradient') = 'simulink/Model Verification/Check Discrete Gradient';
+    
+    % ===== 逻辑运算扩展 (Logic and Bit Operations) - v10.3 新增 =====
+    registry('Combinatorial Logic') = 'simulink/Logic and Bit Operations/Combinatorial Logic';
+
+    % ===== Aerospace Blockset 单位转换 (aeroblks) - v10.4.1 新增 =====
+    registry('Angular Velocity Conversion') = 'aeroblks/Aerospace Utilities/Angular Velocity Conversion';
+    registry('Length Conversion') = 'aeroblks/Aerospace Utilities/Length Conversion';
+    registry('Velocity Conversion') = 'aeroblks/Aerospace Utilities/Velocity Conversion';
 end
 
 function path = sl_search_block_library(shortName)

@@ -28,9 +28,13 @@ app/*.slxc
 app/matlab-bridge/*.slx
 app/matlab-bridge/*.slxc
 app/matlab-bridge/*.mat
+app/matlab-bridge/*.bak
+app/matlab-bridge/'out.mat'
+*.bak
 
 # Simulink auto-generated build artifacts
 app/slprj/
+app/matlab-bridge/slprj/
 
 # Baseline test files (large binary)
 app/matlab-bridge/sl_toolbox/tests/baselines/*.mat
@@ -59,3 +63,6 @@ Thumbs.db
 # Local backup / temp scripts (never push)
 _backup_*/
 _desensitize.ps1
+
+# Test design JSON (local testing artifact)
+app/test_design.json

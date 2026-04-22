@@ -48,7 +48,7 @@
 
 **解决方案**: 启动前必须检查并安装：
 ```bash
-cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app"
+cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\app"
 if not exist "node_modules" npm install --production
 ```
 一键脚本 `start.bat` 和 `ensure-running.bat` 已自动处理此步骤。
@@ -131,7 +131,7 @@ if ($old) {
 
 ### 0.5 含中文/空格/括号的路径问题
 
-**症状**: 路径如 `C:\Users\泰坦\` 或 `D:\Program Files(x86)\MATLAB2023b` 导致脚本失败。
+**症状**: 路径如 `C:\Users\YOUR_USERNAME\` 或 `D:\Program Files(x86)\MATLAB2023b` 导致脚本失败。
 
 **解决方案**: 
 - CMD 脚本中用引号包裹路径：`cd /d "%~dp0"`（`%~dp0` 自动含引号处理）
@@ -157,7 +157,7 @@ if ($old) {
    - 手动: netstat -ano | findstr ":3000" | findstr "LISTENING" → taskkill /F /PID <pid> → 等2-3秒
 1. 检查服务是否已运行: powershell -Command "try { Invoke-RestMethod -Uri 'http://localhost:3000/api/health' -TimeoutSec 5 } catch { Write-Host 'FAIL' }"
 2. 如已运行 → 直接使用 quickstart API
-3. 如未运行 → 执行: cmd /c "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
+3. 如未运行 → 执行: cmd /c "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
 4. 等待 ensure-running 返回退出码 0
 5. 使用 quickstart API: POST /api/matlab/quickstart
    （必须用 ConvertTo-Json 变量构造法）
@@ -477,7 +477,7 @@ Skill 打包时排除了 `node_modules`。
 ### 解决方案
 在 `app/` 目录下运行 `npm install`，或用 Windows Junction 链接共享已有 node_modules：
 ```powershell
-cmd /c mklink /J "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\node_modules" "<项目目录>\node_modules"
+cmd /c mklink /J "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\app\node_modules" "<项目目录>\node_modules"
 ```
 Junction 不需要管理员权限。
 

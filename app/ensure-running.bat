@@ -2,7 +2,7 @@
 REM ensure-running.bat - MATLAB Agent 确保服务运行脚本 (v5.2)
 REM 用途: AI agent 调用此脚本，确保 MATLAB Agent 服务器在后台运行
 REM 返回: 退出码 0 = 服务可用, 1 = 不可用
-REM 用法: cmd /c "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
+REM 用法: cmd /c "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
 
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"

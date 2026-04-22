@@ -21,6 +21,97 @@
 - 信号处理、频域分析、Bode图、阶跃响应
 - .m 文件、.mat 数据、.slx 模型
 - MATLAB 工作区、MATLAB Engine、PID 调参
+- 模块扩展、新增模块、模块支持、模块修改、模块纠正、模块修复、block registry
+
+## 🔴🔴🔴 Simulink 模块四文件同步规则（强制！）
+
+> **⛔ STOP — 当涉及 Simulink 支持模块的更新或修改时，必须同时更新以下四个文件！**
+> **这是 P0 级强制规则，遗漏任何一项都会导致参数类型推断失败或模块路径错误！**
+
+### 触发条件（满足任一即触发）
+
+当涉及以下任务时**立即触发**本规则：
+- 新增 Simulink 模块支持
+- 修改模块路径或参数定义
+- 移除/禁用已有模块
+- 更新模块参数类型或枚举值
+- 扩展模块库覆盖范围
+
+### 必须同步更新的四个文件
+
+| 文件 | 路径 | 作用 |
+|------|------|------|
+| **sl_block_registry.m** | `skills/matlab-agent/app/matlab-bridge/sl_toolbox/sl_block_registry.m` | 模块路径注册表 |
+| **matlab_bridge.py** | `skills/matlab-agent/app/matlab-bridge/matlab_bridge.py` | 参数类型推断引擎 |
+| **block-param-registry.md** | `skills/matlab-agent/references/block-param-registry.md` | 模块参数参考文档 |
+| **sl_toolbox_api_guide.md** | `skills/matlab-agent/references/sl_toolbox_api_guide.md` | API 说明书 |
+
+### 同步内容对照表
+
+| block-param-registry.md 新增内容 | sl_block_registry.m | matlab_bridge.py | sl_toolbox_api_guide.md |
+|-------------------------------|---------------------|------------------|------------------------|
+| 模块路径 `simulink/xxx/BlockName` | `registry('BlockName') = 'simulink/xxx/BlockName'` | — | 更新"已支持模块"表格 |
+| 模块参数 `(BlockName, ParamName)` | — | `block_param[(BlockName, ParamName)] = param_type` | — |
+| enum 参数枚举值 | — | `_PARAM_ENUM_VALUES[(BlockName, ParamName)] = [values]` | — |
+| 精确参数类型映射 | — | `exact[ParamName] = param_type` | — |
+
+### 示例：新增 `Saturation` 模块
+
+```matlab
+% 1. block-param-registry.md 添加:
+### Saturation（饱和）
+| UpperLimit | scalar | 上限 |
+| LowerLimit | scalar | 下限 |
+
+% 2. sl_block_registry.m 添加:
+registry('Saturation') = 'simulink/Discontinuities/Saturation';
+
+% 3. matlab_bridge.py 添加:
+# _MATRIX_PARAM_PATTERNS['block_param']:
+('Saturation', 'UpperLimit'): 'scalar',
+('Saturation', 'LowerLimit'): 'scalar',
+
+% 4. sl_toolbox_api_guide.md 更新:
+| Saturation | ✅ | % 在"已支持模块"表格中添加
+```
+
+### 示例：移除不存在的模块（如 R2023b 中不可用的模块）
+
+```matlab
+% 1. sl_block_registry.m — 注释掉并标注版本:
+% [REMOVED v10.4.1] Weighted Sample Time Math 在 R2023b 中不可用
+% registry('Weighted Sample Time Math') = 'simulink/Additional Math & Discrete/Weighted Sample Time Math';
+
+% 2. matlab_bridge.py — 注释掉参数映射:
+# [REMOVED v10.4.1] Weighted Sample Time Math 在 R2023b 中不可用
+# ('Weighted Sample Time Math', 'Operation'): 'enum',
+
+% 3. block-param-registry.md — 标记为已移除:
+## Additional Math & Discrete（附加数学与离散库）- [REMOVED v10.4.1]
+> **注意**: R2023b 中 `simulink/Additional Math & Discrete` 路径不存在...
+
+% 4. sl_toolbox_api_guide.md — 标记为已移除:
+### Additional Math & Discrete（附加数学与离散库）- [REMOVED v10.4.1]
+```
+
+### 强制检查清单
+
+完成模块更新后，逐项确认：
+
+- [ ] `sl_block_registry.m` — 模块路径已添加/移除/注释
+- [ ] `matlab_bridge.py` — `_MATRIX_PARAM_PATTERNS['block_param']` 已更新
+- [ ] `matlab_bridge.py` — `_PARAM_ENUM_VALUES` 已更新（如有 enum 参数）
+- [ ] `block-param-registry.md` — 参数参考文档已更新
+- [ ] `sl_toolbox_api_guide.md` — "已支持模块"表格已更新
+- [ ] 用 MATLAB R2023b 验证模块路径正确性
+
+### 常见错误
+
+- ❌ 只更新 `sl_block_registry.m`，忘记 `matlab_bridge.py` → 参数类型推断失败
+- ❌ 只更新 `block-param-registry.md`，忘记其他三个 → 文档与实际不同步
+- ❌ 新增模块未在 `sl_toolbox_api_guide.md` 的模块表格中注册 → AI 不知道模块已支持
+
+---
 
 ## 🔴🔴🔴 sl_toolbox API 说明书（Simulink 建模前必读！）
 
@@ -348,6 +439,45 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 4. 等待 ensure-running 返回 0
 5. 使用 quickstart API 一步到位: POST /api/matlab/quickstart
 ```
+
+### 0.5 [CRITICAL] matlab_bridge.py 与 block-param-registry.md 强制绑定更新规则（v10.4 新增）
+
+> **新增模块时，四个文件必须同时更新，否则参数类型推断会失败！**
+
+**必须同步更新的四个文件**：
+1. `block-param-registry.md` — 模块参数参考文档（用户/AI 查阅）
+2. `sl_block_registry.m` — 模块路径注册表（`build_registry()` 函数）
+3. `matlab_bridge.py` — 参数类型推断引擎（`_MATRIX_PARAM_PATTERNS` + `_PARAM_ENUM_VALUES`）
+4. `sl_toolbox_api_guide.md` — API 说明书（更新"当前已支持的模块"表格）
+
+**同步内容对照表**：
+| block-param-registry.md 新增内容 | sl_block_registry.m | matlab_bridge.py | sl_toolbox_api_guide.md |
+|-------------------------------|---------------------|------------------|------------------------|
+| 模块路径 `simulink/xxx/BlockName` | `registry('BlockName') = 'simulink/xxx/BlockName'` | — | 更新已支持模块表格 |
+| 模块参数 `(BlockName, ParamName)` | — | `block_param[(BlockName, ParamName)] = param_type` | — |
+| enum 参数枚举值 | — | `_PARAM_ENUM_VALUES[(BlockName, ParamName)] = [values]` | — |
+| 精确参数类型映射 | — | `exact[ParamName] = param_type` | — |
+
+**示例**：新增 `Saturation` 模块
+```matlab
+% 1. block-param-registry.md 添加:
+### Saturation（饱和）
+| UpperLimit | scalar | 上限 |
+| LowerLimit | scalar | 下限 |
+
+% 2. sl_block_registry.m 添加:
+registry('Saturation') = 'simulink/Discontinuities/Saturation';
+
+% 3. matlab_bridge.py 添加:
+# _MATRIX_PARAM_PATTERNS['block_param']:
+('Saturation', 'UpperLimit'): 'scalar',
+('Saturation', 'LowerLimit'): 'scalar',
+
+% 4. sl_toolbox_api_guide.md 更新:
+| Saturation | ✅ | % 在已支持模块表格中添加
+```
+
+**触发条件**：任何涉及新增 Simulink 模块的工作，必须同时检查并更新上述四个文件。
 
 ### 1. diary 输出捕获替代 evalc（v5.0 核心改造）
 - **问题**: `evalc()` 要求将 MATLAB 代码作为字符串参数传递，导致所有单引号必须双写

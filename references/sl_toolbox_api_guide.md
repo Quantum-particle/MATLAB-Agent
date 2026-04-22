@@ -2563,8 +2563,88 @@ GET /api/matlab/simulink/model_status?modelName=MyModel&depth=0&includeHidden=tr
 
 ---
 
+## 44. 当前已支持的 Simulink 模块（v10.4 新增）
+
+> **本节列出 sl_block_registry 支持的模块简称→完整路径映射。详情参数见 `block-param-registry.md`**
+
+### Discontinuities（不连续模块库）- v10.3 新增
+| 模块简称 | 完整路径 |
+|---------|---------|
+| Saturation | simulink/Discontinuities/Saturation |
+| Saturation Dynamic | simulink/Discontinuities/Saturation Dynamic |
+| Dead Zone | simulink/Discontinuities/Dead Zone |
+| Dead Zone Dynamic | simulink/Discontinuities/Dead Zone Dynamic |
+| Rate Limiter | simulink/Discontinuities/Rate Limiter |
+| Rate Limiter Dynamic | simulink/Discontinuities/Rate Limiter Dynamic |
+| Relay | simulink/Discontinuities/Relay |
+| Quantizer | simulink/Discontinuities/Quantizer |
+| Backlash | simulink/Discontinuities/Backlash |
+| Coulomb and Viscous Friction | simulink/Discontinuities/Coulomb and Viscous Friction |
+| Hit Crossing | simulink/Discontinuities/Hit Crossing |
+| Wrap To Zero | simulink/Discontinuities/Wrap To Zero |
+
+### Additional Math & Discrete（附加数学与离散库）- [REMOVED v10.4.1]
+> **注意**: R2023b 中 `simulink/Additional Math & Discrete` 路径不存在，以下模块暂不可用：
+> - Weighted Sample Time Math
+> - Algebraic Constraint
+> - Increment Real Image / Decrement Real Image
+> - Decrement Time / Increment Simple / Decrement To Zero
+> 如需使用这些模块，请确认 MATLAB 版本或使用替代方案。
+
+### Unit Conversion（单位转换模块）- v10.4 新增
+| 模块简称 | 完整路径 |
+|---------|---------|
+| Unit Conversion | simulink/Signal Attributes/Unit Conversion |
+| PS-Simulink Converter | simscape/Utilities/PS-Simulink Converter |
+| Simulink-PS Converter | simscape/Utilities/Simulink-PS Converter |
+| Degrees to Radians | simulink/Sources/Degrees to Radians |
+| Radians to Degrees | simulink/Sources/Radians to Degrees |
+
+### Signal Routing 扩展 - v10.3 新增
+| 模块简称 | 完整路径 |
+|---------|---------|
+| Bus Assignment | simulink/Signal Routing/Bus Assignment |
+| Bus to Vector | simulink/Signal Routing/Bus to Vector |
+| Vector to Bus | simulink/Signal Routing/Vector to Bus |
+
+### Math Operations 扩展 - v10.3 新增
+| 模块简称 | 完整路径 |
+|---------|---------|
+| Polynomial | simulink/Math Operations/Polynomial |
+| Repeat Vector | simulink/Math Operations/Repeat Vector |
+| Assignment | simulink/Math Operations/Assignment |
+| Matrix Concatenate | simulink/Math Operations/Matrix Concatenate |
+
+### Model Verification 扩展 - v10.3 新增
+| 模块简称 | 完整路径 |
+|---------|---------|
+| Check Static Upper Bound | simulink/Model Verification/Check Static Upper Bound |
+| Check Static Lower Bound | simulink/Model Verification/Check Static Lower Bound |
+| Check Dynamic Gap | simulink/Model Verification/Check Dynamic Gap |
+| Check Input Resolution | simulink/Model Verification/Check Input Resolution |
+| Check Discrete Gradient | simulink/Model Verification/Check Discrete Gradient |
+| Combinatorial Logic | simulink/Logic and Bit Operations/Combinatorial Logic |
+
+### Aerospace Blockset 单位转换 (aeroblks) - v10.4.1 新增
+| 模块简称 | 完整路径 |
+|---------|---------|
+| Angular Velocity Conversion | aeroblks/Aerospace Utilities/Angular Velocity Conversion |
+| Length Conversion | aeroblks/Aerospace Utilities/Length Conversion |
+| Velocity Conversion | aeroblks/Aerospace Utilities/Velocity Conversion |
+
+### Sources 扩展 - v10.3 新增
+| 模块简称 | 完整路径 |
+|---------|---------|
+| From File | simulink/Sources/From File |
+| Repeating Sequence Interpolated | simulink/Sources/Repeating Sequence Interpolated |
+| Repeating Sequence Stair | simulink/Sources/Repeating Sequence Stair |
+| Signal Builder | simulink/Sources/Signal Builder |
+
+---
+
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
+| v16.0 | 2026-04-22 | **v10.4.1 同步更新**: (1) 新增 Aerospace Blockset 模块(Angular Velocity/Length/Velocity Conversion)，(2) sl_block_registry.m 同步更新，(3) matlab_bridge.py 同步参数映射和枚举值 |
 | v15.0 | 2026-04-20 | **v9.0 标准化建模工作流**: (1) 新增 _auto_layout 自动排版字段说明（#42），(2) 新增 _workflow 工作流状态字段说明（#43），(3) 三层迭代建模流程，(4) 阶段自动检测和转换，(5) 子系统队列追踪，(6) 排版5秒防抖机制 |
 | v14.0 | 2026-04-20 | **v8.0 强制验证-执行循环**: (1) 新增 sl_model_status_snapshot API 说明（#40），(2) 新增 _verification 自动验证字段说明（#41），(3) 14 个写操作自动注入验证结果，(4) model_status GET/POST 双端点，(5) AI 验证流程规范 |
 

@@ -397,6 +397,110 @@ _MATRIX_PARAM_PATTERNS = {
         ('Integrator', 'InitialCondition'): 'scalar_or_string', ('Integrator', 'LimitOutput'): 'bool',
         ('Integrator', 'UpperSaturationLimit'): 'scalar_or_string', ('Integrator', 'LowerSaturationLimit'): 'scalar_or_string',
         ('Constant', 'Value'): 'scalar_or_string',
+        # ===== v10.3 新增模块参数 =====
+        # Discontinuities
+        ('Saturation', 'UpperLimit'): 'scalar', ('Saturation', 'LowerLimit'): 'scalar',
+        ('Dead Zone', 'LowerValue'): 'scalar', ('Dead Zone', 'UpperValue'): 'scalar',
+        ('Rate Limiter', 'RisingSlewLimit'): 'scalar', ('Rate Limiter', 'FallingSlewLimit'): 'scalar',
+        ('Rate Limiter', 'InitialCondition'): 'scalar_or_string',
+        ('Relay', 'OnSwitchValue'): 'scalar', ('Relay', 'OffSwitchValue'): 'scalar',
+        ('Relay', 'OnOutputValue'): 'scalar', ('Relay', 'OffOutputValue'): 'scalar',
+        ('Quantizer', 'QuantizationInterval'): 'scalar',
+        ('Backlash', 'DeadbandWidth'): 'scalar', ('Backlash', 'InitialOutput'): 'scalar',
+        ('Coulomb and Viscous Friction', 'CoefficientofStaticFriction'): 'scalar',
+        ('Coulomb and Viscous Friction', 'CoefficientofViscousFriction'): 'scalar',
+        ('Coulomb and Viscous Friction', 'InitialInput'): 'scalar',
+        ('Hit Crossing', 'HitOffset'): 'scalar', ('Hit Crossing', 'ShowOutputPort'): 'bool',
+        ('Hit Crossing', 'Direction'): 'enum',
+        ('Wrap To Zero', 'Threshold'): 'scalar',
+        # [REMOVED v10.4.1] Additional Math & Discrete 模块在 R2023b 中不可用
+        # ('Weighted Sample Time Math', 'Operation'): 'enum', ('Weighted Sample Time Math', 'Weight'): 'scalar',
+        # ('Algebraic Constraint', 'Constraint'): 'scalar', ('Algebraic Constraint', 'InitialGuess'): 'scalar',
+        # ('Decrement Time', 'v'): 'scalar',
+        # Lookup Tables 扩展
+        ('n-D Lookup Table', 'NumberOfTableDimensions'): 'scalar',
+        ('n-D Lookup Table', 'Table'): 'matrix',
+        ('n-D Lookup Table', 'BreakpointsForDimension1'): 'vector',
+        ('n-D Lookup Table', 'BreakpointsForDimension2'): 'vector',
+        ('n-D Lookup Table', 'BreakpointsForDimension3'): 'vector',
+        ('n-D Lookup Table', 'BreakpointsForDimension4'): 'vector',
+        # Math Operations 扩展
+        ('Polynomial', 'Coefs'): 'vector',
+        ('Repeat Vector', 'NumContiguousRepetitions'): 'scalar',
+        ('Assignment', 'NumberOfIndices'): 'scalar', ('Assignment', 'Indices'): 'matrix',
+        ('Matrix Concatenate', 'NumInputs'): 'scalar', ('Matrix Concatenate', 'concatenationDimension'): 'scalar',
+        # Signal Routing 扩展
+        ('Multiport Switch', 'NumberOfInputs'): 'scalar', ('Multiport Switch', 'IndexMode'): 'enum',
+        ('Bus Assignment', 'AssignedSignals'): 'string', ('Bus Assignment', 'InputSignals'): 'string',
+        # Sources 扩展
+        ('From Workspace', 'VariableName'): 'string', ('From Workspace', 'OutputAfterFullData'): 'enum',
+        ('From File', 'FileName'): 'string', ('From File', 'OutputAfterFullData'): 'enum',
+        ('Repeating Sequence', 'OutputValues'): 'vector',
+        ('Repeating Sequence Interpolated', 'TimeValues'): 'vector',
+        ('Repeating Sequence Interpolated', 'OutputValues'): 'vector',
+        ('Repeating Sequence Interpolated', 'EndTime'): 'scalar',
+        ('Repeating Sequence Stair', 'TimeValues'): 'vector', ('Repeating Sequence Stair', 'OutputValues'): 'vector',
+        ('Band-Limited White Noise', 'NoisePower'): 'scalar', ('Band-Limited White Noise', 'Seed'): 'scalar',
+        # Sinks 扩展
+        ('To File', 'FileName'): 'string', ('To File', 'VariableName'): 'string',
+        ('To File', 'MaxDataPoints'): 'scalar',
+        ('XY Graph', 'xmin'): 'scalar', ('XY Graph', 'xmax'): 'scalar',
+        ('XY Graph', 'ymin'): 'scalar', ('XY Graph', 'ymax'): 'scalar',
+        # Continuous 扩展
+        ('Second-Order Integrator', 'InitialConditionSource'): 'enum',
+        ('Second-Order Integrator', 'x0'): 'scalar', ('Second-Order Integrator', 'xdot0'): 'scalar',
+        ('Second-Order Integrator', 'LimitOutput'): 'bool',
+        ('Second-Order Integrator', 'UpperLimit'): 'scalar', ('Second-Order Integrator', 'LowerLimit'): 'scalar',
+        ('Variable Transport Delay', 'DelayTimeSource'): 'enum', ('Variable Transport Delay', 'MaximumDelay'): 'scalar',
+        ('Variable Time Delay', 'DelayTimeSource'): 'enum', ('Variable Time Delay', 'MaximumDelay'): 'scalar',
+        # Discrete 扩展
+        ('Discrete PID Controller (2DOF)', 'P'): 'string', ('Discrete PID Controller (2DOF)', 'I'): 'string',
+        ('Discrete PID Controller (2DOF)', 'D'): 'string', ('Discrete PID Controller (2DOF)', 'B'): 'string',
+        ('Discrete PID Controller (2DOF)', 'C'): 'string', ('Discrete PID Controller (2DOF)', 'FilterCoefficient'): 'string',
+        ('Discrete Zero-Pole', 'Zeros'): 'vector', ('Discrete Zero-Pole', 'Poles'): 'vector',
+        ('Discrete Zero-Pole', 'Gain'): 'scalar',
+        # Model Verification 扩展
+        ('Check Static Range', 'External'): 'bool', ('Check Static Range', 'Minimum'): 'scalar',
+        ('Check Static Range', 'Maximum'): 'scalar',
+        ('Check Static Upper Bound', 'Bound'): 'scalar',
+        ('Check Static Lower Bound', 'Bound'): 'scalar',
+        ('Check Dynamic Range', 'MinimumInputPort'): 'scalar', ('Check Dynamic Range', 'MaximumInputPort'): 'scalar',
+        ('Check Dynamic Gap', 'MinimumGap'): 'scalar', ('Check Dynamic Gap', 'MaximumGap'): 'scalar',
+        ('Check Input Resolution', 'Resolution'): 'scalar',
+        ('Check Discrete Gradient', 'MaximumJump'): 'scalar',
+        ('Assertion', 'StopWhenAssertionFails'): 'bool', ('Assertion', 'AssertionMode'): 'enum',
+        # Ports & Subsystems 扩展
+        ('Triggered Subsystem', 'TriggerType'): 'enum',
+        ('Enable Port', 'EnableInit'): 'enum', ('Enable Port', 'EnableDelay'): 'scalar',
+        ('For Iterator Subsystem', 'IterationLimit'): 'scalar_or_string',
+        ('While Iterator Subsystem', 'MaximumNumberOfIterations'): 'scalar',
+        # Signal Attributes 扩展
+        ('Data Type Conversion', 'InputSanityCheck'): 'bool',
+        ('Data Type Conversion', 'IntegerRoundingMode'): 'enum',
+        ('Data Type Conversion', 'ConvOverflowMsg'): 'string',
+        ('Signal Specification', 'Dimension'): 'scalar_or_string',
+        ('Signal Specification', 'SampleTime'): 'scalar_or_string', ('Signal Specification', 'DataType'): 'enum',
+        ('Rate Transition', 'OutPortSampleTime'): 'scalar', ('Rate Transition', 'TreatMyselfAsKnown'): 'bool',
+        ('Probe', 'ProbeSampleTime'): 'bool', ('Probe', 'ProbeComplexSignal'): 'bool',
+        # Logic and Bit Operations 扩展
+        ('Combinatorial Logic', 'TruthTable'): 'matrix',
+        ('Logical Operator', 'NumberOfInputPorts'): 'scalar', ('Logical Operator', 'OutputDataTypeMode'): 'string',
+        # Unit Conversion - v10.4 新增
+        ('Unit Conversion', 'OutputDataType'): 'enum',
+        ('PS-Simulink Converter', 'OutputSignalUnit'): 'string',
+        ('Simulink-PS Converter', 'InputSignalUnit'): 'string',
+        ('Simulink-PS Converter', 'ApplyAffineConversion'): 'bool',
+        ('Simulink-PS Converter', 'FilteringAndDerivatives'): 'enum',
+        ('Simulink-PS Converter', 'ProvidedSignals'): 'enum',
+        ('Simulink-PS Converter', 'InputFilteringOrder'): 'enum',
+        ('Simulink-PS Converter', 'InputFilteringTimeConstant'): 'scalar',
+        # Aerospace Blockset 单位转换 (v10.4.1 新增)
+        ('Angular Velocity Conversion', 'InputVelocityUnit'): 'enum',
+        ('Angular Velocity Conversion', 'OutputVelocityUnit'): 'enum',
+        ('Length Conversion', 'InputLengthUnit'): 'enum',
+        ('Length Conversion', 'OutputLengthUnit'): 'enum',
+        ('Velocity Conversion', 'InputVelocityUnit'): 'enum',
+        ('Velocity Conversion', 'OutputVelocityUnit'): 'enum',
     },
 }
 
@@ -443,6 +547,48 @@ _PARAM_ENUM_VALUES = {
     'Multiplication': ['Element-wise(K.*u)', 'Matrix(K*u)', 'Element-wise(u.*K)', 'Matrix(u*K)'],
     'InterpMethod': ['linear', 'cubic', 'Clair', 'nearest', 'binary'],
     'ExtrapMethod': ['clip', 'linear', 'Clair', 'periodic'],
+    # ===== v10.3 新增模块枚举值 =====
+    # Hit Crossing Direction
+    ('Hit Crossing', 'Direction'): ['either', 'rising', 'falling'],
+    # [REMOVED v10.4.1] Weighted Sample Time Math 在 R2023b 中不可用
+    # ('Weighted Sample Time Math', 'Operation'): ['u*w', 'u+w', 'u-w', 'w-u'],
+    # Multiport Switch IndexMode
+    ('Multiport Switch', 'IndexMode'): ['Zero-based', 'One-based'],
+    # From Workspace / From File OutputAfterFullData
+    ('From Workspace', 'OutputAfterFullData'): ['Extrapolation', 'Error', 'Hold Last Value', 'Zero'],
+    ('From File', 'OutputAfterFullData'): ['Extrapolation', 'Error', 'Hold Last Value', 'Zero'],
+    # Second-Order Integrator InitialConditionSource
+    ('Second-Order Integrator', 'InitialConditionSource'): ['internal', 'external'],
+    # Variable Time/Transport Delay DelayTimeSource
+    ('Variable Transport Delay', 'DelayTimeSource'): ['internal', 'external'],
+    ('Variable Time Delay', 'DelayTimeSource'): ['internal', 'external'],
+    # Triggered Subsystem TriggerType
+    ('Triggered Subsystem', 'TriggerType'): ['rising', 'falling', 'either', 'function-call'],
+    # Enable Port EnableInit
+    ('Enable Port', 'EnableInit'): ['held', 'reset'],
+    # Signal Specification DataType
+    ('Signal Specification', 'DataType'): ['auto', 'double', 'single', 'int8', 'uint8', 'int16', 'uint16', 'int32', 'uint32', 'boolean'],
+    # Data Type Conversion IntegerRoundingMode
+    ('Data Type Conversion', 'IntegerRoundingMode'): ['floor', 'ceil', 'round', 'convergent', 'zero'],
+    # Data Type Conversion ConvOverflowMsg
+    ('Data Type Conversion', 'ConvOverflowMsg'): ['none', 'warning', 'error'],
+    # Assertion AssertionMode
+    ('Assertion', 'AssertionMode'): ['all', 'any'],
+    # Unit Conversion - v10.4
+    ('Unit Conversion', 'OutputDataType'): ['Inherit via internal rule', 'Inherit via back propagation'],
+    # Simulink-PS Converter FilteringAndDerivatives
+    ('Simulink-PS Converter', 'FilteringAndDerivatives'): ['Provide signals', 'Filter input and compute derivatives', 'Zero derivatives (piecewise constant)'],
+    # Simulink-PS Converter ProvidedSignals
+    ('Simulink-PS Converter', 'ProvidedSignals'): ['Input only', 'Input and first derivative', 'Input and first two derivatives'],
+    # Simulink-PS Converter InputFilteringOrder
+    ('Simulink-PS Converter', 'InputFilteringOrder'): ['First-order filtering', 'Second-order filtering'],
+    # Aerospace Blockset - v10.4.1 新增
+    ('Angular Velocity Conversion', 'InputVelocityUnit'): ['rad/s', 'deg/s', 'rpm', 'rev/s', 'Hz'],
+    ('Angular Velocity Conversion', 'OutputVelocityUnit'): ['rad/s', 'deg/s', 'rpm', 'rev/s', 'Hz'],
+    ('Length Conversion', 'InputLengthUnit'): ['m', 'km', 'cm', 'mm', 'in', 'ft', 'yd', 'mi', 'nmi'],
+    ('Length Conversion', 'OutputLengthUnit'): ['m', 'km', 'cm', 'mm', 'in', 'ft', 'yd', 'mi', 'nmi'],
+    ('Velocity Conversion', 'InputVelocityUnit'): ['m/s', 'km/h', 'mph', 'ft/s', 'knot'],
+    ('Velocity Conversion', 'OutputVelocityUnit'): ['m/s', 'km/h', 'mph', 'ft/s', 'knot'],
 }
 
 def _get_param_hints(block_type, param_name):
