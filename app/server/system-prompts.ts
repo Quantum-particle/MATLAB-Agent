@@ -77,7 +77,7 @@ export function getMATLABSystemPrompt(): string {
     '   - 杀完进程后必须等待 2-3 秒确认端口释放再启动',
     '1. **检查服务**: 先 powershell -Command "try { Invoke-RestMethod -Uri \'http://localhost:3000/api/health\' -TimeoutSec 5 } catch { Write-Host \'FAIL\' }"',
     '2. **如已运行**: 直接使用 quickstart API',
-    '3. **如未运行**: 执行 `cmd /c "C:\\Users\\泰坦\\.workbuddy\\skills\\matlab-agent\\app\\ensure-running.bat"`',
+    '3. **如未运行**: 执行 `cmd /c "C:\\Users\\YOUR_USERNAME\\.workbuddy\\skills\\matlab-agent\\app\\ensure-running.bat"`',
     '4. **等待退出码 0**',
     '5. **🔴 首次配置检测（关键！）**: 检查 MATLAB 是否已配置',
     '   - 调用 GET /api/matlab/config 获取当前配置',
@@ -256,17 +256,49 @@ export function getMATLABSystemPrompt(): string {
 // =====================================================================
 
 function getCorePrompt(): string {
-  return `## Simulink Agent v6.0 — 核心规则（必须遵守！）
+  return `## Simulink Agent v11.3 — 核心规则（强制遵守！）
 
-### 建模工作流 5 步法
+### 建模工作流 6 步法（v11.3: 第6步是强制门控）
 
 1. **inspect** → 获取模型当前状态（所有操作前必做！）
 2. **build** → 添加模块 → 连线 → 设置参数
 3. **configure** → 模型配置（Solver/仿真参数）
-4. **validate** → 验证模型健康
-5. **simulate** → 运行仿真 → 提取结果
+4. **validate** → 验证模型健康（sl_get_model_issues 获取详细未连接列表）
+5. **complete** → **【强制】sl_model_complete 门控**（unconnected必须pass才能仿真）
+6. **simulate** → 运行仿真（只有通过步骤5才能执行）
 
-### 26 个 API 端点概要
+### 强制门控规则（v11.4 新增 Gate_5，不可绕过！）
+
+\`\`\`
+Gate_5 (v11.4): sl_framework_approve 前自动运行 sl_check_port_completeness + sl_check_signal_closure
+  → 端口完备性失败 → gate_blocked → 必须修复框架设计
+Gate_4: sl_sim_run / sl_sim_batch 前自动检查 model_completed 标记
+  → 未通过 → gate_blocked → 必须 sl_model_complete
+\`\`\`
+
+### 强制验证闭环（每次迭代必须执行）
+
+\`\`\`
+# 设计阶段
+while not pass_gate_5:
+    sl_check_port_completeness(macroFramework)   → fix design
+    sl_check_signal_closure(macroFramework)       → fix design
+sl_framework_approve(modelName)                  → Gate_5 auto-runs checks
+
+# 建模完成阶段  
+while sl_model_complete(modelName).canProceed == false:
+    issues = sl_get_model_issues(modelName)
+    fix all unconnected and Goto/From issues
+    sl_model_complete(modelName, 'action', 'complete')
+\`\`\`
+
+### ⛔ 绝对禁止 [v11.3]
+
+**禁止在未通过 sl_model_complete 门控时声明建模完成！**
+**禁止在有未连接端口时调用 sl_sim_run！**（Bridge 会直接返回 gate_blocked）
+**禁止跳过 verify → fix → re-verify 循环！**
+
+### 27 个 API 端点概要
 
 | 分类 | 端点 | 命令 | 说明 |
 |------|------|------|------|
@@ -291,6 +323,8 @@ function getCorePrompt(): string {
 | 仿真 | /simulink/sim-callback | sl_callback_set | 设置回调函数 |
 | 仿真 | /simulink/sim-batch | sl_sim_batch | 批量/并行仿真 |
 | 验证 | /simulink/validate | sl_validate | 模型健康检查 |
+| 验证 | /simulink/model-complete | sl_model_complete | **[v11.3 强制]** 模型完成门控 |
+| 验证 | /simulink/model-issues | sl_get_model_issues | **[v11.3 强制]** 未连接端口详情 |
 | 验证 | /simulink/parse-error | sl_parse_error | 精确错误解析 |
 | 布局 | /simulink/block-position | sl_block_position | 模块位置操作 |
 | 布局 | /simulink/auto-layout | sl_auto_layout | 自动排版 |
@@ -299,7 +333,7 @@ function getCorePrompt(): string {
 | 测试 | /simulink/profile-sim | sl_profile_sim | 仿真性能分析 |
 | 测试 | /simulink/profile-solver | sl_profile_solver | 求解器性能分析 |
 
-### 8 大反模式速查表
+### 10 大反模式速查表（v11.3）
 
 | # | 禁止做法 | 正确替代 | API自动处理 |
 |---|---------|---------|------------|
@@ -311,6 +345,8 @@ function getCorePrompt(): string {
 | 6 | 手动创建 Subsystem | createSubsystem (R2017a+) | subsystem-create自动路由 |
 | 7 | 未验证就修改 | 先确认再修改 | 所有修改API自动pre-check |
 | 8 | 端口维度不匹配就连线 | 先检查维度 | add-line自动error |
+| 9 | 使用含 & 的完整库路径（如 simulink/Ports & Subsystems/In1） | 使用 block registry 简写（如 'In1'） | add-block自动查注册表 |
+| **10** | **有未连接端口时声明建模完成 / 跳过 sl_model_complete** | **先 sl_get_model_issues → fix → sl_model_complete** | **sl_sim_run 被 Gate_4 拦截** |
 
 ### 版本兼容性速查
 
@@ -340,7 +376,7 @@ function getCorePrompt(): string {
 ### 兜底机制
 
 当中间件API不支持需求时，可通过 POST /api/matlab/run { code: "..." } 直接编写MATLAB代码。
-但必须：1)调用validate验证 2)try-catch包裹关键操作 3)add_line逐条执行`;
+但必须：1)调用validate验证 2)try-catch包裹关键操作 3)add_line逐条执行 4)**[v11.3] 完成后必须调用 sl_model_complete 门控**`;
 }
 
 // =====================================================================
@@ -357,7 +393,69 @@ function getSimulinkModelingPrompt(): string {
 - \`_auto_layout\`: 自动排版状态（v9.0，自动触发，连续3次add操作后自动arrangeSystem）
 - \`_workflow\`: 当前工作流阶段和建议（v9.0，代码生成，必须遵循）
 
-#### Step 0.5：物理建模设计（代码强制门控，不可跳过）
+#### Step 0.4：大框架三层迭代循环（v11.2 — AI 自主设计）
+
+> **v11.2 核心变更**: sl_framework_design 现在返回设计 Prompt（引导），而不是预计算结果。AI 必须基于 Prompt 自主完成框架设计。不存在通用模板！
+
+**核心概念**：
+- **大框架（Macro Framework）**：顶层 In/Out、子系统划分、总线信号流、物理方程框架
+- **小框架（Micro Framework）**：每个子系统内部的物理数学逻辑、模块布局
+
+**大框架新流程（v11.2）**：
+
+1. 调用 sl_framework_design(taskDescription) → 获取 designPrompt + outputSchema
+2. **AI 自主分析**: 结合自身领域知识和 designPrompt，设计子系统架构
+   - 使用 web_search 搜索专业领域的建模方法
+   - 使用 research skill 深入调研物理方程
+   - 查阅知识库中的参考模型
+3. **AI 生成框架设计** → 按照 outputSchema 格式输出 JSON
+4. 调用 sl_framework_review(macroFramework) 自检
+5. 调用 sl_framework_approve(modelName) 锁定
+
+**重点**: AI 拥有完全的子系统划分自由度，不存在通用模板！不要自动生成 Controller/Plant/Sensor 通用三件套。
+
+**大框架门控拦截命令**（未审批前被拦截）：
+- sl_add_block, sl_add_line, sl_delete, sl_replace_block
+- sl_subsystem_create, sl_subsystem_mask
+- sl_bus_create, sl_signal_config, sl_block_position, sl_auto_layout
+
+**大框架锁定后**：
+- [OK] 允许：sl_set_param、sl_config_set、添加辅助模块
+- [BLOCKED] 需要 sl_framework_modify：添加/删除子系统、修改信号流拓扑
+
+**Phase 状态流转（v11.0）**：
+
+framework_design > framework_construction > subsystem_iteration > simulation
+
+#### Step 0.5：子系统小框架迭代循环（v11.2 — AI 自主设计）
+
+> **在完成大框架构建（framework_construction）后，进入子系统填充阶段，每个子系统需要走小框架流程**
+
+**小框架新流程（v11.2）**（每个子系统内部）：
+
+1. 调用 sl_micro_design(subsystemName, taskDescription, parentContext=macroFramework) → 获取 designPrompt + blockMappingGuide + outputSchema
+2. **AI 自主设计**: 基于 designPrompt、blockMappingGuide 和自身领域知识，设计子系统内部
+   - 从第一性原理推导物理方程（不要用通用模板 dx/dt = f(x,u)）
+   - 根据自己推导的方程规划 Simulink 模块
+3. **AI 生成子系统设计** → 按照 outputSchema 格式输出
+4. 调用 sl_micro_review(subsystemName) 自检
+5. 调用 sl_micro_approve(subsystemName) 批准
+
+**小框架门控拦截**（未批准前，限制该子系统内部的修改）：
+- 仅拦截对当前正在填充的子系统内部的模块操作
+- 不影响其他子系统的操作
+
+**小框架与子系统队列**：
+- 每个子系统入队时，需要先完成小框架设计→审核→批准流程
+- 完成后，从 subsystemQueue 中移到 subsystemDone
+- 循环直到所有子系统完成
+
+**Micro Framework 与 Macro Framework 的关系**：
+- Macro Framework：顶层架构，决定子系统划分和信号流拓扑
+- Micro Framework：子系统内部实现，决定物理方程和模块布局
+- 大框架锁定后，子系统级的小框架仍然需要审核（但可以 AI 自审批）
+- **v11.2**: parentContext 传递大框架上下文，AI 可见子系统在整个模型中的角色
+
 **在未完成设计审批前，所有 sl_add_block / sl_add_line 等修改命令将被 Bridge 拦截！**
 
 执行流程：
@@ -402,20 +500,28 @@ function getSimulinkModelingPrompt(): string {
 
 子系统完成条件：_workflow.subsystemQueue 为空
 
-#### 第三层：总体检查与仿真
-1. [AUTO] 全模型完整性检查
-2. [AUTO] 全端口连接检查
-3. [AUTO] 全 Goto/From 配对检查
-4. [AUTO] 全子系统接口完整性检查
+#### 第三层：总体检查与仿真（v11.3 强制门控）
+1. sl_get_model_issues → 获取所有未连接端口详情
+2. 修复所有未连接端口（add_line / Goto/From）
+3. **sl_model_complete(modelName, 'action', 'complete') → [强制门控]**
+   - unconnected 必须 = 0 才能通过
+   - 通过后设置 model_completed 标记
+   - 未通过 → 返回 blocked: true + 详细问题列表 → 回到步骤1
+4. **[AUTO] Gate_4: sl_sim_run 执行前自动检查 model_completed 标记**
 5. sl_config_set → 设置仿真参数
-6. sl_sim_run → 运行仿真
+6. sl_sim_run → 运行仿真（只有通过步骤3+4才能执行）
 7. sl_sim_results → 查看结果
 8. 结果不符合预期 → 回到第一层迭代
 
-### 关键规则（代码强制，不可绕过）
-- **必须遵循 _workflow.nextSuggestedAction 的建议**
-- **不允许在有未连接端口时声明建模完成**
-- **排版由代码自动触发，AI 不需要主动调用 sl_auto_layout**
+### 关键规则（代码强制，不可绕过）[v11.3.1]
+- **必须通过 sl_model_complete 门控才能执行 sl_sim_run（Gate_4 强制拦截）**
+- **必须遵循 _workflow.nextSuggestedAction 和 _workflow.canProceed 字段**
+- **不允许在有未连接端口时声明建模完成**（现在由 Gate_4 代码强制执行）
+- **每次迭代必须执行 verify → fix → re-verify 闭环**
+- **[v11.3.1] sl_model_complete 自动执行全模型+子系统排版（不可跳过）**
+- **[v11.3.1] Goto/From 标签必须成对：每个 Goto 至少一个 From，每个 From 必须有对应 Goto**
+- **[v11.3.1] 不允许存在孤立模块（所有端口无连接的 Gain/Sum/Integrator 等）**
+- **[v11.3.1] sl_get_model_issues 返回 gotoFromIssues + orphanedBlocks 完整诊断**
 - **子系统必须先建空壳（第一层），再填充内容（第二层）**
 - **_workflow.phase 指示当前阶段，phase 转换由代码自动检测**
 

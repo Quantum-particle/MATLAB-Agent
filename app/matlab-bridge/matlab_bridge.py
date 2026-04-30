@@ -89,6 +89,7 @@ _engine_compatible = None  # 是否已测试过 Engine 兼容性
 MATLAB_ROOT = _get_matlab_root()  # v4.1: 仅从环境变量读取，None 表示未配置
 _project_dir = None
 _matlab_engine = None
+_test_engine = None  # [v11.4.2] Engine from compatibility test, reused by get_engine()
 _matlab_version = None  # 缓存 MATLAB 版本号
 
 # ============= Workspace Isolation（v5.4 → v10.1 强制隔离）=============
@@ -2602,7 +2603,8 @@ def _test_engine_compatibility():
     
     # v5.3: 快速检查 Engine 路径是否存在，避免无意义等待
     engine_path = os.path.join(MATLAB_ROOT, "extern", "engines", "python")
-    if not os.path.exists(engine_path):
+    dist_parent = os.path.join(engine_path, "dist")
+    if not os.path.exists(engine_path) or not os.path.isdir(dist_parent):
         sys.stderr.write("[MATLAB Bridge] Engine 路径不存在，跳过 Engine 测试，使用 CLI 模式\n")
         sys.stderr.flush()
         _engine_compatible = False
@@ -2612,10 +2614,13 @@ def _test_engine_compatibility():
     
     def _do_test():
         try:
-            if engine_path not in sys.path:
-                sys.path.insert(0, engine_path)
+            # [v11.4.2 FIX] Use dist_parent (not engine_path) to match
+            # setup_matlab_engine() path. Using engine_path causes a different
+            # import resolution that conflicts with the dist-based setup,
+            # leading to "circular import / partially initialized module" errors.
+            if dist_parent not in sys.path:
+                sys.path.insert(0, dist_parent)
             import matlab.engine
-            # 尝试快速启动 Engine
             eng = matlab.engine.start_matlab()
             try:
                 eng.eval("1+1;", nargout=0)
@@ -2638,7 +2643,6 @@ def _test_engine_compatibility():
     test_thread.join(timeout=ENGINE_TEST_TIMEOUT)
     
     if test_thread.is_alive():
-        # 超时了，线程还在跑 — 说明 start_matlab() 卡住了
         sys.stderr.write(f"[MATLAB Bridge] ⚠️ Engine API 测试超时（{ENGINE_TEST_TIMEOUT}秒），自动切换到 CLI 回退模式\n")
         sys.stderr.flush()
         _engine_compatible = False
@@ -2682,10 +2686,78 @@ def _detect_connection_mode():
 # ============= Engine API 模式 =============
 
 def setup_matlab_engine():
+    """Setup and import the correct MATLAB engine for the target MATLAB_ROOT
+    
+    [v11.4.1 FIX] Ensures the engine module matches the target MATLAB version.
+    Previously, site-packages might contain engine from a different MATLAB
+    (e.g. 2016a engine + 2023b DLLs → libmwfl.dll crash).
+    
+    Strategy:
+    1. Check dist/matlab/ in MATLAB_ROOT for pre-built package
+    2. If found, insert into sys.path FIRST so it takes priority
+    3. Fall back to system site-packages if dist not available
+    4. Post-import: verify engine origin matches MATLAB_ROOT, warn if mismatch
+    """
     engine_path = os.path.join(MATLAB_ROOT, "extern", "engines", "python")
-    if os.path.exists(engine_path) and engine_path not in sys.path:
+    dist_path = os.path.join(engine_path, "dist", "matlab")
+    dist_parent = os.path.join(engine_path, "dist")
+    
+    # Use pre-built dist package if available (matches MATLAB version exactly)
+    engine_source = 'unknown'
+    if os.path.isdir(dist_path):
+        if dist_parent not in sys.path:
+            sys.path.insert(0, dist_parent)
+        engine_source = 'dist'
+    elif os.path.exists(engine_path) and engine_path not in sys.path:
         sys.path.insert(0, engine_path)
+        engine_source = 'engine_path'
+    else:
+        engine_source = 'site-packages'
+    
+    sys.stderr.flush()
     import matlab.engine
+    
+    # [v11.4.1] Post-import verification: check engine origin matches MATLAB_ROOT
+    engine_file = getattr(matlab.engine, '__file__', '')
+    engine_dir = os.path.dirname(os.path.abspath(engine_file)) if engine_file else ''
+    
+    target_matlab_lower = MATLAB_ROOT.replace('\\', '/').rstrip('/').lower()
+    engine_dir_lower = engine_dir.replace('\\', '/').lower()
+    is_correct_engine = target_matlab_lower in engine_dir_lower
+    
+    # If using dist package, verify it actually got imported
+    if engine_source == 'dist' and not is_correct_engine:
+        sys.stderr.write(f"[MATLAB Bridge] ⚠️  Engine version mismatch detected!\n")
+        sys.stderr.write(f"[MATLAB Bridge]   Expected: {MATLAB_ROOT}\n")
+        sys.stderr.write(f"[MATLAB Bridge]   Actually loaded from: {engine_file}\n")
+        sys.stderr.write(f"[MATLAB Bridge]   This may cause libmwfl.dll crash or simulation errors.\n")
+        # Try to auto-fix: remove old import, force dist path
+        try:
+            # Remove any site-packages matlab from sys.modules
+            for mod_key in list(sys.modules.keys()):
+                if mod_key.startswith('matlab'):
+                    del sys.modules[mod_key]
+            # Ensure dist is first in path
+            if dist_parent in sys.path:
+                sys.path.remove(dist_parent)
+            sys.path.insert(0, dist_parent)
+            # Re-import
+            import matlab.engine
+            engine_file2 = getattr(matlab.engine, '__file__', '')
+            engine_dir2 = os.path.dirname(os.path.abspath(engine_file2)) if engine_file2 else ''
+            if target_matlab_lower in engine_dir2.replace('\\', '/').lower():
+                sys.stderr.write(f"[MATLAB Bridge] ✅ Auto-fixed: engine now from MATALB_ROOT\n")
+                is_correct_engine = True
+            else:
+                sys.stderr.write(f"[MATLAB Bridge] ❌ Auto-fix failed. Try manually:\n")
+                sys.stderr.write(f"[MATLAB Bridge]    cp -r {dist_path} to site-packages/matlab/\n")
+        except Exception as e:
+            sys.stderr.write(f"[MATLAB Bridge] ❌ Auto-fix error: {e}\n")
+    
+    if is_correct_engine:
+        sys.stderr.write(f"[MATLAB Bridge] Engine matched: {MATLAB_ROOT}\n")
+    
+    sys.stderr.flush()
     return matlab.engine
 
 
@@ -2724,7 +2796,6 @@ def get_engine():
     start_thread.join(timeout=ENGINE_START_TIMEOUT)
     
     if start_thread.is_alive():
-        # Engine 启动超时
         sys.stderr.write(f"[MATLAB Bridge] ⚠️ MATLAB Engine 启动超时（{ENGINE_START_TIMEOUT}秒），切换到 CLI 回退模式\n")
         sys.stderr.flush()
         _connection_mode = 'cli'
@@ -2740,13 +2811,14 @@ def get_engine():
     
     _matlab_engine = _engine_result['engine']
     
-    try:
-        _matlab_engine.eval("warning('off', 'Simulink:Engine:MdlFileShadowing');", nargout=0)
-        _matlab_engine.eval("warning('off', 'Simulink:LoadSave:MaskedSystemWarning');", nargout=0)
-        _matlab_engine.eval("set(0, 'DefaultFigureVisible', 'on');", nargout=0)
-    except:
-        pass
-    
+    if _matlab_engine is not None:
+        try:
+            _matlab_engine.eval("warning('off', 'Simulink:Engine:MdlFileShadowing');", nargout=0)
+            _matlab_engine.eval("warning('off', 'Simulink:LoadSave:MaskedSystemWarning');", nargout=0)
+            _matlab_engine.eval("set(0, 'DefaultFigureVisible', 'on');", nargout=0)
+        except:
+            pass
+
     return _matlab_engine
 
 
@@ -3244,6 +3316,17 @@ def run_code(code, show_output=True):
     """
     import time
     
+    # v11.4.4: 门控 — 项目目录未设置时阻止代码执行
+    if not _project_dir:
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "PROJECT_DIR_REQUIRED",
+            "message": "项目目录未设置！请先调用: POST /api/matlab/project/set { \"dirPath\": \"<工作目录>\" }",
+            "requiredAction": "setup_project_dir",
+            "hint": "curl -X POST http://localhost:3000/api/matlab/project/set -H \"Content-Type: application/json\" -d '{\"dirPath\":\"D:/YourWorkspace\"}'"
+        }
+    
     mode = _detect_connection_mode()
     
     if mode == 'unavailable':
@@ -3459,6 +3542,15 @@ def clear_workspace():
 
 # ============= Simulink =============
 def create_simulink_model(model_name, model_path=None):
+    # v11.4.4: 门控 — 未设置 workspace 时阻止模型创建
+    if not _project_dir and not model_path:
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "PROJECT_DIR_REQUIRED",
+            "message": "项目目录未设置！请先调用 POST /api/matlab/setup",
+            "requiredAction": "setup_project_dir"
+        }
     mode = _detect_connection_mode()
     save_path = (model_path or os.path.join(get_project_dir(), model_name)).replace('\\', '/')
     
@@ -3758,10 +3850,32 @@ def check_installation():
     
     # 测试 Engine API 兼容性
     try:
-        setup_matlab_engine()
+        # setup_matlab_engine() already verifies engine version match
+        # We call it here to get the verification result
+        matlab_engine_module = setup_matlab_engine()
         checks["engine_importable"] = True
-    except:
+        
+        # [v11.4.1] Verify engine matches target MATLAB version
+        engine_file = getattr(matlab_engine_module, '__file__', '')
+        engine_dir = os.path.dirname(os.path.abspath(engine_file)) if engine_file else ''
+        target_lower = MATLAB_ROOT.replace('\\', '/').rstrip('/').lower()
+        checks["engine_version_match"] = target_lower in engine_dir.replace('\\', '/').lower()
+        checks["engine_origin"] = engine_file
+        
+        if not checks["engine_version_match"]:
+            dist_path = os.path.join(MATLAB_ROOT, "extern", "engines", "python", "dist", "matlab")
+            checks["engine_fix_hint"] = (
+                f"Engine loaded from wrong MATLAB version! "
+                f"This will cause libmwfl.dll crash. "
+                f"Fix: copy {dist_path} to site-packages/matlab/"
+            ) if os.path.isdir(dist_path) else (
+                f"Engine version mismatch. "
+                f"Run: cd {MATLAB_ROOT}\\extern\\engines\\python && python setup.py install"
+            )
+    except Exception as e:
         checks["engine_importable"] = False
+        checks["engine_version_match"] = False
+        checks["engine_import_error"] = str(e)
     
     # 推测版本
     version_hint = _get_matlab_version_from_path()
@@ -3812,6 +3926,23 @@ _SL_FUNC_MAP = {
     "sl_self_improve":     "_builtin_self_improve",  # v7.0: Layer 5 源码级自我改进
     "sl_model_status":      "sl_model_status_snapshot",  # v8.0: 结构化状态报告(含端口坐标)
     "sl_model_design":      "sl_model_design",  # v10.1: 物理建模设计
+    "sl_model_complete":    "sl_model_complete",  # v11.3: 模型完成门控
+    "sl_get_model_issues":  "sl_get_model_issues",  # v11.3: 模型问题详情
+    "sl_framework_verify_built": "sl_framework_verify_built",  # v11.4: 设计-模型对照验证
+    "sl_check_port_completeness": "sl_check_port_completeness",  # v11.4: 子系统端口完备性
+    "sl_check_signal_closure": "sl_check_signal_closure",  # v11.4: 信号流闭环
+    # v11.0: 大框架三层迭代循环
+    "sl_framework_design":   "sl_framework_design",  # 大框架设计
+    "sl_framework_review":   "sl_framework_review",  # 大框架自检
+    "sl_framework_approve":  "sl_framework_approve",  # 大框架审批/锁定
+    # v11.0 Phase 2: 子系统小框架迭代循环
+    "sl_micro_design":       "sl_micro_design",  # 子系统小框架设计
+    "sl_micro_review":       "sl_micro_review",  # 子系统小框架自检
+    "sl_micro_approve":      "sl_micro_approve",  # 子系统小框架审批
+    # v11.0 Phase 3: 大框架锁定后变更审批
+    "sl_framework_modify":          "sl_framework_modify",  # 大框架变更申请
+    "sl_framework_modify_approve":  "sl_framework_modify_approve",  # 批准变更
+    "sl_framework_modify_reject":   "sl_framework_modify_reject",  # 拒绝变更
 }
 
 # 命令 → 参数构建函数映射（将 API 参数转为 .m 函数参数）
@@ -4187,6 +4318,118 @@ def _build_sl_args(command, params):
                 'detailLevel': params.get('detailLevel', 'standard'),
             }
 
+    # v11.0: 大框架三层迭代循环 API
+    elif command == "sl_framework_design":
+        # sl_framework_design(taskDescription, varargin)
+        return {
+            '_pos_1': params.get('taskDescription', ''),
+            'domain': params.get('domain', 'auto'),
+            'subsystemCount': params.get('subsystemCount', 0),
+            'detailLevel': params.get('detailLevel', 'standard'),
+        }
+
+    elif command == "sl_framework_review":
+        # sl_framework_review(macroFramework, varargin)
+        # macroFramework 作为第一位置参数（可以是 struct 或 taskDescription string）
+        macro_framework = params.get('macroFramework', params.get('taskDescription', ''))
+        check_items = params.get('checkItems', ['physics', 'signalFlow', 'subsystem', 'gotoFrom', 'dimensionality'])
+        return {
+            '_pos_1': macro_framework,
+            'checkItems': check_items,
+        }
+
+    elif command == "sl_framework_approve":
+        # sl_framework_approve(modelName, varargin)
+        # 审批模式：不在 MATLAB 执行，直接更新 Bridge 状态
+        # v11.4: Gate_5 runs in _handle_sl_command BEFORE reaching here
+        return {
+            '_pos_1_special': '__fw_approve__',
+            'modelName': model_name,
+            'locked': params.get('locked', True),
+            'macroFramework': params.get('macroFramework', {}),
+        }
+
+    # v11.0 Phase 2: 子系统小框架迭代循环 API
+    elif command == "sl_micro_design":
+        # sl_micro_design(subsystemName, taskDescription, varargin)
+        return {
+            '_pos_1': params.get('subsystemName', ''),
+            '_pos_2': params.get('taskDescription', ''),
+            'physics': params.get('physics', 'auto'),
+            'detailLevel': params.get('detailLevel', 'standard'),
+            'modelName': model_name,
+        }
+
+    elif command == "sl_micro_review":
+        # sl_micro_review(subsystemName, 'microFramework', mf, 'checkItems', {...})
+        subsystem = params.get('subsystemName', params.get('subsystem', ''))
+        micro_framework = params.get('microFramework', {})
+        result = {
+            '_pos_1': subsystem,
+            'checkItems': params.get('checkItems', ['physics', 'blockPlan', 'signalDimensions', 'integrators']),
+        }
+        if micro_framework:
+            result['microFramework'] = micro_framework
+        return result
+
+    elif command == "sl_micro_approve":
+        # sl_micro_approve(subsystemName, 'microFramework', mf, 'locked', true, 'modelName', modelName)
+        subsystem = params.get('subsystemName', params.get('subsystem', ''))
+        micro_framework = params.get('microFramework', {})
+        result = {
+            '_pos_1': subsystem,
+            'locked': params.get('locked', True),
+            'modelName': model_name,
+        }
+        if micro_framework:
+            result['microFramework'] = micro_framework
+        return result
+
+    # v11.0 Phase 3: 大框架锁定后变更审批
+    elif command == "sl_framework_modify":
+        # sl_framework_modify(modelName, action, varargin)
+        action = params.get('action', '')
+        result = {
+            '_pos_1': model_name,
+            '_pos_2': action,
+        }
+        # Forward all relevant params based on action type
+        if action == 'addSubsystem':
+            result['subsystemName'] = params.get('subsystemName', '')
+            result['subsystemType'] = params.get('subsystemType', '')
+            result['inputs'] = params.get('inputs', '')
+            result['outputs'] = params.get('outputs', '')
+        elif action == 'removeSubsystem':
+            result['subsystemName'] = params.get('subsystemName', '')
+        elif action == 'changeSignalFlow':
+            new_sf = params.get('newSignalFlow', [])
+            if new_sf:
+                result['newSignalFlow'] = new_sf
+        elif action == 'changePhysics':
+            new_pe = params.get('newPhysicsEquations', [])
+            if new_pe:
+                result['newPhysicsEquations'] = new_pe
+        elif action == 'renameSubsystem':
+            result['oldName'] = params.get('oldName', '')
+            result['newName'] = params.get('newName', '')
+        result['reason'] = params.get('reason', '')
+        result['autoApprove'] = params.get('autoApprove', False)
+        return result
+
+    elif command == "sl_framework_modify_approve":
+        # sl_framework_modify_approve(modelName, 'reason', '...')
+        return {
+            '_pos_1': model_name,
+            'reason': params.get('reason', ''),
+        }
+
+    elif command == "sl_framework_modify_reject":
+        # sl_framework_modify_reject(modelName, 'reason', '...')
+        return {
+            '_pos_1': model_name,
+            'reason': params.get('reason', ''),
+        }
+
     else:
         return {'_pos_1': model_name}
 
@@ -4296,10 +4539,14 @@ class ModelWorkflowState:
     """
     def __init__(self, model_name):
         self.model_name = model_name
-        self.phase = 'design'             # design / framework / subsystem / simulation (v10.1: 默认 design)
-        self.phase_step = 'pending'        # pending / researching / approved / building / layout / checking
-        self.design_approved = False       # v10.1: 设计审批标志
+        self.phase = 'framework_design'   # v11.0: framework_design / framework_construction / subsystem_iteration / simulation
+        self.phase_step = 'pending'        # pending / proposed / reviewed / approved / locked / building / layout / checking
+        self.design_approved = False       # v10.1: 设计审批标志（保留兼容）
+        self.framework_approved = False    # v11.0: 大框架审批标志
+        self.framework_locked = False      # v11.0: 大框架锁定标志
         self.design_result = None          # v10.1: 设计方案缓存
+        self.macro_framework = None        # v11.0: 大框架设计结果缓存
+        self.micro_framework = None        # v11.0 Phase 2: 子系统小框架设计结果缓存
         self.consecutive_adds = 0         # 连续 add 操作计数
         self.last_command = None          # 上一个命令
         self.last_layout_time = 0         # 上次排版时间戳
@@ -4310,6 +4557,9 @@ class ModelWorkflowState:
         self.layout_done_for_phase = False  # 当前阶段是否已排版
         self.last_block_count = 0         # 上次已知的模块数
         self.last_line_count = 0          # 上次已知的线数
+        self.model_completed = False      # v11.3: 模型完成门控是否通过
+        self.pending_issues = []          # v11.3: 未解决的问题列表
+        self.last_verification_failed = False  # v11.3: 上次验证是否失败
 
 
 def _check_auto_layout_needed(model_name, command, params):
@@ -4435,23 +4685,444 @@ def _auto_arrange_model(model_name):
         }
 
 
+def _normalize_review_result(review_result):
+    """[Bug #2 FIX] Normalize reviewResult structure from MATLAB Engine.
+
+    MATLAB may return reviewResult as:
+    - A dict with checks as struct array (list of dicts with item-level fields)
+    - A list of dicts (one per check item)
+    
+    Expected normalized structure:
+    {
+        'passed': bool,
+        'checks': [{'item': str, 'passed': bool, 'confidence': float, ...}, ...],
+        'overallConfidence': float,
+        'issues': [str, ...],
+        'suggestions': [str, ...]
+    }
+    """
+    if not isinstance(review_result, dict):
+        # If it's a list (struct array), aggregate into single dict
+        if isinstance(review_result, (list, tuple)):
+            all_passed = True
+            checks = []
+            overall_confidence = 0.0
+            issues = []
+            suggestions = []
+            for item in review_result:
+                if isinstance(item, dict):
+                    if not item.get('passed', True):
+                        all_passed = False
+                    item_checks = item.get('checks', {})
+                    if isinstance(item_checks, dict):
+                        checks.append(item_checks)
+                    elif isinstance(item_checks, (list, tuple)):
+                        checks.extend(item_checks)
+                    conf = item.get('overallConfidence', 0.0)
+                    if isinstance(conf, (int, float)) and conf > overall_confidence:
+                        overall_confidence = conf
+                    item_issues = item.get('issues', [])
+                    if isinstance(item_issues, (list, tuple)):
+                        issues.extend(item_issues)
+                    item_suggestions = item.get('suggestions', [])
+                    if isinstance(item_suggestions, (list, tuple)):
+                        suggestions.extend(item_suggestions)
+            return {
+                'passed': all_passed,
+                'checks': checks,
+                'overallConfidence': overall_confidence,
+                'issues': issues,
+                'suggestions': suggestions,
+            }
+        return review_result
+
+    # Already a dict, ensure top-level fields
+    normalized = dict(review_result)
+    
+    # Normalize checks field
+    checks = normalized.get('checks', [])
+    if isinstance(checks, dict):
+        # Single check as dict -> wrap in list
+        normalized['checks'] = [checks]
+    elif isinstance(checks, (list, tuple)):
+        normalized_checks = []
+        for c in checks:
+            if isinstance(c, dict):
+                normalized_checks.append(c)
+        normalized['checks'] = normalized_checks
+    else:
+        normalized['checks'] = []
+    
+    # Ensure passed field
+    if 'passed' not in normalized:
+        normalized['passed'] = all(
+            c.get('passed', False) for c in normalized['checks']
+        )
+    
+    # Ensure overallConfidence
+    if 'overallConfidence' not in normalized:
+        confidences = [c.get('confidence', 0.5) for c in normalized['checks'] if isinstance(c, dict)]
+        normalized['overallConfidence'] = sum(confidences) / len(confidences) if confidences else 0.5
+    
+    # Ensure issues/suggestions are lists
+    if 'issues' not in normalized:
+        normalized['issues'] = []
+    if 'suggestions' not in normalized:
+        normalized['suggestions'] = []
+    
+    return normalized
+
+
 def _generate_workflow_state(model_name, command, params, result):
     """v9.0: 生成工作流状态信息
-    
+
     分析当前模型状态，推断工作流阶段，生成 nextSuggestedAction 建议。
     基于模型实际状态（sl_model_status_snapshot）而非假设。
-    
+
     三层迭代逻辑:
     - framework: 顶层架构建立中，建议连线和子系统创建
     - subsystem: 子系统填充中，建议进入空子系统
     - simulation: 准备仿真，建议设置参数和运行
-    
+
+    v11.0 增强:
+    - framework_design: 大框架设计阶段
+    - framework_construction: 大框架构建阶段
+    - subsystem_iteration: 子系统迭代阶段
+
+    v11.2 增强:
+    - [Bug #2] reviewResult 结构规范化
+
     Returns:
         dict: 工作流状态
     """
     # [P1-1 FIX] 使用线程安全的访问函数
     state = _get_workflow_state(model_name)
-    
+
+    # ===== [v11.0] 大框架 API 特殊处理 =====
+    if command in ('sl_framework_design', 'sl_framework_review', 'sl_framework_approve'):
+        if command == 'sl_framework_design':
+            # [v11.2] Architecture Flip: sl_framework_design now returns designPrompt, NOT macroFramework
+            # The AI agent must autonomously design the framework based on the prompt
+            if isinstance(result, dict) and result.get('status') == 'ok':
+                design_prompt = result.get('designPrompt', [])
+                output_schema = result.get('outputSchema', {})
+                task_guide = result.get('taskGuide', [])
+                flow_patterns = result.get('flowPatterns', [])
+                next_action = result.get('nextExpectedAction', 'AI_AGENT_DESIGN')
+                state.phase = 'framework_design'
+                state.phase_step = 'awaiting_ai_design'
+                # Store design prompt in state for later reference
+                state.macro_framework = {
+                    'designPrompt': design_prompt,
+                    'outputSchema': output_schema,
+                    'version': result.get('version', 'v11.2'),
+                }
+                return {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': state.phase_step,
+                    'designPrompt': design_prompt,
+                    'taskGuide': task_guide,
+                    'flowPatterns': flow_patterns,
+                    'outputSchema': output_schema,
+                    'nextExpectedAction': next_action,
+                    'frameworkApproved': False,
+                    'version': 'v11.2',
+                    'instruction': (
+                        'YOU are the domain expert. Based on the designPrompt above, '
+                        'use your knowledge of physics and control theory to design '
+                        'the macro framework. Output the result as JSON matching outputSchema. '
+                        'Then call sl_framework_review() with your framework design.'
+                    ),
+                }
+        elif command == 'sl_framework_review':
+            # Review 完成，等待 approve
+            # [Bug #2 FIX] Normalize reviewResult structure
+            if isinstance(result, dict) and result.get('status') == 'ok':
+                review_result = _normalize_review_result(result.get('reviewResult', {}))
+                state.phase = 'framework_design'
+                state.phase_step = 'reviewed'
+                if review_result.get('passed'):
+                    return {
+                        'model': model_name,
+                        'phase': state.phase,
+                        'phaseStep': state.phase_step,
+                        'macroFramework': state.macro_framework,
+                        'reviewResult': review_result,
+                        'nextSuggestedAction': 'Call sl_framework_approve() to lock the macro framework',
+                        'frameworkApproved': state.framework_approved,
+                    }
+                else:
+                    return {
+                        'model': model_name,
+                        'phase': state.phase,
+                        'phaseStep': state.phase_step,
+                        'macroFramework': state.macro_framework,
+                        'reviewResult': review_result,
+                        'nextSuggestedAction': 'Framework review found issues - fix and call sl_framework_design again',
+                        'frameworkApproved': state.framework_approved,
+                    }
+        elif command == 'sl_framework_approve':
+            # 审批完成，大框架锁定
+            if isinstance(result, dict) and result.get('status') == 'ok':
+                state.framework_approved = True
+                state.framework_locked = result.get('locked', True)
+                state.phase = 'framework_construction'
+                state.phase_step = 'approved'
+                return {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': state.phase_step,
+                    'macroFramework': state.macro_framework,
+                    'frameworkApproved': True,
+                    'frameworkLocked': state.framework_locked,
+                    'lockedAt': result.get('lockedAt', ''),
+                    'nextSuggestedAction': 'Macro framework locked - now you can start building: add_block / add_line / subsystem_create',
+                }
+        # 如果不是 ok 状态，返回当前状态
+        return {
+            'model': model_name,
+            'phase': state.phase,
+            'phaseStep': state.phase_step,
+            'nextSuggestedAction': f'Retry {command} or check errors',
+        }
+
+    # ===== [v11.3] 模型完成门控处理 =====
+    if command == 'sl_model_complete':
+        if isinstance(result, dict) and result.get('status') == 'ok':
+            can_proceed = result.get('canProceed', False)
+            passed = result.get('passed', False)
+            if passed or can_proceed:
+                state.model_completed = True
+                state.pending_issues = []
+                state.last_verification_failed = False
+                state.phase = 'simulation'
+                state.phase_step = 'completed'
+                return {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': state.phase_step,
+                    'modelCompleted': True,
+                    'canProceed': True,
+                    'nextSuggestedAction': 'Model complete! Proceed to sl_sim_run for simulation.',
+                }
+            else:
+                state.model_completed = False
+                state.last_verification_failed = True
+                unconn_count = result.get('unconnectedCount', -1)
+                issues = result.get('suggestions', [])
+                state.pending_issues = issues if isinstance(issues, list) else []
+                state.phase = 'framework_construction'
+                state.phase_step = 'fixing_issues'
+                return {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': state.phase_step,
+                    'modelCompleted': False,
+                    'canProceed': False,
+                    'unconnectedCount': unconn_count,
+                    'pendingIssues': state.pending_issues,
+                    'nextSuggestedAction': (
+                        f'BLOCKED: {unconn_count} unconnected port(s). '
+                        f'Run sl_get_model_issues("{model_name}") for details, '
+                        f'fix all connections, then retry sl_model_complete.'
+                    ),
+                }
+        # error handling
+        state.last_verification_failed = True
+        return {
+            'model': model_name,
+            'phase': state.phase,
+            'phaseStep': state.phase_step,
+            'canProceed': False,
+            'nextSuggestedAction': f'sl_model_complete returned error. Check model state and retry.',
+        }
+    # ===== [v11.3] 完成门控结束 =====
+
+    # ===== [v11.0 Phase 2] 子系统小框架 API 处理 =====
+    if command in ('sl_micro_design', 'sl_micro_review', 'sl_micro_approve'):
+        subsystem_name = params.get('subsystemName', params.get('subsystem', ''))
+        if command == 'sl_micro_design':
+            # [v11.2] Architecture Flip: sl_micro_design now returns designPrompt, NOT microFramework
+            # The AI agent must autonomously design the subsystem based on the prompt
+            if isinstance(result, dict) and result.get('status') == 'ok':
+                design_prompt = result.get('designPrompt', [])
+                output_schema = result.get('outputSchema', {})
+                block_mapping_guide = result.get('blockMappingGuide', [])
+                parent_context = result.get('parentContext', {})
+                parent_summary = result.get('parentSummary', '')
+                next_action = result.get('nextExpectedAction', 'AI_AGENT_DESIGN_MICRO')
+                state.phase = 'subsystem_iteration'
+                state.phase_step = 'micro_awaiting_ai_design'
+                # Store micro design prompt in state
+                if not hasattr(state, 'micro_frameworks'):
+                    state.micro_frameworks = {}
+                state.micro_frameworks[subsystem_name] = {
+                    'designPrompt': design_prompt,
+                    'outputSchema': output_schema,
+                    'version': result.get('version', 'v11.2'),
+                }
+                return {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': state.phase_step,
+                    'designPrompt': design_prompt,
+                    'blockMappingGuide': block_mapping_guide,
+                    'outputSchema': output_schema,
+                    'parentContext': parent_context,
+                    'parentSummary': parent_summary,
+                    'subsystemName': subsystem_name,
+                    'nextExpectedAction': next_action,
+                    'frameworkApproved': state.framework_approved,
+                    'version': 'v11.2',
+                    'instruction': (
+                        f'YOU are the domain expert. Based on the designPrompt above, '
+                        f'use your knowledge of physics and control theory to design '
+                        f'the internals of subsystem "{subsystem_name}". '
+                        f'Output as JSON matching outputSchema, then call '
+                        f'sl_micro_review(subsystemName="{subsystem_name}").'
+                    ),
+                }
+        elif command == 'sl_micro_review':
+            # Review 完成，等待 approve
+            # [Bug #2 FIX] Normalize reviewResult structure
+            if isinstance(result, dict) and result.get('status') == 'ok':
+                review_result = _normalize_review_result(result.get('reviewResult', {}))
+                state.phase = 'subsystem_iteration'
+                state.phase_step = 'micro_reviewed'
+                if review_result.get('passed'):
+                    return {
+                        'model': model_name,
+                        'phase': state.phase,
+                        'phaseStep': state.phase_step,
+                        'microFramework': state.micro_framework,
+                        'reviewResult': review_result,
+                        'subsystemName': subsystem_name,
+                        'nextSuggestedAction': 'Call sl_micro_approve() to approve the micro framework and start building',
+                        'frameworkApproved': state.framework_approved,
+                    }
+                else:
+                    return {
+                        'model': model_name,
+                        'phase': state.phase,
+                        'phaseStep': state.phase_step,
+                        'microFramework': state.micro_framework,
+                        'reviewResult': review_result,
+                        'subsystemName': subsystem_name,
+                        'nextSuggestedAction': 'Micro framework review found issues - fix and call sl_micro_design again',
+                        'frameworkApproved': state.framework_approved,
+                    }
+        elif command == 'sl_micro_approve':
+            # 审批完成，小框架锁定，可以开始构建
+            if isinstance(result, dict) and result.get('status') == 'ok':
+                state.phase = 'subsystem_iteration'
+                state.phase_step = 'micro_approved'
+                return {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': state.phase_step,
+                    'microFramework': state.micro_framework,
+                    'subsystemName': subsystem_name,
+                    'microFrameworkApproved': True,
+                    'microFrameworkLocked': result.get('locked', True),
+                    'approvedAt': result.get('approvedAt', ''),
+                    'nextSuggestedAction': f'Start building subsystem {subsystem_name}: add_block / add_line',
+                    'frameworkApproved': state.framework_approved,
+                }
+        # 如果不是 ok 状态，返回当前状态
+        return {
+            'model': model_name,
+            'phase': state.phase,
+            'phaseStep': state.phase_step,
+            'subsystemName': subsystem_name,
+            'nextSuggestedAction': f'Retry {command} or check errors',
+        }
+    # ===== v11.0 Phase 2 子系统小框架 API 处理结束 =====
+
+    # ===== v11.0 Phase 3: 大框架锁定后变更审批 API 处理 =====
+    if command == 'sl_framework_modify':
+        if isinstance(result, dict) and result.get('status') in ('ok', 'pending_approval'):
+            modify_action = result.get('action', '')
+            auto_approved = result.get('autoApproved', False)
+            if auto_approved:
+                state.phase_step = 'modified'
+                return {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': state.phase_step,
+                    'modifyAction': modify_action,
+                    'autoApproved': True,
+                    'modificationSummary': result.get('modificationSummary', ''),
+                    'reviewResult': result.get('reviewResult', {}),
+                    'frameworkLocked': state.framework_locked,
+                    'nextSuggestedAction': f'Framework modified ({modify_action}) - continue building',
+                }
+            else:
+                return {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': 'modification_pending',
+                    'modifyAction': modify_action,
+                    'autoApproved': False,
+                    'modificationSummary': result.get('modificationSummary', ''),
+                    'reviewResult': result.get('reviewResult', {}),
+                    'frameworkLocked': state.framework_locked,
+                    'nextSuggestedAction': 'Call sl_framework_modify_approve() to approve, or sl_framework_modify_reject() to reject',
+                }
+        elif isinstance(result, dict) and result.get('status') == 'error':
+            # [P2-5 FIX] 显式处理 error 状态，避免 fall through 到通用处理
+            return {
+                'model': model_name,
+                'status': 'error',
+                'message': result.get('message', 'sl_framework_modify failed'),
+                'action': result.get('action', params.get('action', '')),
+                'nextSuggestedAction': 'Fix the error and retry sl_framework_modify',
+            }
+    elif command == 'sl_framework_modify_approve':
+        if isinstance(result, dict) and result.get('status') == 'ok':
+            state.phase_step = 'modified'
+            return {
+                'model': model_name,
+                'phase': state.phase,
+                'phaseStep': state.phase_step,
+                'modifyAction': result.get('action', ''),
+                'modificationSummary': result.get('modificationSummary', ''),
+                'approvedAt': result.get('approvedAt', ''),
+                'frameworkLocked': state.framework_locked,
+                'nextSuggestedAction': 'Modification approved - continue building',
+            }
+        elif isinstance(result, dict) and result.get('status') == 'error':
+            # [P2-5 FIX] approve 失败的显式处理
+            return {
+                'model': model_name,
+                'status': 'error',
+                'message': result.get('message', 'sl_framework_modify_approve failed'),
+                'nextSuggestedAction': 'Check pending modification exists and framework is locked',
+            }
+    elif command == 'sl_framework_modify_reject':
+        if isinstance(result, dict) and result.get('status') == 'ok':
+            return {
+                'model': model_name,
+                'phase': state.phase,
+                'phaseStep': state.phase_step,
+                'modifyAction': result.get('action', ''),
+                'modificationSummary': result.get('modificationSummary', ''),
+                'rejectedAt': result.get('rejectedAt', ''),
+                'frameworkLocked': state.framework_locked,
+                'nextSuggestedAction': 'Modification rejected - framework unchanged, continue building',
+            }
+        elif isinstance(result, dict) and result.get('status') == 'error':
+            # [P2-5 FIX] reject 失败的显式处理
+            return {
+                'model': model_name,
+                'status': 'error',
+                'message': result.get('message', 'sl_framework_modify_reject failed'),
+                'nextSuggestedAction': 'Check pending modification exists',
+            }
+    # ===== v11.0 Phase 3 大框架锁定后变更审批 API 处理结束 =====
+
+    # ===== v11.0 大框架 API 处理结束 =====
+
     # 检测当前正在操作的子系统
     block_path = params.get('blockPath', params.get('block_path', ''))
     subsys_path = params.get('subsystemPath', params.get('subsystem_path', ''))
@@ -4541,6 +5212,46 @@ def _generate_workflow_state(model_name, command, params, result):
                     state.phase = 'simulation'
                     state.phase_step = 'checking'
         
+        # [Bug #8 FIX] 增强 framework_construction → subsystem_iteration 自动转换
+        # 当大框架已审批（framework_approved=True）且 AI 直接开始填充子系统时，
+        # 阶段应自动从 framework_construction 切换到 subsystem_iteration
+        if state.phase == 'framework_construction':
+            if state.framework_approved:
+                if empty_subsystems:
+                    # 有空子系统 → 切换到 subsystem_iteration
+                    state.phase = 'subsystem_iteration'
+                    state.phase_step = 'filling'
+                    state.current_subsystem = empty_subsystems[0]
+                    state.subsystem_queue = empty_subsystems
+                    next_action = f'Fill subsystem: {empty_subsystems[0]} — use sl_micro_design or directly add blocks'
+                elif non_empty_subsystems and not empty_subsystems:
+                    # 所有子系统已填充 → 检查是否可以进入仿真
+                    if unconn > 0:
+                        next_action = f'Connect {unconn} remaining port(s) in the framework'
+                        state.phase_step = 'connecting'
+                    else:
+                        state.phase = 'simulation'
+                        state.phase_step = 'checking'
+                        next_action = 'Set simulation parameters and run simulation'
+                else:
+                    # 框架已审批但还没建子系统
+                    next_action = 'Create subsystems based on the approved macro framework'
+                    state.phase_step = 'creating_subsystems'
+            else:
+                next_action = 'Complete framework approval first: sl_framework_approve(modelName)'
+        
+        # [Bug #8 FIX] 增强 subsystem_iteration 阶段的自动推断
+        elif state.phase == 'subsystem_iteration':
+            if empty_subsystems:
+                state.current_subsystem = empty_subsystems[0]
+                next_action = f'Fill subsystem: {empty_subsystems[0]}'
+                state.phase_step = 'filling'
+            else:
+                # 所有子系统已填充 → 进入仿真阶段
+                state.phase = 'simulation'
+                state.phase_step = 'checking'
+                next_action = 'Set simulation parameters and run simulation'
+        
         # 阶段推断逻辑
         if state.phase == 'framework':
             if unconn > 0:
@@ -4595,6 +5306,7 @@ def _generate_workflow_state(model_name, command, params, result):
         'subsystemQueue': state.subsystem_queue,
         'subsystemDone': list(state.subsystem_done),
         'checksRemaining': checks_remaining,
+        'canProceed': not state.last_verification_failed,  # v11.3
     }
 
 
@@ -4609,6 +5321,35 @@ def _cleanup_workflow_state(model_name):
     with _global_lock:
         if model_name in _model_locks:
             del _model_locks[model_name]
+
+
+def _ensure_model_visible(params):
+    """[v11.4.3] 强制 Simulink 模型在前台可见 — 底层门控，AI 不可绕过。
+    
+    在执行任何 sl_* 命令前，从 params 中提取模型名，
+    调用 open_system 确保用户在 MATLAB 前台实时看到 AI 建模过程。
+    
+    此函数是 Bridge 层的强制门控，不依赖提示词。
+    """
+    if _matlab_engine is None:
+        return
+    
+    model_name = params.get('modelName', params.get('model_name', ''))
+    if not model_name:
+        bp = params.get('blockPath', '')
+        if '/' in bp:
+            model_name = bp.split('/')[0]
+        elif bp:
+            model_name = bp
+    
+    if model_name:
+        try:
+            _matlab_engine.eval(
+                f"try, open_system('{model_name}'); catch, end;",
+                nargout=0
+            )
+        except Exception:
+            pass  # 静默失败：模型可能尚未创建，后续操作会报明确的错误
 
 
 def _handle_sl_command(command, params):
@@ -4655,7 +5396,11 @@ def _handle_sl_command(command, params):
                     skip_design = fixed_params.get('skipDesign', False)
                     if not skip_design:
                         return {
-                            "status": "blocked",
+                            "status": "gate_blocked",
+                            "blocked": True,  # [Bug #5 FIX] 标准化拦截标记
+                            "reason": "Design phase not completed. Physical modeling design required before building.",  # [Bug #5 FIX]
+                            "command": command,  # [Bug #5 FIX] 被拦截的命令
+                            "gate": "Gate_1",  # [Bug #5 FIX] 哪个门控
                             "message": (
                                 "DESIGN_PHASE_REQUIRED: 物理建模设计未完成！\n"
                                 "在构建模型之前，必须先调用 sl_model_design 获取结构化设计方案。\n"
@@ -4677,9 +5422,388 @@ def _handle_sl_command(command, params):
                     _gate_state.design_approved = True
                     _gate_state.phase = 'framework'
                     _gate_state.phase_step = 'building'
-            except:
-                pass
+            except Exception as _gate_ex:
+                # [P0-2 FIX] fail-closed: 门控检查异常时默认拒绝，不静默放行
+                import logging
+                _gate_logger = logging.getLogger('matlab_bridge')
+                _gate_logger.warning(f"Design gate check failed for {_gate_mn}: {_gate_ex}")
+                return {
+                    "status": "gate_error",
+                    "blocked": True,  # [Bug #5 FIX]
+                    "reason": f"Design gate check failed for model '{_gate_mn}': {_gate_ex}. Operation denied for safety.",  # [Bug #5 FIX]
+                    "command": command,  # [Bug #5 FIX]
+                    "gate": "Gate_1",  # [Bug #5 FIX]
+                    "message": f"Design gate check failed for model '{_gate_mn}': {_gate_ex}. Operation denied for safety.",
+                    "requiredAction": "sl_model_design",
+                    "workflowPhase": "design",
+                }
         # ===== 设计门控结束 =====
+
+        # ===== [v11.0] 大框架三层迭代循环门控 =====
+        # 大框架门控：所有构建命令必须先完成 sl_framework_design → review → approve
+        _MODIFY_COMMANDS_GATED_BY_FRAMEWORK = [
+            'sl_add_block', 'sl_add_line', 'sl_delete', 'sl_replace_block',
+            'sl_subsystem_create', 'sl_subsystem_mask',
+            'sl_bus_create', 'sl_signal_config', 'sl_block_position',
+            'sl_auto_layout',  # 包含排版命令
+        ]
+
+        # v11.0 大框架 API 不需要门控检查
+        _FRAMEWORK_API_COMMANDS = [
+            'sl_framework_design', 'sl_framework_review', 'sl_framework_approve',
+            'sl_micro_design', 'sl_micro_review', 'sl_micro_approve',  # Phase 2
+            'sl_framework_modify', 'sl_framework_modify_approve', 'sl_framework_modify_reject',  # Phase 3
+        ]
+
+        # [v11.0 Phase 3 FIX] 提前初始化框架状态变量，供 Gate 1 + Gate 3 + 框架 API 共用
+        _fw_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+        if not _fw_mn and command == 'sl_set_param':
+            _fw_mn = fixed_params.get('blockPath', '')
+            if '/' in _fw_mn:
+                _fw_mn = _fw_mn.split('/')[0]
+        _fw_locked = False
+
+        # 只有构建命令需要门控检查
+        if command in _MODIFY_COMMANDS_GATED_BY_FRAMEWORK:
+            if _fw_mn:
+                try:
+                    # 检查大框架是否已锁定
+                    lock_var = f'mFWLock_{_fw_mn}'  # [P1-4 FIX] 统一命名: framework_locked_ → mFWLock_
+                    _fw_locked = False
+                    try:
+                        if _matlab_engine:
+                            _fw_locked = _matlab_engine.eval(lock_var)
+                        else:
+                            _fw_locked = False
+                    except Exception as _lock_ex:
+                        # [P0-2 FIX] 精确异常捕获 + 日志记录，替代 bare except:pass
+                        import logging
+                        logging.getLogger('matlab_bridge').warning(
+                            f"Framework lock check failed for {_fw_mn}: {_lock_ex}")
+                        _fw_locked = False
+
+                    # 检查大框架是否已审批（通过 workflow state）
+                    _fw_state = _get_workflow_state(_fw_mn)
+                    framework_approved = getattr(_fw_state, 'framework_approved', False)
+
+                    if not framework_approved and not _fw_locked:
+                        # 检查 skipDesign 选项（仅限已有模型的简单修改）
+                        skip_design = fixed_params.get('skipDesign', False)
+                        if not skip_design:
+                            return {
+                                "status": "gate_blocked",
+                                "blocked": True,  # [Bug #5 FIX]
+                                "reason": "Macro framework not approved. Framework design→review→approve required before building.",  # [Bug #5 FIX]
+                                "command": command,  # [Bug #5 FIX]
+                                "gate": "Gate_2",  # [Bug #5 FIX]
+                                "message": (
+                                    "MACRO_FRAMEWORK_REQUIRED: 大框架设计未完成！\n"
+                                    "在构建模型之前，必须先完成大框架设计→审核→审批流程。\n"
+                                    "完成大框架审批后，才能开始 add_block / add_line 等构建操作。"
+                                ),
+                                "requiredAction": "sl_framework_design",
+                                "workflowPhase": "framework_design",
+                                "macroFrameworkApproved": False,
+                                "frameworkApproved": False,  # [Bug #5 FIX] 标准化
+                                "hint": (
+                                    "1. 调用 sl_framework_design(taskDescription='你的建模任务描述')\n"
+                                    "2. 调用 sl_framework_review() 自检大框架\n"
+                                    "3. 调用 sl_framework_approve(modelName) 审批并锁定大框架\n"
+                                    "4. 然后才能开始 add_block / add_line 等构建操作"
+                                ),
+                                "nextSteps": [
+                                    "sl_framework_design(taskDescription='你的建模任务描述')",
+                                    "sl_framework_review(macroFramework)",
+                                    "sl_framework_approve(modelName)"
+                                ],
+                            }
+                except Exception as _fw_gate_ex:
+                    # [P0-2 FIX] fail-closed: 大框架门控异常时默认拒绝，不静默放行
+                    import logging
+                    _fw_gate_logger = logging.getLogger('matlab_bridge')
+                    _fw_gate_logger.warning(f"Macro framework gate check failed for {_fw_mn}: {_fw_gate_ex}")
+                    return {
+                        "status": "gate_error",
+                        "blocked": True,  # [Bug #5 FIX]
+                        "reason": f"Macro framework gate check failed for model '{_fw_mn}': {_fw_gate_ex}. Operation denied for safety.",  # [Bug #5 FIX]
+                        "command": command,  # [Bug #5 FIX]
+                        "gate": "Gate_2",  # [Bug #5 FIX]
+                        "message": f"Macro framework gate check failed for model '{_fw_mn}': {_fw_gate_ex}. Operation denied for safety.",
+                        "requiredAction": "sl_framework_design",
+                        "workflowPhase": "framework_design",
+                    }
+        # ===== [v11.0 Phase 3] Gate 3: 大框架锁定后结构性修改拦截 =====
+        # 大框架锁定后，以下结构性操作需要通过 sl_framework_modify 审批：
+        # - sl_subsystem_create: 添加新子系统 → addSubsystem
+        # - sl_delete (删除子系统级别): → removeSubsystem [P0-2 FIX 新增]
+        # 允许的操作（不拦截）:
+        # - sl_add_block: 添加模块到已有子系统内部（参数微调）
+        # - sl_add_line: 连线（不改变子系统架构）
+        # - sl_set_param: 参数调整（如 Gain 值）
+        # - sl_config_set: 仿真参数修改
+        # - sl_signal_logging, sl_signal_config: 信号记录/配置
+        # - sl_block_position, sl_auto_layout: 排版
+        _STRUCTURAL_MODIFY_COMMANDS = {
+            'sl_subsystem_create',  # 添加子系统 → 需要 addSubsystem 审批
+            'sl_delete',            # [P0-2 FIX] 删除子系统级别 → 需要 removeSubsystem 审批
+        }
+        # [P0-2 FIX] sl_delete 只在删除子系统级别时拦截，删除子系统内部模块不拦截
+        _is_structural_delete = False
+        if command == 'sl_delete' and _fw_mn and _fw_locked:
+            _del_target = fixed_params.get('blockPath', fixed_params.get('name', ''))
+            if _del_target:
+                # 如果删除目标是 Model/SubsystemName 格式（子系统级别），则拦截
+                # 如果是 Model/SubsystemName/BlockName（子系统内部），则放行
+                _parts = str(_del_target).split('/')
+                if len(_parts) == 2:
+                    # Model/SubsystemName — 这是子系统级别删除
+                    _is_structural_delete = True
+                # len(_parts) >= 3 表示子系统内部，不拦截
+
+        if _fw_mn and _fw_locked and (command in _STRUCTURAL_MODIFY_COMMANDS) and (command != 'sl_delete' or _is_structural_delete):
+            # [P1-4 FIX] 重新设计已审批放行机制：
+            # 旧逻辑：检查 pending.autoApproved → 死代码（approve 后 pending 已被清空）
+            # 新逻辑：检查 mFWGate3Pass_<model> 标记 → approve 设置此标记，Gate 3 检测后放行一次并清除
+            _gate3_pass_var = f'mFWGate3Pass_{_fw_mn}'
+            _has_gate3_pass = False
+            try:
+                if _matlab_engine:
+                    _pass_exists = _matlab_engine.eval(f"evalin('base', 'exist(''{_gate3_pass_var}'')')")
+                    if _pass_exists == 1:
+                        _pass_val = _matlab_engine.eval(_gate3_pass_var)
+                        if _pass_val:
+                            _has_gate3_pass = True
+                            # 一次性通行证：读取后立即清除
+                            _matlab_engine.eval(f"assignin('base', '{_gate3_pass_var}', false);")
+            except Exception:
+                _has_gate3_pass = False
+
+            if not _has_gate3_pass:
+                # 确定具体的修改类型
+                if command == 'sl_subsystem_create':
+                    _modify_action = 'addSubsystem'
+                    _subsys_name = fixed_params.get('name', fixed_params.get('subsystemName', ''))
+                    _modify_hint = f"sl_framework_modify('{_fw_mn}', 'addSubsystem', 'subsystemName', '{_subsys_name}', 'subsystemType', 'plant', 'inputs', '...', 'outputs', '...')"
+                else:
+                    _modify_action = 'structural_change'
+                    _modify_hint = f"sl_framework_modify('{_fw_mn}', '{_modify_action}', ...)"
+
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,  # [Bug #5 FIX] 标准化拦截标记
+                    "reason": f"Macro framework is locked. {command} is a structural modification ({_modify_action}) requiring sl_framework_modify approval.",  # [Bug #5 FIX]
+                    "command": command,  # [Bug #5 FIX] 被拦截的命令
+                    "gate": "Gate_3",  # [Bug #5 FIX] 哪个门控
+                    "message": (
+                        f"FRAMEWORK_LOCKED: 大框架已锁定，不能直接执行 {command}！\n"
+                        f"操作 '{command}' 属于结构性修改（{_modify_action}），需要通过框架变更审批流程。\n"
+                        f"请使用 sl_framework_modify 申请修改。"
+                    ),
+                    "requiredAction": "sl_framework_modify",
+                    "workflowPhase": "framework_locked",
+                    "frameworkApproved": True,  # [Bug #5 FIX]
+                    "frameworkLocked": True,
+                    "modifyAction": _modify_action,
+                    "hint": _modify_hint,
+                    "nextSteps": [
+                        _modify_hint,
+                        f"sl_framework_modify_approve('{_fw_mn}')",
+                    ],
+                }
+        # ===== Gate 3 结束 =====
+
+        # ===== 大框架门控结束 =====
+
+        # ===== [v11.1 Phase 2] 子系统级 micro 门控 =====
+        # 当操作目标是子系统内部时，检查该子系统的小框架是否已审批
+        _MICRO_GATED_COMMANDS = [
+            'sl_add_block', 'sl_add_line', 'sl_set_param', 'sl_delete',
+        ]
+        if command in _MICRO_GATED_COMMANDS and _fw_mn:
+            try:
+                _fw_state = _get_workflow_state(_fw_mn)
+                # 只有在大框架已审批、且处于 subsystem_iteration 阶段时才检查 micro 门控
+                if _fw_state.framework_approved and _fw_state.phase == 'subsystem_iteration':
+                    # 判断操作是否针对子系统内部
+                    _target_subsystem = ''
+                    if command == 'sl_add_block':
+                        _model_name_param = fixed_params.get('modelName', '')
+                        if '/' in str(_model_name_param):
+                            # modelName 含 / 说明在子系统内操作
+                            parts = str(_model_name_param).split('/')
+                            if len(parts) >= 2:
+                                _target_subsystem = parts[1]
+                    elif command == 'sl_set_param':
+                        _block_path = fixed_params.get('blockPath', '')
+                        if '/' in str(_block_path):
+                            parts = str(_block_path).split('/')
+                            if len(parts) >= 3:
+                                _target_subsystem = parts[1]
+                    elif command == 'sl_add_line':
+                        _model_name_param = fixed_params.get('modelName', '')
+                        if '/' in str(_model_name_param):
+                            parts = str(_model_name_param).split('/')
+                            if len(parts) >= 2:
+                                _target_subsystem = parts[1]
+                    elif command == 'sl_delete':
+                        _block_path = fixed_params.get('blockPath', '')
+                        if '/' in str(_block_path):
+                            parts = str(_block_path).split('/')
+                            if len(parts) >= 3:
+                                _target_subsystem = parts[1]
+                    
+                    # 如果操作在子系统内部，检查 micro 框架是否已审批
+                    if _target_subsystem:
+                        _mf_lock_var = f'uFWLock_{_target_subsystem}'  # [P1-4 FIX] 统一命名: mfLock_ → uFWLock_
+                        _micro_approved = False
+                        try:
+                            if _matlab_engine:
+                                _micro_approved = _matlab_engine.eval(_mf_lock_var)
+                        except:
+                            _micro_approved = False
+                        
+                        if not _micro_approved:
+                            # 检查 Bridge workflow state
+                            if _fw_state.phase_step in ('micro_proposed', 'micro_reviewed'):
+                                return {
+                                    "status": "gate_blocked",
+                                    "blocked": True,  # [Bug #5 FIX]
+                                    "reason": f"Subsystem '{_target_subsystem}' micro framework not approved. Complete design→review→approve before building inside.",  # [Bug #5 FIX]
+                                    "command": command,  # [Bug #5 FIX]
+                                    "gate": "Micro_Gate",  # [Bug #5 FIX]
+                                    "message": (
+                                        f"MICRO_FRAMEWORK_REQUIRED: Subsystem '{_target_subsystem}' micro framework not approved!\n"
+                                        f"Before building inside subsystem '{_target_subsystem}', complete:\n"
+                                        f"1. sl_micro_design(subsystemName='{_target_subsystem}', taskDescription='...')\n"
+                                        f"2. sl_micro_review(subsystemName='{_target_subsystem}')\n"
+                                        f"3. sl_micro_approve(subsystemName='{_target_subsystem}')"
+                                    ),
+                                    "requiredAction": "sl_micro_approve",
+                                    "workflowPhase": "subsystem_iteration",
+                                    "targetSubsystem": _target_subsystem,
+                                    "microFrameworkApproved": False,
+                                    "hint": (
+                                        f"1. sl_micro_design(subsystemName='{_target_subsystem}', taskDescription='...')\n"
+                                        f"2. sl_micro_review(subsystemName='{_target_subsystem}')\n"
+                                        f"3. sl_micro_approve(subsystemName='{_target_subsystem}')"
+                                    ),
+                                }
+            except Exception as _micro_gate_ex:
+                # [P0-2 FIX] 精确异常捕获 + 日志记录，替代 bare except:pass
+                import logging
+                _micro_gate_logger = logging.getLogger('matlab_bridge')
+                _micro_gate_logger.warning(f"Micro gate check failed for {_fw_mn}: {_micro_gate_ex}")
+                # micro 门控异常时不过度阻断，记录警告后放行
+                # 原因: micro 门控是二级门控，不应因内部异常完全阻塞大框架已审批的构建流程
+        # ===== 子系统级 micro 门控结束 =====
+
+        # ===== [v11.3] 模型完成门控 (Gate 4) =====
+        # sl_sim_run / sl_sim_batch 执行前强制检查 sl_model_complete 是否已通过
+        # 未通过 -> gate_blocked，AI 无法跳过
+        _COMPLETION_GATED_COMMANDS = ['sl_sim_run', 'sl_sim_batch']
+        if command in _COMPLETION_GATED_COMMANDS:
+            _comp_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            if not _comp_mn:
+                # Try extracting from other params
+                _comp_mn = params.get('modelName', params.get('model_name', ''))
+            if _comp_mn:
+                try:
+                    # Check if model_completed flag exists in MATLAB workspace
+                    _comp_flag_var = f'model_completed_{_comp_mn}'
+                    _comp_ok = False
+                    try:
+                        if _matlab_engine:
+                            _comp_exists = _matlab_engine.eval(
+                                f"evalin('base', 'exist(''{_comp_flag_var}'', ''var'')')", nargout=1)
+                            if _comp_exists == 1:
+                                _comp_val = _matlab_engine.eval(
+                                    f"evalin('base', '{_comp_flag_var}')", nargout=1)
+                                _comp_ok = (_comp_val == True)
+                    except Exception:
+                        pass
+
+                    if not _comp_ok:
+                        # Also check Python-side state
+                        try:
+                            _comp_state = _get_workflow_state(_comp_mn)
+                            if _comp_state.model_completed:
+                                _comp_ok = True
+                        except Exception:
+                            pass
+
+                    if not _comp_ok:
+                        return {
+                            "status": "gate_blocked",
+                            "blocked": True,
+                            "reason": f"Model completion gate not passed for '{_comp_mn}'. sl_model_complete must pass before simulation.",
+                            "command": command,
+                            "gate": "Gate_4",
+                            "message": (
+                                f"COMPLETION_GATE: Model '{_comp_mn}' has not passed completion checks.\n"
+                                f"Before running simulation, you must:\n"
+                                f"1. Call sl_get_model_issues('{_comp_mn}') to see all unconnected ports\n"
+                                f"2. Fix all unconnected ports (add_line or Goto/From)\n"
+                                f"3. Call sl_model_complete('{_comp_mn}', 'action', 'complete') to pass the gate\n"
+                                f"4. Then retry sl_sim_run"
+                            ),
+                            "requiredAction": "sl_model_complete",
+                            "workflowPhase": "simulation",
+                            "modelCompleted": False,
+                            "hint": (
+                                f"1. issues = sl_get_model_issues('{_comp_mn}')\n"
+                                f"2. Fix each unconnected port shown in issues.unconnectedBlocks\n"
+                                f"3. complete = sl_model_complete('{_comp_mn}', 'action', 'complete')\n"
+                                f"4. If complete.canProceed is true, proceed to sl_sim_run"
+                            ),
+                        }
+                except Exception as _comp_gate_ex:
+                    import logging
+                    _comp_gate_logger = logging.getLogger('matlab_bridge')
+                    _comp_gate_logger.warning(
+                        f"Completion gate check failed for {_comp_mn}: {_comp_gate_ex}")
+                    # fail-closed: deny simulation on gate error
+                    return {
+                        "status": "gate_error",
+                        "blocked": True,
+                        "reason": f"Completion gate check failed: {_comp_gate_ex}",
+                        "command": command,
+                        "gate": "Gate_4",
+                        "message": f"Completion gate check failed for model '{_comp_mn}': {_comp_gate_ex}. Simulation denied for safety.",
+                        "requiredAction": "sl_model_complete",
+                    }
+        # ===== 模型完成门控 (Gate 4) 结束 =====
+
+        # ===== [v11.4] 框架设计完整性门控 (Gate 5) =====
+        if command == 'sl_framework_approve':
+            _g5_mn = fixed_params.get('modelName', fixed_params.get('model_name', params.get('modelName', '')))
+            macro_fw = fixed_params.get('macroFramework', params.get('macroFramework', None))
+            if macro_fw and _g5_mn:
+                # [v11.4.1 FIX] Warm up engine before gate check
+                # Previously: _matlab_engine was None here, so Gate_5 silently skipped
+                # Fix: call get_engine() to lazy-init, then _call_sl_function uses it
+                _g5_eng = get_engine()
+                if _g5_eng is not None:
+                    _g5_eng.workspace['__g5_fw'] = macro_fw
+                    pc_result = _call_sl_function('sl_check_port_completeness', {'_pos_1_special': '__g5_fw'})
+                    sc_result = _call_sl_function('sl_check_signal_closure', {'_pos_1_special': '__g5_fw'})
+                    _g5_eng.eval("clear('__g5_fw')", nargout=0)
+                    if not pc_result.get('passed', True) or not sc_result.get('passed', True):
+                        return {
+                            "status": "gate_blocked", "blocked": True,
+                            "reason": "Framework design integrity checks failed",
+                            "command": command, "gate": "Gate_5",
+                            "message": "DESIGN_INTEGRITY_FAILED. Fix signalFlow/gotoFromPlan completeness.",
+                            "details": {
+                                "port_completeness": pc_result,
+                                "signal_closure": sc_result,
+                            }
+                        }
+                else:
+                    # Engine unavailable — log warning but allow through
+                    import logging
+                    logging.getLogger('matlab_bridge').warning(
+                        f"Gate_5 skipped: MATLAB Engine unavailable for model '{_g5_mn}'")
+        # ===== 框架设计完整性门控 (Gate 5) 结束 =====
 
         # [P1-5 FIX] sl_new_system 工作流清理移到 _SL_FUNC_MAP 检查之前
         # 因为 sl_new_system 目前不在 _SL_FUNC_MAP 中，如果放在后面会被跳过
@@ -4758,9 +5882,57 @@ def _handle_sl_command(command, params):
             else:
                 result = {"status": "error", "message": "modelName required for design action"}
             return result
-        # ===== 特殊 action 处理结束 =====
 
-        # 6. 调用
+        # ===== [v11.0] sl_framework_* 特殊 action 处理 =====
+        if special_action in ('__fw_approve__', '__fw_review__'):
+            _fw_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            if _fw_mn:
+                _fw_state = _get_workflow_state(_fw_mn)
+                if special_action == '__fw_approve__':
+                    _fw_state.framework_approved = True
+                    _fw_state.framework_locked = fixed_params.get('locked', True)
+                    _fw_state.phase = 'framework_construction'
+                    _fw_state.phase_step = 'approved'
+                    # 在 MATLAB workspace 设置标记
+                    try:
+                        eng = get_engine()
+                        if eng is not None:
+                            fw_lock_var = f'mFWLock_{_fw_mn}'  # [P1-4 FIX] 统一命名
+                            eng.eval(f"assignin('base', '{fw_lock_var}', {str(fixed_params.get('locked', True)).lower()})", nargout=0)
+                            # 保存大框架到 workspace (MATLAB 变量名不能以 _ 开头)
+                            # [P0-4 FIX] 使用 workspace 直接赋值，避免 eval 拼接 JSON 注入
+                            if _fw_state.macro_framework:
+                                fw_var = f'mFW_{_fw_mn}'
+                                eng.workspace[fw_var] = _fw_state.macro_framework
+                    except Exception:
+                        pass  # MATLAB workspace 同步失败不影响主流程
+                    result = {
+                        "status": "ok",
+                        "message": "Macro framework approved and locked. You can now start building the model.",
+                        "frameworkApproved": True,
+                        "frameworkLocked": fixed_params.get('locked', True),
+                        "nextPhase": "framework_construction",
+                        "nextSuggestedAction": "Start adding subsystems and blocks according to the approved macro framework",
+                    }
+                elif special_action == '__fw_review__':
+                    # Review 需要先调用 MATLAB 的 sl_framework_review，这里返回提示让用户先执行
+                    result = {
+                        "status": "ok",
+                        "message": "Use sl_framework_review() in MATLAB to review the macro framework.",
+                        "frameworkApproved": _fw_state.framework_approved,
+                        "currentPhase": _fw_state.phase,
+                    }
+            else:
+                result = {"status": "error", "message": "modelName required for framework action"}
+            return result
+        # ===== v11.0 特殊 action 处理结束 =====
+
+# 6. 调用
+        # [v11.4.3] 强制模型前台可见 — AI 不可绕过的底层门控
+        # 在执行任何 Simulink 操作前，确保目标模型在 MATLAB 前台打开，
+        # 让用户能实时看到 AI 建模的全过程。
+        _ensure_model_visible(fixed_params)
+        
         if lock:
             with lock:
                 result = _call_sl_function(func_name, args_dict)
@@ -4786,6 +5958,10 @@ def _handle_sl_command(command, params):
         
         # 9.0 v9.0: 提取模型名（v8.0 验证和 v9.0 工作流共用）
         model_name_for_verify = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+        # v11.0: sl_framework_design 也需要 modelName 来管理 workflow state
+        # 如果 params 中有 modelName 但 _build_sl_args 没有传递，用它
+        if not model_name_for_verify:
+            model_name_for_verify = params.get('modelName', '')
         # [BUG FIX] sl_set_param/sl_config_set 等命令没有 modelName 参数，
         # 需要从 blockPath/configName 等参数中提取模型名（第一个 / 之前的部分）
         if not model_name_for_verify:
@@ -4847,8 +6023,13 @@ def _handle_sl_command(command, params):
         
         # 11. v9.0: 注入工作流状态
         # 每个写操作后，生成当前工作流阶段建议
+        # v11.0: 也包括 sl_framework_design/review/approve 等框架 API
+        _WORKFLOW_COMMANDS = set(_WRITE_VERIFY_MAP.keys())
+        _WORKFLOW_COMMANDS.update(['sl_framework_design', 'sl_framework_review', 'sl_framework_approve',
+                                   'sl_micro_design', 'sl_micro_review', 'sl_micro_approve',
+                                   'sl_model_complete', 'sl_get_model_issues'])  # v11.3
         if isinstance(result, dict) and result.get('status') != 'error':
-            if model_name_for_verify and command in _WRITE_VERIFY_MAP:
+            if model_name_for_verify and command in _WORKFLOW_COMMANDS:
                 try:
                     wf_state = _generate_workflow_state(
                         model_name_for_verify, command, fixed_params, result
@@ -5596,6 +6777,10 @@ def handle_command(cmd_data):
     # --- 基础操作 ---
     if action == 'start':
         try:
+            # [v11.4.2] Detect mode first (runs compatibility test in thread),
+            # then wait for test engine to fully quit before starting persistent engine.
+            _detect_connection_mode()
+            import time; time.sleep(2)
             eng = get_engine()
             if eng is not None:
                 return {"status": "ok", "message": "MATLAB Engine ready", "mode": _connection_mode or "unknown"}
@@ -5604,11 +6789,14 @@ def handle_command(cmd_data):
         except Exception as e:
             return {"status": "error", "message": f"MATLAB Engine start failed: {str(e)}"}
     elif action == 'stop':
-        global _matlab_engine
+        global _matlab_engine, _sl_toolbox_initialized  # [Bug #7 FIX]
         if _matlab_engine is not None:
             try: _matlab_engine.quit()
             except: pass
             _matlab_engine = None
+        # [Bug #7 FIX] Engine 停止时重置 sl_toolbox 初始化标记
+        # 这样下次 Engine 启动时会自动重新 addpath
+        _sl_toolbox_initialized = False
         # v9.0 风险5缓解: Engine 停止时清空所有工作流追踪状态
         _clear_all_workflow_states()
         return {"status": "ok", "message": "MATLAB Engine stopped"}
@@ -5616,6 +6804,15 @@ def handle_command(cmd_data):
         return check_installation()
     elif action == 'set_project':
         return set_project_dir(params.get('dir', ''))
+    elif action == 'set_project_from_file':
+        # v11.4.4: 从文件读取 workspace 路径，绕过 HTTP JSON 中文编码问题
+        filepath = params.get('file', '')
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                dir_path = f.read().strip()
+            return set_project_dir(dir_path)
+        except Exception as e:
+            return {"status": "error", "message": f"读取设置文件失败: {str(e)}"}
     elif action == 'scan_project':
         return scan_project_files(params.get('dir'))
     elif action == 'read_m_file':
@@ -5643,6 +6840,11 @@ def handle_command(cmd_data):
     
     # --- Simulink 操作（非 sl_toolbox） ---
     elif action == 'create_simulink':
+        # v11.4.4: 门控 — 未设置 workspace 时阻止模型创建
+        if not _project_dir:
+            return {"status": "gate_blocked", "blocked": True, "gate": "PROJECT_DIR_REQUIRED",
+                    "message": "项目目录未设置！请先调用 POST /api/matlab/setup",
+                    "requiredAction": "setup_project_dir"}
         model_name = params.get('model_name', params.get('modelName', ''))
         model_path = params.get('model_path', params.get('modelPath'))
         # v9.0 风险5缓解: 新建模型时清理旧追踪状态，避免残留
@@ -5652,7 +6854,10 @@ def handle_command(cmd_data):
             if eng is None:
                 return {"status": "error", "message": "MATLAB Engine not available"}
             eng.eval(f"new_system('{model_name}'); open_system('{model_name}');", nargout=0)
-            return {"status": "ok", "message": f"Model '{model_name}' created", "modelName": model_name}
+            # v11.4.4: 保存模型到项目目录
+            save_path = model_path or os.path.join(_project_dir, f"{model_name}.slx").replace('\\', '/')
+            eng.save_system(model_name, save_path, nargout=0)
+            return {"status": "ok", "message": f"Model '{model_name}' created", "modelName": model_name, "modelPath": save_path}
         except Exception as e:
             return {"status": "error", "message": f"Failed to create model: {str(e)}"}
     elif action == 'open_simulink':

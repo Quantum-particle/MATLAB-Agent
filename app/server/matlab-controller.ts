@@ -259,9 +259,9 @@ function getMATLABBin(): string {
 /** 获取 Python Bridge 脚本路径 */
 const BRIDGE_SCRIPT = path.join(__dirname, '..', 'matlab-bridge', 'matlab_bridge.py');
 
-/** 获取默认工作空间（当前工作区目录） */
+/** 获取默认工作空间（v11.4.4: 仅读取环境变量，不 fallback 到 cwd） */
 function getDefaultWorkspace(): string {
-  return process.env.MATLAB_WORKSPACE || process.cwd();
+  return process.env.MATLAB_WORKSPACE || "";
 }
 
 // 超时配置（毫秒）
@@ -426,10 +426,15 @@ function ensureBridgeProcess(): void {
   const currentMatlabRoot = getMATLABRoot();
   console.log(`[MATLAB Bridge] Starting persistent bridge process...`);
   console.log(`[MATLAB Bridge] MATLAB_ROOT: ${currentMatlabRoot}`);
-  
+
+  // [v11.4.1 FIX] windowsHide + detached to isolate bridge from CMD console
+  // start /B in CMD attaches the process to the parent console, which can
+  // cause MATLAB's libmwfl.dll to fail during DLL initialization.
+  // Detaching the bridge prevents console state propagation to MATLAB.exe.
   bridgeProcess = spawn('python', [BRIDGE_SCRIPT, '--server'], {
     cwd: path.dirname(BRIDGE_SCRIPT),
     stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
     env: { 
       ...process.env, 
       PYTHONIOENCODING: 'utf-8', 
@@ -718,6 +723,13 @@ export async function setProjectDir(dirPath: string): Promise<MATLABResult> {
   return executeBridgeCommand({ action: 'set_project', params: { dir: dirPath } });
 }
 
+/** v11.4.4: 从文件读取 workspace 路径并设置（绕过 HTTP JSON 中文编码问题） */
+export async function setProjectDirFromFile(filePath: string): Promise<MATLABResult> {
+  const dirPath = fs.readFileSync(filePath, "utf-8").trim();
+  _cachedProjectDir = dirPath;  // 缓存到 Node.js 侧
+  return executeBridgeCommand({ action: 'set_project_from_file', params: { file: filePath } });
+}
+
 /** 获取当前项目目录（Node.js 侧缓存） */
 export function getProjectDir(): string | null {
   return _cachedProjectDir;
@@ -919,9 +931,9 @@ export async function quickstartMATLAB(options: {
     steps.push(`MATLAB 启动异常: ${err.message}`);
   }
   
-  // Step 3: 设置项目目录
-  let projectDir = options.projectDir || _cachedProjectDir || getDefaultWorkspace();
-  if (projectDir) {
+  // Step 3: 设置项目目录（仅当用户通过 options.projectDir 显式提供）
+  let projectDir = options.projectDir || _cachedProjectDir || "";
+  if (projectDir && projectDir !== "") {
     try {
       const setResult = await setProjectDir(projectDir);
       steps.push(`项目目录: ${setResult.project_dir || projectDir} (${setResult.connection_mode || 'unknown'})`);
@@ -929,6 +941,8 @@ export async function quickstartMATLAB(options: {
     } catch (err: any) {
       steps.push(`设置项目目录失败: ${err.message}`);
     }
+  } else {
+    steps.push(`项目目录未设置，启动后需调用 POST /api/matlab/setup`);
   }
   
   return { 
@@ -1098,6 +1112,55 @@ export async function simulinkSelfImprove(params: Record<string, any>): Promise<
 export async function simulinkModelDesign(params: Record<string, any>): Promise<MATLABResult> {
   return executeBridgeCommand({ action: 'sl_model_design', params });
 }
+
+/** v11.0: 大框架设计 — 获取宏观层面的模型架构 */
+export async function simulinkFrameworkDesign(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_framework_design', params });
+}
+
+/** v11.0: 大框架自检 — AI 自检大框架的5项检查 */
+export async function simulinkFrameworkReview(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_framework_review', params });
+}
+
+/** v11.0: 大框架审批/锁定 — 审批并锁定大框架 */
+export async function simulinkFrameworkApprove(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_framework_approve', params });
+}
+
+// ============= v11.0 Phase 2: 子系统小框架 API =============
+
+/** v11.0 Phase 2: 子系统小框架设计 — 获取子系统内部的物理方程和模块规划 */
+export async function simulinkMicroDesign(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_micro_design', params });
+}
+
+/** v11.0 Phase 2: 子系统小框架自检 — AI 自检子系统小框架的4项检查 */
+export async function simulinkMicroReview(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_micro_review', params });
+}
+
+/** v11.0 Phase 2: 子系统小框架审批/锁定 — 审批并锁定子系统小框架 */
+export async function simulinkMicroApprove(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_micro_approve', params });
+}
+
+/** v11.0 Phase 3: 大框架锁定后变更申请 — 申请结构性修改 */
+export async function simulinkFrameworkModify(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_framework_modify', params });
+}
+
+/** v11.0 Phase 3: 批准大框架变更 — 批准 pending 的变更 */
+export async function simulinkFrameworkModifyApprove(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_framework_modify_approve', params });
+}
+
+/** v11.0 Phase 3: 拒绝大框架变更 — 拒绝 pending 的变更 */
+export async function simulinkFrameworkModifyReject(params: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_framework_modify_reject', params });
+}
+
+// ============= v8.0: 结构化状态报告 =============
 
 /** v8.0: 结构化状态报告 — 获取模型完整状态快照(含端口坐标) */
 export async function simulinkModelStatus(params: Record<string, any>): Promise<MATLABResult> {

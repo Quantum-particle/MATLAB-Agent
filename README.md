@@ -1,4 +1,4 @@
-# MATLAB-Agent v10.2.1
+# MATLAB-Agent v11.5
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
@@ -254,6 +254,11 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 
 | 版本 | 日期 | 核心改动 |
 |------|------|---------|
+| v11.5 | 2026-04-30 | **Scene 2 开发计划**：双场景门控架构（Gate_S0 场景自动判断+用户确认）、已有模型修改工作流（加载→理解→沙盒设计→审批→搭建→仿真）、双通道修改（沙盒新增AI审批+已有修改用户确认）、8 个新 .m 函数+4 个新 Bridge Gate+9 个新 REST 端点 |
+| v11.4 | 2026-04-29 | **Gate_5 门控体系**：sl_check_port_completeness / sl_check_signal_closure 设计阶段检查、sl_framework_verify_built 设计-模型对照、Engine 版本自动检测和修复、v11.4.1 Engine 暖机修复、setup 工程级门控(v11.4.4) |
+| v11.3 | 2026-04-29 | **建模流程强制门控**：Gate_4 模型完成门控（unconnected=0）、sl_model_complete 12项验证、Goto/From 配对检查、孤立模块检测、sl_get_model_issues 精细诊断 |
+| v11.2 | 2026-04-29 | **架构翻转**：sl_framework_design/sl_micro_design 从计算引擎改为 Prompt 组装器，AI 拥有完全设计自由度、无预定义模板 |
+| v11.1 | 2026-04-29 | **v11.0 大框架三层迭代循环**：sl_framework_design→review→approve (Gate_2/3)、sl_micro_design→review→approve (Micro Gate)、sl_framework_modify 框架变更审批 |
 | v11.0 | 2026-04-21 | **v10.1 强制文件隔离**：slprj/隔离到 .matlab_agent_tmp/、Bridge _run_code_via_diary 隔离、createMFile routeFilePathSync；**API Guide v15.0**：sl_model_status_snapshot、_verification/_auto_layout/_workflow 字段说明、35+ 章节；**v10.0 代码审查**：18 项修复 51/51 PASS |
 | v8.0 | 2026-04-18 | Simulink 建模底层重构（中间件架构+反模式防护+反馈闭环）、提示词三层架构 |
 | v7.0 | 2026-04-18 | Layer 5 源码级自我改进、动态规则引擎、patch_source 源码补丁、Python Bridge + Node.js REST 全量端点 |

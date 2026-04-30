@@ -2,6 +2,8 @@ import express from "express";
 import { query, unstable_v2_createSession, unstable_v2_authenticate, PermissionResult, CanUseTool } from "@tencent-ai/agent-sdk";
 import { v4 as uuidv4 } from "uuid";
 import path from "path";
+import fs from "fs";
+import os from "os";
 import { fileURLToPath } from "url";
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -265,6 +267,25 @@ app.post("/api/matlab/simulink/run", async (req, res) => {
 });
 
 // ============= v3.0 新增 API =============
+
+// v11.4.4: 项目环境初始化（AI 不可绕过的工作流门控）
+// 通过文件传递 workspace 路径，避免 HTTP JSON 中文编码问题
+app.post("/api/matlab/setup", async (req, res) => {
+  const { workspace } = req.body;
+  if (!workspace) {
+    return res.status(400).json({ error: "请提供 workspace 路径", 
+      example: { workspace: "D:/MATLAB_Workspace/MATLAB_Agent开发" } });
+  }
+  try {
+    const setupFile = path.join(os.tmpdir(), "matlab_agent_setup.txt");
+    fs.writeFileSync(setupFile, workspace, "utf-8");
+    const result = await matlab.setProjectDirFromFile(setupFile);
+    try { fs.unlinkSync(setupFile); } catch {}
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
 
 // 设置项目工作目录
 app.post("/api/matlab/project/set", async (req, res) => {
@@ -962,6 +983,127 @@ app.post("/api/matlab/simulink/self_improve", async (req, res) => {
 app.post("/api/matlab/simulink/model_design", async (req, res) => {
   try {
     const result = await matlab.simulinkModelDesign(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v11.0: 大框架设计 API
+app.post("/api/matlab/simulink/framework_design", async (req, res) => {
+  try {
+    const result = await matlab.simulinkFrameworkDesign(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v11.0: 大框架自检 API
+app.post("/api/matlab/simulink/framework_review", async (req, res) => {
+  try {
+    const result = await matlab.simulinkFrameworkReview(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v11.0: 大框架审批/锁定 API
+app.post("/api/matlab/simulink/framework_approve", async (req, res) => {
+  try {
+    const result = await matlab.simulinkFrameworkApprove(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// ============= v11.0 Phase 2: 子系统小框架 API =============
+
+// v11.0 Phase 2: 子系统小框架设计 API
+app.post("/api/matlab/simulink/micro_design", async (req, res) => {
+  try {
+    const result = await matlab.simulinkMicroDesign(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v11.0 Phase 2: 子系统小框架自检 API
+app.post("/api/matlab/simulink/micro_review", async (req, res) => {
+  try {
+    const result = await matlab.simulinkMicroReview(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v11.0 Phase 2: 子系统小框架审批/锁定 API
+app.post("/api/matlab/simulink/micro_approve", async (req, res) => {
+  try {
+    const result = await matlab.simulinkMicroApprove(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// ============= v11.0 Phase 3: 大框架锁定后变更审批 API =============
+
+// v11.0 Phase 3: 大框架变更申请
+app.post("/api/matlab/simulink/framework_modify", async (req, res) => {
+  try {
+    // [P1-7 FIX] 输入验证：modelName 和 action 为必需参数
+    const { modelName, action } = req.body || {};
+    if (!modelName || typeof modelName !== 'string' || !modelName.trim()) {
+      res.status(400).json({ status: "error", message: "modelName is required and must be a non-empty string" });
+      return;
+    }
+    if (!action || typeof action !== 'string' || !action.trim()) {
+      res.status(400).json({ status: "error", message: "action is required and must be one of: addSubsystem, removeSubsystem, changeSignalFlow, changePhysics, renameSubsystem" });
+      return;
+    }
+    const validActions = ['addSubsystem', 'removeSubsystem', 'changeSignalFlow', 'changePhysics', 'renameSubsystem'];
+    if (!validActions.includes(action)) {
+      res.status(400).json({ status: "error", message: `Invalid action '${action}'. Valid: ${validActions.join(', ')}` });
+      return;
+    }
+    const result = await matlab.simulinkFrameworkModify(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v11.0 Phase 3: 批准大框架变更
+app.post("/api/matlab/simulink/framework_modify_approve", async (req, res) => {
+  try {
+    // [P1-7 FIX] 输入验证
+    const { modelName } = req.body || {};
+    if (!modelName || typeof modelName !== 'string' || !modelName.trim()) {
+      res.status(400).json({ status: "error", message: "modelName is required and must be a non-empty string" });
+      return;
+    }
+    const result = await matlab.simulinkFrameworkModifyApprove(req.body);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// v11.0 Phase 3: 拒绝大框架变更
+app.post("/api/matlab/simulink/framework_modify_reject", async (req, res) => {
+  try {
+    // [P1-7 FIX] 输入验证
+    const { modelName } = req.body || {};
+    if (!modelName || typeof modelName !== 'string' || !modelName.trim()) {
+      res.status(400).json({ status: "error", message: "modelName is required and must be a non-empty string" });
+      return;
+    }
+    const result = await matlab.simulinkFrameworkModifyReject(req.body);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });

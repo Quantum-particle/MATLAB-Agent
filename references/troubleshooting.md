@@ -48,10 +48,10 @@
 
 **解决方案**: 启动前必须检查并安装：
 ```bash
-cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\app"
-if not exist "node_modules" npm install --production
+cd app
+if [ ! -d "node_modules" ]; then npm install --production; fi
 ```
-一键脚本 `start.bat` 和 `ensure-running.bat` 已自动处理此步骤。
+一键脚本 `ensure-running.sh` 已自动处理此步骤。
 
 ### 0.2 Windows 下 npx 不是可执行文件
 
@@ -127,7 +127,7 @@ if ($old) {
 - 杀掉进程后 **不要立即启动新服务**！必须等待 2-3 秒让操作系统完全释放端口
 - Windows 的 TIME_WAIT 状态默认持续 2 分钟，但 LISTENING 端口杀掉进程后通常 1-3 秒即可释放
 - 如果多次杀进程后端口仍被占用，可能是系统级 TIME_WAIT，等待 30 秒后重试
-- **一键脚本已自动处理**: `start.bat` 和 `ensure-running.bat` 会自动杀进程 → 等待端口释放 → 确认干净 → 再启动
+- **一键脚本已自动处理**: `ensure-running.sh` 会自动杀进程 → 等待端口释放 → 确认干净 → 再启动
 
 ### 0.5 含中文/空格/括号的路径问题
 
@@ -152,18 +152,25 @@ if ($old) {
 ### 0.7 AI Agent 标准启动流程
 
 ```
-0. 🔴 端口清理（最优先！启动前必须确保环境干净！）:
-   - ensure-running.bat 已自动处理（杀进程 → 等端口释放 → 确认干净 → 再启动）
-   - 手动: netstat -ano | findstr ":3000" | findstr "LISTENING" → taskkill /F /PID <pid> → 等2-3秒
-1. 检查服务是否已运行: powershell -Command "try { Invoke-RestMethod -Uri 'http://localhost:3000/api/health' -TimeoutSec 5 } catch { Write-Host 'FAIL' }"
-2. 如已运行 → 直接使用 quickstart API
-3. 如未运行 → 执行: cmd /c "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
-4. 等待 ensure-running 返回退出码 0
-5. 使用 quickstart API: POST /api/matlab/quickstart
-   （必须用 ConvertTo-Json 变量构造法）
-   $b = @{matlabRoot='D:\Program Files(x86)\MATLAB2023b';projectDir='D:\your_project'} | ConvertTo-Json -Compress
-   Invoke-RestMethod -Uri 'http://localhost:3000/api/matlab/quickstart' -Method POST -ContentType 'application/json' -Body ([System.Text.Encoding]::UTF8.GetBytes($b))
+0. 🔴 启动前清理: ensure-running.sh 自动处理（杀进程 → 等端口释放 → 再启动）
+1. 检查: curl -s http://localhost:3000/api/health
+2. 已运行 → 跳过
+3. 未运行 → bash ensure-running.sh  （唯一！Git Bash 环境）
+4. Engine 20-30s 就绪，health → "ready":true
 ```
+
+### 0.8 🔴 CMD 启动全面禁止 (v11.4.2)
+
+> **CMD `start /B`、`start /MIN`、PowerShell Start-Process — 全部无法启动 Engine！**
+
+**唯一可用方式**: Git Bash 原生 `bash ensure-running.sh`。
+
+**根因**: MATLAB Engine 的 "Simple server"（进程间通信）在 CMD 派生进程中无法创建。所有 Windows 控制台继承机制（`start /B` 共享控制台、`Start-Process`、`cmd /c` 包装）都无法绕过此限制。Git Bash 的 `&` 后台运行不继承控制台 → 唯一可行方案。
+
+**不再提供的启动文件**:
+- ~~`ensure-running.bat`~~ (已删除)
+- ~~`start.bat`~~ (改为引导提示)
+- **`ensure-running.sh`** ← 唯一保留
 
 ---
 
@@ -477,7 +484,7 @@ Skill 打包时排除了 `node_modules`。
 ### 解决方案
 在 `app/` 目录下运行 `npm install`，或用 Windows Junction 链接共享已有 node_modules：
 ```powershell
-cmd /c mklink /J "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\app\node_modules" "<项目目录>\node_modules"
+cmd /c mklink /J "<skill_root>\app\node_modules" "<项目目录>\node_modules"
 ```
 Junction 不需要管理员权限。
 

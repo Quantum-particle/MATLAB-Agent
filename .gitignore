@@ -66,3 +66,16 @@ _desensitize.ps1
 
 # Test design JSON (local testing artifact)
 app/test_design.json
+
+# TypeScript build artifacts (never push compiled JS)
+app/server/*.js
+app/server/*.d.ts
+app/*.tsbuildinfo
+app/vite.config.js
+app/vite.config.d.ts
+
+# Runtime files
+app/.matlab_agent_pid
+
+# MATLAB inter-stage backup files
+*.bak2

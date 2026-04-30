@@ -1,172 +1,31 @@
 # sl_toolbox API 使用说明书
 
-> **版本**: v16.0 (v10.1 物理建模设计+智能参数转换)  
-> **更新日期**: 2026-04-21  
+> **版本**: v18.0 (v11.3 建模流程强制门控)  
+> **更新日期**: 2026-04-29  
 > **适用范围**: 大模型通过 @skill://matlab-agent 调用 Simulink 建模函数时，**必须先阅读本手册**，防止语法错误  
 > **同步规则**: 任何 .m 函数的 API 签名或返回结构变更后，**必须同步更新本手册对应条目**
 
 ---
 
-## AI 大模型调用 matlab-agent 工作流架构图
+## 架构声明
 
-> **这是 AI 大模型调用 @skill://matlab-agent 的标准工作流。每次建模任务都应遵循此流程！**
+v11.2+ sl_framework_design/sl_micro_design 是纯 Prompt 组装器，AI 拥有完全设计自由度。
+详见 SKILL.md 用户设计理念。
 
-```
-[AI 大模型]
-    |
-    | Step 0: 加载提示词（获取专家知识 + 建模指导）
-    |-----------> GET /simulink/prompt/list          列出可用场景和参考主题
-    |-----------> GET /simulink/prompt/scenario       获取场景提示词（核心层+场景层）
-    |-----------> GET /simulink/prompt/reference      获取参考层技术文档
-    |
-    | Step 0.5: 物理建模设计（v10.1 新增，代码强制门控）
-    |-----------> POST /simulink/model_design         物理建模设计（domain/approach/detailLevel）
-    |            返回: design.researchNeeded / design.blockMap / design.paramMap
-    |            ↳ 若 researchNeeded=true → 执行组合拳（网络搜索/用户确认）
-    |            ↳ 确认后: POST /simulink/model_design(action='approve')
-    |
-    | Step 1: 准备（初始化 + 查看最佳实践 + 创建模型）
-    |-----------> POST /matlab/run  sl_init()         初始化 sl_toolbox
-    |-----------> POST /simulink/best_practices       查看8大反模式+现代API
-    |-----------> POST /simulink/inspect              查看已有模型状态（修改模型时必做！）
-    |-----------> POST /matlab/simulink/create         创建新模型（新建模型时）
-    |
-    | Step 2: 构建（总线 + 子系统 + 模块 + 连线 + 参数）
-    |-----------> POST /simulink/bus_create            创建总线对象（数据接口定义）
-    |-----------> POST /simulink/bus_inspect           检查总线结构
-    |-----------> POST /simulink/subsystem_create      创建子系统（结构化建模）
-    |-----------> POST /simulink/add_block             添加模块（含反模式防护）
-    |-----------> POST /simulink/add_line              连线（自动选择最佳API）
-    |-----------> POST /simulink/set_param             设置参数（struct格式！）
-    |-----------> POST /simulink/block_position        模块位置（替代裸Position）
-    |-----------> POST /simulink/subsystem_mask        子系统Mask封装
-    |-----------> POST /simulink/signal_config         信号属性配置
-    |-----------> POST /simulink/signal_logging        信号记录（替代To Workspace）
-    |-----------> POST /simulink/callback_set          设置回调函数
-    |
-    | Step 3: 配置（Solver + 仿真参数）
-    |-----------> POST /simulink/config_get            获取当前模型配置
-    |-----------> POST /simulink/config_set            设置模型配置（struct格式！）
-    |
-    | Step 4: 验证 + 排版 + 快照
-    |-----------> POST /simulink/validate              模型健康检查（12项）
-    |-----------> POST /simulink/auto_layout           自动排版
-    |-----------> POST /simulink/snapshot              创建快照（重要操作前必做！）
-    |-----------> POST /simulink/find_blocks           查找模块（验证构建结果）
-    |-----------> GET  /simulink/model_status          [v8.0] 查看模型完整状态（含端口+连线诊断）
-    |
-    | Step 5: 仿真 + 结果 + 测试
-    |-----------> POST /simulink/sim_run               运行仿真（SimulationInput优先）
-    |-----------> POST /simulink/sim_results           提取仿真结果
-    |-----------> POST /simulink/sim_batch             批量仿真（参数扫描）
-    |-----------> POST /simulink/baseline_test         基线回归测试
-    |-----------> POST /simulink/profile_sim           仿真性能分析
-    |-----------> POST /simulink/profile_solver        求解器性能分析
-    |
-    | 出错恢复（任何步骤出错时）:
-    |-----------> POST /simulink/parse_error           精确错误解析+修复建议
-    |-----------> POST /simulink/snapshot(rollback)    回滚到之前快照
-    |-----------> POST /simulink/delete                安全删除模块
-    |-----------> POST /simulink/replace_block         替换模块
-    |-----------> POST /simulink/subsystem_expand      展开子系统
-    |
-    | 兜底: POST /matlab/run  { code: "..." }         直接写MATLAB代码（中间件不够用时）
-```
+## 工作流速览
 
-### 工作流 6 步法速记
+| 步骤 | 核心 API | 强制门控 |
+|------|---------|----------|
+| 0.5 框架 | sl_framework_design/review/approve | Gate_5: port/signal 检查 |
+| 1 准备 | sl_init, inspect, best_practices, create | — |
+| 2 构建 | add_block, add_line, set_param, bus_create... | Gate_2: 框架审批后 |
+| 3 配置 | config_get, config_set | — |
+| 4 验证 | validate, auto_layout, snapshot, model_status | Gate_4 check |
+| 5 仿真 | sl_sim_run, sl_sim_batch | Gate_4: sl_model_complete |
 
-| 步骤 | 动作 | 核心API | 必做程度 |
-|------|------|---------|---------|
-| Step 0 | 加载提示词 | prompt/list, prompt/scenario, prompt/reference | **每次任务首步！** |
-| **Step 0.5** | **物理建模设计** | **sl_model_design / sl_model_design(action='approve')** | **新建模型必做！** |
-| Step 1 | 准备 | sl_init, best_practices, inspect, create | 必须 |
-| Step 2 | 构建 | bus_create, subsystem_create, add_block, add_line, set_param, ... | 必须 |
-| Step 3 | 配置 | config_get, config_set | 必须 |
-| Step 4 | 验证+排版 | validate, auto_layout, snapshot, find_blocks | **强烈推荐** |
-| Step 5 | 仿真+测试 | sim_run, sim_results, sim_batch, baseline_test, profile_* | 必须 |
+## API 弃用标注
 
----
-
-## API 弃用标注机制（v6.1 新增）
-
-> 本手册支持 API 弃用标注。当某个函数签名或参数用法被弃用时，会在对应条目中标注 `[DEPRECATED]`。
-
-**标注格式**:
-```
-[DEPRECATED since v10.0] 旧用法描述
-→ 替代方案：新用法描述
-```
-
-**弃用触发条件**:
-1. 函数签名变更（参数增删、类型变更）
-2. 返回结构字段重命名
-3. 更优 API 替代（如 connectBlocks 替代 add_line）
-
-**当前弃用标注**:
-（暂无 — 随着版本迭代，旧用法被弃用时会在此标注）
-
----
-
-## 目录（按建模工作流排序）
-
-> **重要**: 目录按 AI 大模型实际使用顺序排列，不是按开发顺序。请按此顺序阅读和调用！
-
-### Step 0: 提示词加载（首步必做）
-1. [提示词分层架构 (Part 8)](#1-提示词分层架构-part-8)
-
-### Step 1: 准备（初始化 + 最佳实践 + 模型检查）
-2. [初始化](#2-初始化)
-3. [最佳实践](#3-最佳实践)
-4. [模型检查](#4-模型检查)
-5. [模块注册表](#5-模块注册表)
-
-### Step 2: 构建（总线 + 子系统 + 模块 + 连线 + 参数）
-6. [总线创建](#6-总线创建)
-7. [总线检查](#7-总线检查)
-8. [子系统创建](#8-子系统创建)
-9. [子系统 Mask](#9-子系统-mask)
-10. [添加模块](#10-添加模块)
-11. [安全连线](#11-安全连线)
-12. [设置参数](#12-设置参数)
-13. [模块位置](#13-模块位置)
-14. [信号配置](#14-信号配置)
-15. [信号记录](#15-信号记录)
-16. [回调设置](#16-回调设置)
-
-### Step 3: 配置
-17. [模型配置](#17-模型配置)
-
-### Step 4: 验证+排版+快照
-18. [模型验证](#18-模型验证)
-19. [自动排版](#19-自动排版)
-20. [布局整理](#20-布局整理)
-21. [模型快照](#21-模型快照)
-22. [查找模块](#22-查找模块)
-
-### Step 5: 仿真+测试
-23. [仿真运行](#23-仿真运行)
-24. [仿真结果](#24-仿真结果)
-25. [批量仿真](#25-批量仿真)
-26. [基线测试](#26-基线测试)
-27. [仿真性能分析](#27-仿真性能分析)
-28. [求解器性能分析](#28-求解器性能分析)
-
-### 出错恢复
-29. [错误解析](#29-错误解析)
-30. [删除模块](#30-删除模块)
-31. [替换模块](#31-替换模块)
-32. [子系统展开](#32-子系统展开)
-
-### 基础设施与集成参考
-33. [JSON 编码](#33-json-编码)
-34. [通用约定](#34-通用约定)
-35. [Python Bridge 集成 (Part 6)](#35-python-bridge-集成-part-6)
-36. [智能体自我改进机制 (Part 10)](#36-智能体自我改进机制-part-10)
-37. [Node.js + Express 路由 (Part 7)](#37-node-js-express-路由-part-7)
-
----
-
-> **Step 0: 提示词加载**
+本手册支持 [DEPRECATED] 弃用标注。以下是完整 API 参考：
 
 ## 1. 提示词分层架构 (Part 8)
 
@@ -630,6 +489,12 @@ result = sl_add_block_safe('MyModel', 'simulink/Math Operations/Gain', 'destPath
 
 **⚠️ 子系统内使用说明**:
 - `modelName` 参数支持传入子系统路径（如 `'MyModel/Cart'`），函数会自动提取顶层模型名（`/` 之前的部分）用于 `bdIsLoaded`/`load_system` 检查
+
+**⚠️ 禁止使用含 `&` 的 Simulink 库路径**（Bug #4）:
+- ❌ **错误**: `sl_add_block_safe('MyModel', 'simulink/Ports & Subsystems/In1')` — `&` 在 Shell 中被解释为命令分隔符
+- ✅ **正确**: `sl_add_block_safe('MyModel', 'In1')` — 使用 block registry 简写，函数自动查注册表解析
+- ✅ **正确**: `sl_add_block_safe('MyModel', 'In1', 'destPath', 'MyModel/subsys/In1')`
+- **规则**: 永远使用 block registry 简写（第二个参数），不要手写完整 Simulink 库路径
 - 在子系统内添加模块时，`destPath` 应使用子系统内的相对路径（如 `'MyModel/Cart/Gain1'`），或留空让函数自动命名
 - 示例：`sl_add_block_safe('MyModel/Cart', 'Gain', 'destPath', 'MyModel/Cart/Kp', 'params', struct('Gain', '2.5'))`
 | `result.antiPatternWarnings` | cell{struct} | 反模式警告（如有），每项含 `.rule`, `.level`, `.message`, `.suggestion` |
@@ -2135,6 +2000,8 @@ sl_sim_run 使用 SimulationInput 模式时，仿真输出存储在 `Simulink.Si
 | v12.0 | 2026-04-18 | **工作流重构版**: (1) 新增 AI 大模型调用工作流架构图（5 步法），(2) 目录+正文 37 个章节全部按建模工作流重新排序（提示词为首步→准备→构建→配置→验证→仿真→出错恢复→基础设施），(3) Bridge sl_add_line 新增 srcSpec/dstSpec 支持，(4) sl_add_line_safe 新增 find_common_system 子系统内部连线修复 |
 | v12.1 | 2026-04-18 | **二阶倒立摆测试修复版**: (1) Bug#3 修复: sl_sim_run 仿真后自动将 SimulationOutput 关键变量 assignin 到 base workspace，(2) sl_sim_results 增强: 支持从 simOut 对象提取结果，(3) sl_add_block_safe/sl_add_line_safe 补充子系统内路径规则说明，(4) 新增 FAQ 节（Scope NumInputPorts、sim_batch 超时、子系统路径规则） |
 | v13.0 | 2026-04-18 | **Layer 5 源码级自我改进**: (1) 新增 sl_self_improve API（9 个 action），(2) _auto_fix_args 集成动态规则引擎（JSON 持久化），(3) patch_source 源码补丁（含安全保护+自动备份），(4) auto_learn 从 ERRORS.md 自动推断修复规则，(5) 五层自我改进体系（Layer 1~5） |
+| v17.0 | 2026-04-29 | **v11.2 架构翻转版**: (1) sl_framework_design.m 重写为纯 Prompt 组装器（671→~100行），(2) sl_micro_design.m 重写为纯 Prompt 组装器（522→~100行），(3) sl_framework_prompts.m 增强反约束声明+reasoning 字段，(4) sl_micro_prompts.m 增强 parentContext 支持，(5) Bridge _generate_workflow_state 适配新返回结构，(6) Bug#2 reviewResult 结构规范化(_normalize_review_result)，(7) Bug#5 Gate 拦截反馈标准化(blocked/reason/command/gate)，(8) Bug#7 Engine 重启后 sl_toolbox 路径自动添加，(9) Bug#8 工作流阶段检测增强(framework_construction→subsystem_iteration 自动转换)，(10) Bug#4 禁止使用含 & 的完整库路径 |
+| v18.0 | 2026-04-29 | **v11.3 建模流程强制门控**: (1) 新增 sl_model_complete.m 模型完成门控函数，(2) 新增 sl_get_model_issues.m 详细未连接端口诊断，(3) Bridge 层 Gate_4: sl_sim_run/sl_sim_batch 前自动检查 model_completed 标记，(4) _generate_workflow_state 增加 canProceed + pending_issues，(5) ModelWorkflowState 增加 model_completed + last_verification_failed，(6) system-prompts.ts 更新为 6 步法 + 第10项反模式，(7) 所有 sl_sim_run 调用被 Gate_4 强制拦截直至通过 sl_model_complete |
 
 ---
 
@@ -2231,7 +2098,7 @@ POST /api/matlab/simulink/self_improve
 
 # 3. 直接修改源码文件
 POST /api/matlab/simulink/self_improve
-{"action": "patch_source", "file_path": "C:/Users/.../sl_toolbox/sl_sim_results.m",
+{"action": "patch_source", "file_path": "app/matlab-bridge/sl_toolbox/sl_sim_results.m",
  "old_content": "variablesRequested = {};",
  "new_content": "variablesRequested = {};\n% v7.0: auto-detect simOut",
  "description": "Add simOut detection comment"}
@@ -2500,7 +2367,564 @@ GET /api/matlab/simulink/model_status?modelName=MyModel&depth=0&includeHidden=tr
 
 ---
 
-## 43. _workflow — 工作流状态字段 (v9.0)
+## 44. sl_framework_design — 大框架设计 (v11.0)
+
+> **v11.0 新增** — 大框架三层迭代循环的第一步，区别于 sl_model_design 的通用领域识别
+
+### 功能
+
+设计宏观层面的 Simulink 模型架构，包括：
+- 子系统划分（subsystems）
+- 信号流拓扑（signalFlow）
+- Goto/From 标签规划（gotoFromPlan）
+- 物理方程框架（physicsEquations）
+
+### 签名
+
+```matlab
+result = sl_framework_design(taskDescription, varargin)
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| taskDescription | string | 必填 | 建模任务描述 |
+| domain | string | 'auto' | 物理域识别（auto/control/mechanical/electrical/thermal/signal/general） |
+| subsystemCount | integer | 0 | 子系统数量（0=自动推断） |
+| detailLevel | string | 'standard' | 详细程度 |
+
+### 返回结构
+
+```json
+{
+  "status": "ok",
+  "macroFramework": {
+    "domain": "mechanical",
+    "taskSummary": "三倒摆系统",
+    "subsystems": [
+      {"name": "Pendulum_Chain", "type": "mechanical", "inputs": ["torque"], "outputs": ["theta1", "theta2", "theta3"]},
+      {"name": "Controller", "type": "control", "inputs": ["theta1", "theta2", "theta3"], "outputs": ["torque"]},
+      {"name": "Visualization", "type": "utility", "inputs": ["theta1", "theta2", "theta3"], "outputs": []}
+    ],
+    "signalFlow": [
+      {"from": "Pendulum_Chain", "to": "Controller", "signal": "theta1"},
+      {"from": "Controller", "to": "Pendulum_Chain", "signal": "torque"}
+    ],
+    "gotoFromPlan": [
+      {"tag": "theta_all_G", "from": "Pendulum_Chain", "to": ["Controller", "Visualization"]}
+    ],
+    "confidence": 0.8,
+    "warnings": []
+  }
+}
+```
+
+### 注意事项
+
+- 与 sl_model_design 的区别：大框架设计输出完整的子系统划分和信号流拓扑
+- 建议配合 sl_framework_review 进行自检
+
+---
+
+## 45. sl_framework_review — 大框架自检 (v11.0)
+
+> **v11.0 新增** — AI 自检大框架，输出检查结果和建议
+
+### 功能
+
+对大框架设计进行 5 项自检：
+- **physics**: 物理方程是否正确
+- **signalFlow**: 信号流拓扑是否完备
+- **subsystem**: 子系统划分是否合理
+- **gotoFrom**: Goto/From 标签计划
+- **dimensionality**: 量纲一致性
+
+### 签名
+
+```matlab
+result = sl_framework_review(macroFramework, varargin)
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| macroFramework | struct | 必填 | 大框架结构体（从 sl_framework_design 获取） |
+| checkItems | cell | 全部5项 | 要执行的检查项 |
+
+### 返回结构
+
+```json
+{
+  "status": "ok",
+  "reviewResult": {
+    "passed": true,
+    "checks": [
+      {"item": "physics", "passed": true, "confidence": 0.9, "issue": "", "suggestion": ""},
+      {"item": "signalFlow", "passed": true, "confidence": 0.95, "issue": "", "suggestion": ""},
+      {"item": "subsystem", "passed": true, "confidence": 0.8, "issue": "", "suggestion": ""},
+      {"item": "gotoFrom", "passed": true, "confidence": 1.0, "issue": "", "suggestion": ""},
+      {"item": "dimensionality", "passed": true, "confidence": 0.85, "issue": "", "suggestion": ""}
+    ],
+    "overallConfidence": 0.88,
+    "issues": [],
+    "suggestions": []
+  }
+}
+```
+
+### 通过标准
+
+- 所有检查项 passed=true
+- overallConfidence >= 0.7
+
+---
+
+## 46. sl_framework_approve — 大框架审批/锁定 (v11.0)
+
+> **v11.0 新增** — 审批并锁定大框架，之后修改需要额外审批
+
+### 功能
+
+1. 将大框架写入 MATLAB workspace 变量 `_macro_framework_<modelName>`
+2. 设置锁定标记 `framework_locked_<modelName> = true`
+3. Bridge 层读取该标记，后续拦截对顶层架构的修改
+
+### 签名
+
+```matlab
+result = sl_framework_approve(modelName, varargin)
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| modelName | string | 必填 | 模型名称 |
+| locked | boolean | true | 是否锁定大框架 |
+| macroFramework | struct | {} | 大框架结构体（可选，从 workspace 获取） |
+
+### 返回结构
+
+```json
+{
+  "status": "ok",
+  "message": "Macro framework approved and locked for model: TriplePendulum",
+  "lockedAt": "2026-04-22T20:45:00Z",
+  "frameworkSnapshot": { ... },
+  "modelName": "TriplePendulum",
+  "locked": true
+}
+```
+
+### 大框架锁定后的行为
+
+| 操作 | 是否拦截 | 变更流程 |
+|------|----------|----------|
+| 添加新子系统 | :red_circle: 拦截 | 需要 `sl_framework_modify` |
+| 删除子系统 | :red_circle: 拦截 | 需要 `sl_framework_modify` |
+| 修改信号流拓扑 | :red_circle: 拦截 | 需要 `sl_framework_modify` |
+| 调整 Gain 值 | :green_circle: 不拦截 | 直接调用 sl_set_param |
+| 添加 To Workspace | :green_circle: 不拦截 | 直接调用 sl_add_block |
+
+### 注意事项
+
+- **大框架必须用户审批**（sl_framework_approve 需要用户确认）
+- 锁定后修改大框架需要走独立的"框架变更审批"流程
+
+---
+
+## 47. sl_micro_design — 子系统小框架设计 (v11.0 Phase 2)
+
+> **v11.0 Phase 2 新增** — 子系统内部小框架设计，输出物理方程和模块规划
+
+### 功能
+
+为单个子系统设计内部物理数学逻辑和模块布局，区别于大框架的顶层架构设计。
+
+### 签名
+
+```matlab
+result = sl_micro_design(subsystemName, taskDescription, varargin)
+result = sl_micro_design('Pendulum_Chain', '三连摆动力学')
+result = sl_micro_design('Controller', 'PID控制器', 'physics', 'pid')
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| subsystemName | string | 必填 | 子系统名称 |
+| taskDescription | string | 必填 | 子系统任务描述 |
+| physics | string | 'auto' | 物理类型: pid/lagrangian/newtonian/circuit/thermal/motor_dc/generic |
+| detailLevel | string | 'standard' | 详细程度 |
+
+### 返回
+
+```json
+{
+  "status": "ok",
+  "microFramework": {
+    "subsystem": "Pendulum_Chain",
+    "physicsEquations": ["d2theta/dt2 = -(g/L)*sin(theta) + torque/(m*L^2)"],
+    "blockPlan": [
+      {"type": "Integrator", "count": 2, "reason": "状态变量积分"},
+      {"type": "Gain", "count": 2, "reason": "物理系数"}
+    ],
+    "signalDimensions": {"input": 1, "output": 2, "states": 2},
+    "confidence": 0.85,
+    "warnings": [],
+    "issues": []
+  }
+}
+```
+
+### 返回字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| subsystem | string | 子系统名称 |
+| physicsEquations | string[] | 物理方程列表 |
+| blockPlan | object[] | 需要的模块规划，每个包含 type/count/reason |
+| signalDimensions | object | 输入输出维度: input/output/states |
+| confidence | number | 置信度 0-1 |
+| warnings | string[] | 警告信息 |
+| issues | string[] | 问题信息 |
+
+### 注意事项
+
+- 与 sl_framework_design 的区别：小框架针对单个子系统内部，大框架针对整个模型
+- 小框架可以由 AI 自审批（不同于大框架必须用户审批）
+- 设计后需要调用 sl_micro_review 自检
+
+---
+
+## 48. sl_micro_review — 子系统小框架自检 (v11.0 Phase 2)
+
+> **v11.0 Phase 2 新增** — AI 自检子系统小框架，输出检查结果和建议
+
+### 功能
+
+对 sl_micro_design 输出的子系统小框架进行自检，检查物理方程、模块规划、输入输出维度等。
+
+### 签名
+
+```matlab
+result = sl_micro_review(subsystemName)
+result = sl_micro_review(subsystemName, microFramework)
+result = sl_micro_review(subsystemName, 'checkItems', {'physics', 'blockPlan'})
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| subsystemName | string | 必填 | 子系统名称或 microFramework 结构 |
+| checkItems | cell | 全部 | 检查项列表: physics/blockPlan/signalDimensions/integrators |
+
+### 检查项说明
+
+| 检查项 | 检查内容 | 通过标准 |
+|--------|----------|----------|
+| physics | 物理方程是否存在、有界 | 方程存在、无奇异点 |
+| blockPlan | 模块规划是否完整 | Integrator 数量足够 |
+| signalDimensions | 输入输出维度 | 维度为正数 |
+| integrators | 积分器数量 | 足够覆盖状态变量 |
+
+### 返回
+
+```json
+{
+  "status": "ok",
+  "reviewResult": {
+    "passed": true,
+    "checks": [
+      {"item": "physics", "passed": true, "confidence": 0.9},
+      {"item": "blockPlan", "passed": true, "confidence": 0.85},
+      {"item": "signalDimensions", "passed": true, "confidence": 0.85},
+      {"item": "integrators", "passed": true, "confidence": 0.9}
+    ],
+    "overallConfidence": 0.88,
+    "issues": [],
+    "suggestions": ["考虑添加 Scope 观察输出"]
+  },
+  "subsystemName": "Pendulum_Chain"
+}
+```
+
+### 注意事项
+
+- reviewResult.passed=true 表示自检通过，可以调用 sl_micro_approve
+- reviewResult.passed=false 表示有问题，需要回到 sl_micro_design 重新设计
+- 小框架可以 AI 自审批，不需要用户确认
+
+---
+
+## 49. sl_micro_approve — 子系统小框架审批 (v11.0 Phase 2)
+
+> **v11.0 Phase 2 新增** — 审批并锁定子系统小框架，批准后开始构建子系统内部
+
+### 功能
+
+审批子系统小框架，锁定后允许对该子系统内部的模块进行修改。
+
+### 签名
+
+```matlab
+result = sl_micro_approve(subsystemName)
+result = sl_micro_approve(subsystemName, 'locked', true)
+result = sl_micro_approve('Pendulum_Chain', 'modelName', 'TriplePendulum')
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| subsystemName | string | 必填 | 子系统名称 |
+| locked | logical | true | 是否锁定 |
+| microFramework | struct | 自动 | 小框架结构（从 workspace 获取） |
+| modelName | string | '' | 关联的模型名称 |
+
+### 返回
+
+```json
+{
+  "status": "ok",
+  "message": "Micro framework approved for subsystem: Pendulum_Chain",
+  "approvedAt": "2026-04-23T10:00:00Z",
+  "microFrameworkSnapshot": {...},
+  "subsystemName": "Pendulum_Chain",
+  "modelName": "TriplePendulum",
+  "locked": true
+}
+```
+
+### 注意事项
+
+- **小框架可以 AI 自审批**（不同于大框架必须用户审批）
+- 批准后，对该子系统内部的 sl_add_block、sl_add_line 等操作将被允许
+- 每个子系统都需要先完成小框架三步流程：design → review → approve
+- 可以关联到模型名称，自动更新模型的 subsystemQueue
+
+### 与 sl_framework_approve 的区别
+
+| 特性 | sl_framework_approve | sl_micro_approve |
+|------|---------------------|------------------|
+| 审批级别 | 大框架（顶层架构） | 小框架（子系统内部） |
+| 审批方式 | 必须用户确认 | AI 自审批 |
+| 拦截范围 | 所有构建命令 | 仅当前子系统的内部操作 |
+| 影响范围 | 全局 | 仅指定子系统 |
+
+---
+
+## 50. sl_framework_modify — 大框架锁定后变更申请 (v11.0 Phase 3)
+
+> **v11.0 Phase 3 新增** — 大框架锁定后，结构性修改需通过此 API 申请审批
+
+### 功能
+
+大框架锁定后（`mFWLock_<modelName>=true`），以下结构性操作被 Gate 3 拦截，必须通过 `sl_framework_modify` 申请：
+- **addSubsystem**: 添加新子系统
+- **removeSubsystem**: 删除已有子系统
+- **changeSignalFlow**: 修改信号流拓扑
+- **changePhysics**: 修改物理方程
+- **renameSubsystem**: 重命名子系统
+
+**不拦截的操作**（直接允许）：
+- sl_set_param: 调整 Gain 值等参数
+- sl_add_block: 在已有子系统内添加模块
+- sl_add_line: 连线
+- sl_config_set: 修改仿真参数
+- sl_signal_logging / sl_signal_config: 信号记录/配置
+
+### 签名
+
+```matlab
+result = sl_framework_modify(modelName, action, varargin)
+% 添加子系统
+result = sl_framework_modify('MyModel', 'addSubsystem', 'subsystemName', 'NewSub', 'subsystemType', 'plant', 'inputs', 'torque', 'outputs', 'angle')
+% 删除子系统
+result = sl_framework_modify('MyModel', 'removeSubsystem', 'subsystemName', 'OldSub')
+% 修改信号流
+result = sl_framework_modify('MyModel', 'changeSignalFlow', 'newSignalFlow', sfStruct)
+% 修改物理方程
+result = sl_framework_modify('MyModel', 'changePhysics', 'newPhysicsEquations', eqCell)
+% 重命名子系统
+result = sl_framework_modify('MyModel', 'renameSubsystem', 'oldName', 'Sub1', 'newName', 'Plant')
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| modelName | string | 必填 | 模型名称（位置参数1） |
+| action | string | 必填 | 修改类型：addSubsystem / removeSubsystem / changeSignalFlow / changePhysics / renameSubsystem |
+| subsystemName | string | '' | 子系统名称（addSubsystem/removeSubsystem） |
+| subsystemType | string | '' | 子系统类型（addSubsystem） |
+| inputs | string | '' | 子系统输入（addSubsystem） |
+| outputs | string | '' | 子系统输出（addSubsystem） |
+| oldName | string | '' | 原名称（renameSubsystem） |
+| newName | string | '' | 新名称（renameSubsystem） |
+| newSignalFlow | struct/cell | [] | 新信号流（changeSignalFlow） |
+| newPhysicsEquations | cell | {} | 新物理方程（changePhysics） |
+| reason | string | '' | 修改原因 |
+| autoApprove | logical | false | 是否自动审批（仅 review 通过时生效） |
+
+### 返回
+
+```json
+// 需要审批时
+{
+  "status": "pending_approval",
+  "action": "addSubsystem",
+  "modelName": "MyModel",
+  "autoApproved": false,
+  "reviewResult": { "passed": true, "checks": [...], "warnings": [] },
+  "modificationSummary": "Added subsystem \"NewSub\" (type: plant)",
+  "message": "Framework modification requires approval...",
+  "nextSteps": ["sl_framework_modify_approve('MyModel')", "sl_framework_modify_reject('MyModel')"]
+}
+
+// 自动审批时（autoApprove=true 且 review 通过）
+{
+  "status": "ok",
+  "action": "addSubsystem",
+  "modelName": "MyModel",
+  "autoApproved": true,
+  "reviewResult": { "passed": true, ... },
+  "modificationSummary": "Added subsystem \"NewSub\"...",
+  "modifiedAt": "2026-04-23T15:30:00"
+}
+```
+
+### 注意事项
+
+- 大框架**必须已锁定**才能调用此 API（否则报错）
+- 修改后会自动验证框架完整性（子系统唯一性、信号流引用有效性等）
+- 设置 `autoApprove=true` 时，如果验证通过则自动应用，无需手动审批
+- 修改历史记录在 `mFWHistory_<modelName>` 变量中
+- 删除子系统时会自动清理相关的 signalFlow 和 gotoFromPlan 条目
+- 重命名子系统时会自动更新 signalFlow 和 gotoFromPlan 中的引用
+
+---
+
+## 51. sl_framework_modify_approve — 批准大框架变更 (v11.0 Phase 3)
+
+> **v11.0 Phase 3 新增** — 批准 pending 的大框架变更
+
+### 功能
+
+批准通过 `sl_framework_modify` 提交的 pending 变更，将修改应用到工作区的大框架。
+
+### 签名
+
+```matlab
+result = sl_framework_modify_approve(modelName)
+result = sl_framework_modify_approve(modelName, 'reason', 'Approved after review')
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| modelName | string | 必填 | 模型名称 |
+| reason | string | '' | 审批原因 |
+
+### 返回
+
+```json
+{
+  "status": "ok",
+  "action": "addSubsystem",
+  "modelName": "MyModel",
+  "modificationSummary": "Added subsystem \"NewSub\"...",
+  "approvedAt": "2026-04-23T15:31:00",
+  "reviewResult": { "passed": true, ... }
+}
+```
+
+### 注意事项
+
+- 批准后修改立即生效，`mFW_<modelName>` 被更新
+- 修改前的快照保存在 `mFWSnap_<modelName>`
+- 修改历史追加到 `mFWHistory_<modelName>`
+
+---
+
+## 52. sl_framework_modify_reject — 拒绝大框架变更 (v11.0 Phase 3)
+
+> **v11.0 Phase 3 新增** — 拒绝 pending 的大框架变更
+
+### 功能
+
+拒绝通过 `sl_framework_modify` 提交的 pending 变更，大框架保持不变。
+
+### 签名
+
+```matlab
+result = sl_framework_modify_reject(modelName)
+result = sl_framework_modify_reject(modelName, 'reason', 'Subsystem not needed')
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| modelName | string | 必填 | 模型名称 |
+| reason | string | '' | 拒绝原因 |
+
+### 返回
+
+```json
+{
+  "status": "ok",
+  "action": "addSubsystem",
+  "modelName": "MyModel",
+  "modificationSummary": "Added subsystem \"NewSub\"...",
+  "rejectedAt": "2026-04-23T15:32:00",
+  "message": "Modification rejected. Macro framework unchanged."
+}
+```
+
+### 注意事项
+
+- 拒绝后 pending 变更被清除，大框架不受影响
+- 拒绝记录仍然保留在 `mFWHistory_<modelName>` 中（status='rejected'）
+
+---
+
+## 53. Gate 3 门控规则 — 大框架锁定后结构性修改拦截 (v11.0 Phase 3)
+
+> **v11.0 Phase 3 新增** — Bridge 层自动拦截结构性修改
+
+### 拦截规则
+
+| 操作 | 是否拦截 | 变更流程 |
+|------|----------|----------|
+| sl_subsystem_create | 拦截 | 需要 `sl_framework_modify('addSubsystem', ...)` |
+| sl_delete（子系统级别） | 不拦截* | 由 micro 门控处理 |
+| 添加 To Workspace | 不拦截 | 直接调用 sl_add_block |
+| 修改 Gain 值 | 不拦截 | 直接调用 sl_set_param |
+| 修改仿真参数 | 不拦截 | 直接调用 sl_config_set |
+| 信号记录/配置 | 不拦截 | 直接调用 sl_signal_logging/signal_config |
+
+> *注：删除子系统级别的模块由 micro 门控在子系统内部处理，不影响大框架架构
+
+### 拦截返回格式
+
+```json
+{
+  "status": "gate_blocked",
+  "message": "FRAMEWORK_LOCKED: 大框架已锁定，不能直接执行 sl_subsystem_create！...",
+  "requiredAction": "sl_framework_modify",
+  "workflowPhase": "framework_locked",
+  "frameworkLocked": true,
+  "modifyAction": "addSubsystem",
+  "hint": "sl_framework_modify('MyModel', 'addSubsystem', 'subsystemName', '...', ...)",
+  "nextSteps": ["sl_framework_modify(...)", "sl_framework_modify_approve(...)"]
+}
+```
 
 > **v9.0 标准化建模工作流的核心机制 — 每个写操作后自动注入工作流阶段和建议**
 
@@ -2647,6 +3071,130 @@ GET /api/matlab/simulink/model_status?modelName=MyModel&depth=0&includeHidden=tr
 | v16.0 | 2026-04-22 | **v10.4.1 同步更新**: (1) 新增 Aerospace Blockset 模块(Angular Velocity/Length/Velocity Conversion)，(2) sl_block_registry.m 同步更新，(3) matlab_bridge.py 同步参数映射和枚举值 |
 | v15.0 | 2026-04-20 | **v9.0 标准化建模工作流**: (1) 新增 _auto_layout 自动排版字段说明（#42），(2) 新增 _workflow 工作流状态字段说明（#43），(3) 三层迭代建模流程，(4) 阶段自动检测和转换，(5) 子系统队列追踪，(6) 排版5秒防抖机制 |
 | v14.0 | 2026-04-20 | **v8.0 强制验证-执行循环**: (1) 新增 sl_model_status_snapshot API 说明（#40），(2) 新增 _verification 自动验证字段说明（#41），(3) 14 个写操作自动注入验证结果，(4) model_status GET/POST 双端点，(5) AI 验证流程规范 |
+
+---
+
+## 48. sl_model_complete — 模型完成门控 (v11.3)
+
+> **v11.3 新增** — 建模完成强制门控，unconnected 必须 0 才能通过
+
+### 功能
+
+运行全部 12 项验证检查。**必须通过（unconnected = 0）** 才能进入仿真阶段。
+这是 v11.3 建模流程的核心强制门控。
+
+### 签名
+
+```matlab
+result = sl_model_complete(modelName, varargin)
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| modelName | string | 必填 | 模型名称 |
+| action | string | 'check' | 'check' (仅检查) / 'complete' (检查并设置完成标记) |
+
+### 返回结构
+
+```json
+{
+  "status": "ok",
+  "passed": true,
+  "overall": "pass",
+  "checkResults": [
+    {"name": "unconnected", "status": "pass", "message": "All ports connected"},
+    {"name": "compilation", "status": "pass", "message": "Model compiles successfully"}
+  ],
+  "unconnectedCount": 0,
+  "unconnectedList": [],
+  "canProceed": true,
+  "mustPassChecks": ["unconnected", "compilation"],
+  "suggestions": []
+}
+```
+
+### 关键字段
+
+| 字段 | 说明 |
+|------|------|
+| `canProceed` | **最关键的字段**。true = 可以进入仿真，false = 有问题需要修复 |
+| `unconnectedCount` | 未连接端口数量，必须为 0 才能通过 |
+| `unconnectedList` | 详细未连接端口列表 [block, portType, portIndex] |
+
+### 强制规则
+
+- `sl_sim_run` / `sl_sim_batch` 执行前，Bridge 层 Gate_4 自动检查 `model_completed` 标记
+- `action='complete'` 成功后将 `model_completed_{modelName}` 写入 MATLAB workspace
+- **AI 无 bypass 选项，无法跳过此门控**
+
+### 使用示例
+
+```matlab
+% 检查模型是否完成
+result = sl_model_complete('Quadrotor_FDM');
+if ~result.canProceed
+    % 获取详细问题列表
+    issues = sl_get_model_issues('Quadrotor_FDM');
+    % 修复所有未连接端口...
+    % 重新检查并设置完成标记
+    result = sl_model_complete('Quadrotor_FDM', 'action', 'complete');
+end
+```
+
+---
+
+## 49. sl_get_model_issues — 模型问题详情 (v11.3)
+
+> **v11.3 新增** — verify→fix→re-verify 闭环的核心诊断工具
+
+### 功能
+
+遍历模型中所有模块（含子系统内部），返回全部未连接端口的详细清单：
+block路径、portType（input/output）、portIndex、是否子系统、所属父子系统。
+
+### 签名
+
+```matlab
+result = sl_get_model_issues(modelName)
+```
+
+### 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| modelName | string | 必填 | 模型名称 |
+
+### 返回结构
+
+```json
+{
+  "status": "ok",
+  "unconnectedBlocks": [
+    {"block": "Quadrotor_FDM/Controller/state_fb", "portType": "input", "portIndex": 1, "isSubsystem": false, "parentSubsystem": "Quadrotor_FDM/Controller"}
+  ],
+  "unconnectedCount": 1,
+  "unconnectedBySubsystem": [
+    {"name": "Quadrotor_FDM/Controller", "count": 1, "blocks": [...]}
+  ],
+  "undefinedVariables": [],
+  "suggestions": ["1 unconnected port(s) found.", "1 input port(s), 0 output port(s), 0 on subsystems.", "Unconnected input ports: check missing signal sources."]
+}
+```
+
+### 使用示例
+
+```matlab
+% verify → fix → re-verify 闭环
+issues = sl_get_model_issues('Quadrotor_FDM');
+for i = 1:length(issues.unconnectedBlocks)
+    ub = issues.unconnectedBlocks{i};
+    fprintf('Unconnected: %s port %d (%s) in %s\n', ub.block, ub.portIndex, ub.portType, ub.parentSubsystem);
+end
+% 修复后重新检查
+result = sl_model_complete('Quadrotor_FDM', 'action', 'complete');
+```
 
 ---
 
