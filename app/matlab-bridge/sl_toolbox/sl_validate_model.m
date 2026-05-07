@@ -34,8 +34,14 @@ function result = sl_validate_model(modelName, varargin)
     
     % ===== 确保模型已加载 =====
     try
-        if ~bdIsLoaded(modelName)
-            load_system(modelName);
+        % [v11.5] Extract top-level model for bdIsLoaded/load_system
+        if ~isempty(strfind(modelName, '/'))
+            topModel = modelName(1:strfind(modelName, '/')-1);
+        else
+            topModel = modelName;
+        end
+        if ~bdIsLoaded(topModel)
+            load_system(topModel);
         end
     catch ME
         result = struct('status', 'error', 'error', ...
@@ -484,6 +490,13 @@ function vars = extract_variable_names(val)
         '^Dataset$', '^Array$', '^Structure$', ... % 保存格式
         '^All dimensions$', ...                  % 维度模式
         '^Bottom', '^Top$', ...                  % 标签位置
+        % [v11.6.8] Additional Simulink internal values:
+        '^FromPortIcon$', '^ReadWrite$', '^All$', ... % Port/Permission
+        '^Deduce$', '^void_void$', ...           % Execution domain/Func interface
+        '^expression$', '^LIFO$', ...            % Variant/Message queue
+        '^Dialog$', '^held$', ...                % Output source/when disabled
+        '^bar$', '^none$', '^pi$', ...           % Display/Reset/WrappedState
+        '^FromPortIcon$', '^SignalName$', ...    % Port label display modes
         '^Off$', ...                             % 通用枚举
         '^%<', '^%', ...                         % Mask 表达式
         ' ' ...                                  % 含空格的通常是描述而非变量

@@ -41,6 +41,7 @@ function result = sl_micro_approve(subsystemName, varargin)
     end
     assignin('base', ['uFWApprovedAt_' subsystemName], sl_framework_utils('format_timestamp'));
     if ~isempty(p.modelName)
+        model_safe = strrep(modelName, '/', '__');
         assignin('base', ['uFWModel_' subsystemName], p.modelName);
     end
 

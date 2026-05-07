@@ -34,6 +34,12 @@ function result = sl_micro_design(subsystemName, taskDescription, varargin)
         subsystemName = num2str(subsystemName); %#ok<ST2NM>
     end
     subsystemName = char(subsystemName);
+    % [P1 FIX v11.6.7] Accept full Simulink paths (Model/SubsystemName)
+    % by extracting the short subsystem name before validation
+    if ~isempty(strfind(subsystemName, '/'))
+        parts = strsplit(subsystemName, '/');
+        subsystemName = parts{end};
+    end
     % Sanitize subsystem name: only alphanumeric and underscore
     if ~isempty(sl_framework_utils('regexp_once_safe', subsystemName, '[^a-zA-Z0-9_]'))
         result = struct('status', 'error', ...

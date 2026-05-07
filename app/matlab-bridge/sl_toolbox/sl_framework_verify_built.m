@@ -17,8 +17,14 @@ function result = sl_framework_verify_built(modelName, macroFramework)
 %   summary: human-readable summary
 
     try
-        if ~bdIsLoaded(modelName)
-            load_system(modelName);
+        % [v11.5] Extract top-level model for bdIsLoaded/load_system
+        if ~isempty(strfind(modelName, '/'))
+            topModel = modelName(1:strfind(modelName, '/')-1);
+        else
+            topModel = modelName;
+        end
+        if ~bdIsLoaded(topModel)
+            load_system(topModel);
         end
     catch ME
         result = struct('status', 'error', 'message', ['Model not loaded: ' ME.message]);

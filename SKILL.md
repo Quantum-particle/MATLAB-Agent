@@ -2,7 +2,7 @@
 
 > **AI 是设计师，不是代码生成器。** Agent 提供底层门控和 API，但 Simulink 建模的子系统划分、信号流、方程离散化完全由 AI 自主完成。
 >
-> **架构**: Node.js Server → Python Bridge → MATLAB Engine，变量跨命令持久化。5 层 Gate（Python 硬编码）保护每一步正确性，不限制设计空间。
+> **架构**: Node.js Server → Python Bridge → MATLAB Engine，变量跨命令持久化。6 层 Gate（Python 硬编码）保护每一步正确性，不限制设计空间。
 >
 > **文件管理**: `.slx`/`.m` 在 workspace；中间文件（`.py`/`.json`/`slprj/`）自动隔离到 `workspace/.matlab_agent_tmp/`。
 
@@ -39,12 +39,15 @@ Step A: ensure-running.sh → Step B: setup_workspace.py (gate)
   │
   ├─ [M 脚本]  run_code → 直接执行 MATLAB 代码
   │
-  └─ [Simulink]  framework_design → review → approve (Gate_5)
-                   └─ micro_design × N → review → approve
-                        └─ add_block / add_line / set_param (Gate_2,3)
-                             └─ sl_model_complete (Gate_4)
-                                  └─ sl_sim_run / sl_sim_batch
-                                       └─ cleanup (slprj/, tmp)
+  └─ [Simulink]  --- Gate_S0: 场景检测 + 令牌确认（AI 不可绕过）---
+                   sl_scene_detect → AskUserQuestion(用户点击) → sl_scene_confirm(令牌)
+                         │
+                         └─ framework_design → review → approve (Gate_5)
+                              └─ micro_design × N → review → approve
+                                   └─ add_block / add_line / set_param (Gate_2,3)
+                                        └─ sl_model_complete (Gate_4)
+                                             └─ sl_sim_run / sl_sim_batch
+                                                  └─ cleanup (slprj/, tmp)
 ```
 
 ---
@@ -119,17 +122,22 @@ Step A: ensure-running.sh → Step B: setup_workspace.py (gate)
               └─────────────────────────────────┘
 ```
 
-### 3.1 5 层 Gate（Python bridge 硬编码）
+### 3.1 6 层 Gate（Python bridge 硬编码）
 
 | Gate | 触发点 | 作用 | 解锁 |
 |------|--------|------|------|
+| **Gate_S0** 🔴 | 所有 Simulink 操作 | **令牌门控**: 场景未确认→拦截一切 | `sl_scene_detect` → `AskUserQuestion`(用户点击) → `sl_scene_confirm(令牌)` |
 | **PROJECT_DIR** | `run_code` / `create_simulink` | 未 setup 阻止一切 | `setup_workspace.py` |
 | **Gate_2** | `add_block` / `add_line` | 框架未审批禁止搭建 | `sl_framework_design → review → approve` |
 | **Gate_3** | `subsystem_create` / 结构修改 | 框架锁定后修改需审批 | `sl_framework_modify → approve` |
 | **Gate_4** | `sl_sim_run` | 模型未完成禁止仿真 | `sl_model_complete('complete')` |
 | **Gate_5** | `sl_framework_approve` 入口 | 检查端口完备性+信号闭环 | checkItems 全部 pass |
 
+**Gate_S0 令牌机制**: `sl_scene_detect` 返回随机 `confirmationToken`，AI 必须用 `AskUserQuestion` 呈现给用户，用户在可点击选项中确认后，AI 用令牌调用 `sl_scene_confirm`。跳过用户交互 → `TOKEN_MISMATCH` → `gate_blocked`。令牌一次性，用过即失效。
+
 ### 3.2 建模流程（Phase 0-6）
+
+**Phase -1 — 场景确认（Gate_S0 令牌门控）**: 🔴 **最先执行！** `sl_scene_detect(workspaceDir)` → 自动检测 `.slx`/`.mdl` → 返回 `confirmationToken` → **【强制】** 用 `AskUserQuestion` 给用户可点击选项 → 用户点击 → `sl_scene_confirm(scene, modelName, confirmationToken)`。场景锁定前，所有 Simulink 操作被 Gate_S0 拦截。
 
 **Phase 0 — 审视**: `sl_inspect(modelName)` + `sl_get_model_issues(modelName)`。每次操作前检查，永远不盲写。
 
@@ -153,10 +161,11 @@ Step A: ensure-running.sh → Step B: setup_workspace.py (gate)
 
 ## 第四层：API & 约束速查
 
-### 核心 API（49 函数，完整签名见 `references/sl_toolbox_api_guide.md`）
+### 核心 API（51 函数，完整签名见 `references/sl_toolbox_api_guide.md`）
 
 | 类别 | 函数 |
 |------|------|
+| 场景 🔴 | `sl_scene_detect` `sl_scene_confirm` |
 | 框架 | `sl_framework_design` `_review` `_approve` `_modify` |
 | 子系统 | `sl_micro_design` `_review` `_approve` |
 | 构建 | `sl_add_block_safe` `sl_add_line_safe` `sl_set_param_safe` `sl_block_position` |
@@ -193,14 +202,14 @@ SKILL.md (本文件)                          ← 总索引
 │   ├── setup_workspace.py                 ← 工作环境初始化门控
 │   ├── matlab-bridge/
 │   │   ├── matlab_bridge.py               ← Python Bridge 核心（~7000行）
-│   │   └── sl_toolbox/*.m                 ← 49 个 MATLAB 函数实现
+│   │   └── sl_toolbox/*.m                 ← 51 个 MATLAB 函数实现
 │   └── server/
 │       ├── index.ts                       ← Express 路由 + API 端点
 │       ├── matlab-controller.ts           ← Bridge 进程管理与通信
 │       └── system-prompts.ts              ← AI 系统提示词 + 门控规则
 │
 ├── references/
-│   ├── sl_toolbox_api_guide.md            ← 【建模前必读】49 API 完整签名/参数/返回值
+│   ├── sl_toolbox_api_guide.md            ← 【建模前必读】51 API 完整签名/参数/返回值
 │   ├── pitfalls.md                        ← 踩坑经验详录（33 条）
 │   ├── pitfall-database.md                ← 结构化踩坑 DB（Pattern-Key 索引）
 │   ├── block-param-registry.md            ← 模块参数类型/枚举值速查

@@ -77,7 +77,7 @@ export function getMATLABSystemPrompt(): string {
     '   - 杀完进程后必须等待 2-3 秒确认端口释放再启动',
     '1. **检查服务**: 先 powershell -Command "try { Invoke-RestMethod -Uri \'http://localhost:3000/api/health\' -TimeoutSec 5 } catch { Write-Host \'FAIL\' }"',
     '2. **如已运行**: 直接使用 quickstart API',
-    '3. **如未运行**: 执行 `cmd /c "C:\\Users\\YOUR_USERNAME\\.workbuddy\\skills\\matlab-agent\\app\\ensure-running.bat"`',
+    '3. **如未运行**: 执行 `cmd /c "C:\\Users\\泰坦\\.workbuddy\\skills\\matlab-agent\\app\\ensure-running.bat"`',
     '4. **等待退出码 0**',
     '5. **🔴 首次配置检测（关键！）**: 检查 MATLAB 是否已配置',
     '   - 调用 GET /api/matlab/config 获取当前配置',
@@ -256,20 +256,58 @@ export function getMATLABSystemPrompt(): string {
 // =====================================================================
 
 function getCorePrompt(): string {
-  return `## Simulink Agent v11.3 — 核心规则（强制遵守！）
+  return `## Simulink Agent v11.6 — 核心规则（强制遵守！）
 
-### 建模工作流 6 步法（v11.3: 第6步是强制门控）
+### 🔴 Gate_S0: 场景检测 + 用户交互确认（v11.6 — Challenge-Response，利用回合分离）
 
-1. **inspect** → 获取模型当前状态（所有操作前必做！）
-2. **build** → 添加模块 → 连线 → 设置参数
-3. **configure** → 模型配置（Solver/仿真参数）
-4. **validate** → 验证模型健康（sl_get_model_issues 获取详细未连接列表）
-5. **complete** → **【强制】sl_model_complete 门控**（unconnected必须pass才能仿真）
-6. **simulate** → 运行仿真（只有通过步骤5才能执行）
-
-### 强制门控规则（v11.4 新增 Gate_5，不可绕过！）
+**在 ANY Simulink 操作之前，必须完成场景确认！** 底层 Bridge 会拦截所有未确认的操作。
 
 \`\`\`
+Step 0.0: 调用 sl_scene_detect(workspaceDir) → 返回 scene + models + detectionToken + challengePhrase
+Step 0.1: 【强制】用 AskUserQuestion 将结果呈现给用户，challengePhrase 必须显示在选项中
+           当前回合结束 ← WorkBuddy 强制回合分离
+           ┌─────────────────────────────────────┐
+           │ Scene 1: 从零建模 [验证码: A7X2K9M]  │
+           │ Scene 2: 修改 Quadrotor_FDM          │
+           │ 用户点击选择 → 新回合开始              │
+           └─────────────────────────────────────┘
+Step 0.2: 用户点击 → 新回合 → 调用 sl_scene_confirm(scene, modelName, detectionToken)
+Step 0.3: Bridge 验证: 不同请求 + ≥2s 延迟 + token 匹配 → 锁定场景 → Gate_S0 放行
+\`\`\`
+
+**⛔ Challenge-Response 机制（v11.6 — 利用 WorkBuddy 回合分离）：**
+- sl_scene_detect 返回 detectionToken + challengePhrase
+- AI 必须用 AskUserQuestion 显示 challengePhrase → 当前回合结束
+- WorkBuddy 平台强制：新回合只能由用户点击触发
+- 用户点击后新回合中，AI 用 detectionToken 调用 sl_scene_confirm
+- Bridge 验证 confirm 在不同的请求中（回合分离证明）
+- Bridge 验证 ≥2s 延迟（排除自动化脚本）
+- **同请求内 confirm → SAME_TURN_DETECTED → gate_blocked**
+- **<2s 快速 confirm → TOO_FAST → gate_blocked**
+
+**Gate_S0 拦截的命令（场景未确认时）：**
+所有 sl_inspect / sl_add_block / sl_add_line / sl_set_param / sl_delete /
+sl_framework_design / sl_micro_design / sl_model_complete / sl_sim_run 等全部被拦截
+
+### 建模工作流 7 步法（v11.6: Step 0 是最优先门控）
+
+1. **confirm scene** → **【强制】Gate_S0 令牌门控**（场景未确认则一切操作被拦截）
+2. **inspect** → 获取模型当前状态（所有操作前必做！）
+3. **build** → 添加模块 → 连线 → 设置参数
+4. **configure** → 模型配置（Solver/仿真参数）
+5. **validate** → 验证模型健康（sl_get_model_issues 获取详细未连接列表）
+6. **complete** → **【强制】sl_model_complete 门控**（unconnected必须pass才能仿真）
+7. **simulate** → 运行仿真（只有通过步骤6才能执行）
+
+### 强制门控规则（v11.6 双令牌门控，不可绕过！）
+
+\`\`\`
+Gate_S0 (v11.6): 所有 Simulink 操作前强制场景检测 + Challenge-Response 回合分离
+  → 未调用 sl_scene_detect → gate_blocked
+  → 同请求内调用 confirm → SAME_TURN_DETECTED → gate_blocked
+  → confirm 太快(<2s) → TOO_FAST → gate_blocked
+  → Token 不匹配 → TOKEN_MISMATCH → gate_blocked
+  → 必须: sl_scene_detect → AskUserQuestion(含challengePhrase) → [新回合] sl_scene_confirm
 Gate_5 (v11.4): sl_framework_approve 前自动运行 sl_check_port_completeness + sl_check_signal_closure
   → 端口完备性失败 → gate_blocked → 必须修复框架设计
 Gate_4: sl_sim_run / sl_sim_batch 前自动检查 model_completed 标记
@@ -630,6 +668,149 @@ function getSimulinkProfilingPrompt(): string {
 - 批量仿真: sim-batch + parsim 并行`;
 }
 
+// ===== [v11.5] Scene 2: 已有模型修改场景 =====
+function getScene2ModifyPrompt(): string {
+  return `## Scene 2: 已有模型修改工作流 (v11.6)
+
+### 场景识别 (Gate_S0 Challenge-Response — 利用回合分离)
+
+**所有 Simulink 操作前，必须先完成场景识别：**
+1. 调用 sl_scene_detect(workspaceDir) → 返回 scene + detectionToken + challengePhrase
+2. **【强制】用 AskUserQuestion 呈现场景选项，challengePhrase 必须显示在选项中**
+3. AskUserQuestion 调用后当前回合结束，用户点击后新回合开始
+4. 在新回合中用 detectionToken 调用 sl_scene_confirm(scene, modelName, detectionToken)
+5. Bridge 验证回合分离 + 延迟 + token匹配 → 场景锁定 → Gate_S0 放行
+
+### Scene 2 六步法
+
+#### Step 2.0: 模型加载
+\`\`\`
+sl_model_load(modelName) → Gate_S2_LOAD
+\`\`\`
+验证模型存在、可加载、非空。设置 mS2ModelLoaded_ 标志。
+
+#### Step 2.1: 模型全景理解
+\`\`\`
+understand = sl_model_understand(modelName)
+\`\`\`
+自动分析: 模块树、信号流拓扑、I/O接口(Inport/Outport/Goto/From)、关键参数(Gain等)、配置(Solver/StopTime)。
+
+#### Step 2.2: 修改意图声明 + 沙盒设计
+\`\`\`
+plan = sl_modify_plan(modelName, taskDescription, modelUnderstanding)
+    → modifyPrompt (引导AI设计)
+    → outputSchema (输出规范: sandboxSubsystem + existingModifications + reasoning)
+\`\`\`
+AI 自主设计修改计划:
+- **沙盒子系统 (MANDATORY)**: 名称、内部架构、Inport/Outport、Goto/From 连接点
+- **已有部分修改 (OPTIONAL, 需用户确认)**: 修改路径、操作类型、理由
+
+#### Step 2.3: 审查与审批 (Gate_S2_APPROVE)
+\`\`\`
+sl_modify_review(modifyPlan) → 自检
+sl_modify_approve(modelName, modifyPlan) → Gate_S2_APPROVE
+\`\`\`
+Gate_S2_APPROVE 硬编码检查: 连接点存在于模型中、沙盒名称无冲突。
+
+#### Step 2.4: 创建沙盒子系统
+\`\`\`
+sandbox = sl_model_sandbox(modelName, sandboxName, modifyPlan)
+\`\`\`
+自动创建子系统 + Inport/Outport 标准接口 + 连接到已有模型的直接信号线。
+【P0-2 FIX】不再使用 Goto/From 跨子系统桥接。
+
+#### Step 2.5: 沙盒内完整建模 (场景1全流程闭环)
+
+> **沙盒子系统 = 独立建模项目，完全复用 Scene 1 的全部 API 和工作流！**
+
+沙盒内部必须走完整的设计→搭建→检查→验证→仿真闭环，和 Scene 1 一模一样:
+
+**子步骤 2.5.1: 大框架设计 (沙盒内部架构)**
+1. 调用 sl_framework_design(taskDescription) → 获取 designPrompt + outputSchema
+2. AI 自主分析: 结合领域知识，设计沙盒内部的子系统架构、信号流、物理方程
+   - 可用 web_search 搜索专业建模方法
+3. 调用 sl_framework_review(macroFramework) → 5项自检
+4. 调用 sl_framework_approve(sandboxPath) → Gate_5(端口完备+信号闭环) → 锁定
+   - **modelName 参数: 使用完整沙盒路径** 如 'Quadrotor_FDM/Quadrotor_PID_Controller'
+
+**子步骤 2.5.2: 子系统小框架迭代循环**
+对沙盒内的每个子系统:
+1. sl_micro_design(subsystemName, taskDescription, parentContext) → designPrompt
+2. AI 从第一性原理推导物理方程，规划 Simulink 模块
+3. sl_micro_review(subsystemName) → 自检
+4. sl_micro_approve(subsystemName) → 批准
+
+**子步骤 2.5.3: 搭建循环 (add → line → set → arrange → verify → fix)**
+这是核心迭代循环，每次操作后立即验证:
+1. sl_add_block_safe(sandboxPath, sourceBlock, ...) → 创建模块
+   - [AUTO] _verification 字段自动注入 (blockCreated / paramVerified)
+2. sl_add_line_safe(sandboxPath, srcPort, dstPort) → 连线
+   - [AUTO] _verification 自动注入 (lineConnected / portsChecked)
+3. sl_set_param_safe(blockPath, struct('Param','Val')) → 设置参数
+   - **必须用 struct 包装: struct('Gain','5') 而非 'Gain','5'**
+4. [AUTO] 每3次add → auto_layout 自动触发 FullLayout
+5. sl_inspect(sandboxPath) → 检查状态
+6. sl_get_model_issues(sandboxPath) → 获取未连接端口/GotoFrom/孤立模块
+7. fix → re-check → 循环直到 clean
+
+**子步骤 2.5.4: 完成门控 + 仿真 (强制, 不可跳过)**
+1. sl_model_complete(sandboxPath, 'action', 'complete') → [Gate_4 强制]
+   - unconnected 必须 = 0
+   - Goto/From 必须成对
+   - 无孤立模块
+2. sl_config_set → 仿真参数
+3. sl_sim_run → 运行仿真 (Gate_4 自动前置检查)
+4. sl_sim_results → 查看结果
+
+### 强制验证闭环
+\`\`\`
+while sl_model_complete(sandboxPath).canProceed == false:
+    issues = sl_get_model_issues(sandboxPath)
+    fix all unconnected / GotoFrom / orphaned
+    sl_model_complete(sandboxPath, 'action', 'complete')
+\`\`\`
+
+### ⛔ 绝对禁止
+- **禁止跳过 sl_model_complete 门控**
+- **禁止在有未连接端口时运行仿真** (Gate_4 硬编码拦截)
+- **禁止跳过 verify → fix → re-verify 闭环**
+- **modelName 参数: 使用完整沙盒路径而非顶层模型名**
+
+**子步骤 2.5.5: 外部连线与顶层排布 (沙盒 ↔ 已有模型) [v11.5]**
+
+沙盒必须与已有模型正确连接，不能是孤岛:
+
+**输入侧 (Goto→From 桥接):**
+- sl_model_sandbox 已自动创建 Goto(顶层) + From(沙盒内) 信号桥
+- Goto 块连接到源信号 (如 Kinematics/pos_ned → Goto/1)
+- From 块在沙盒内读取 Goto 标签，输出端口连接到首级模块
+- 用 sl_inspect(sandboxPath) 检查 From 块输出是否已连线
+
+**输出侧 (Outport→已有目标):**
+1. 查看 sl_model_understand 返回的 ioInterface，找到目标模块的 Inport
+2. 调用 sl_add_line_safe(modelName, srcPort, dstPort) 连接:
+   - srcPort: 'sandboxName/N' (沙盒第N个输出)
+   - dstPort: 'TargetBlock/N' (目标模块的第N个输入)
+3. 如果目标端口已被占用 → 先用 sl_delete 断开旧线
+
+**顶层排布:**
+1. 完成所有外部连线后 → sl_auto_layout(modelName)
+2. sl_inspect(modelName) 检查顶层布局
+
+### 双通道修改规则
+
+| 通道 | 操作范围 | 门控 | 说明 |
+|------|---------|------|------|
+| 通道A | 沙盒子系统内部 | Gate_2/3/5 (自动) | 走完整 Scene 1 流程 |
+| 通道B | 已有模型部分 | Gate_S2_MODIFY (用户确认) | 每次修改都需要用户显式批准 |
+
+### 强制规则
+- **必须先完成 sl_model_load + sl_model_understand 才能调用 sl_modify_plan**
+- **沙盒子系统是强制要求 — 所有新功能必须在沙盒内**
+- **已有模型部分的修改会触发 Gate_S2_MODIFY 拦截 — AI 无法绕过**
+- **仿真前必须通过 sl_model_complete (Gate_4)**`;
+}
+
 /** 场景层入口函数 */
 function getScenarioPrompt(scenario: string): string {
   switch (scenario) {
@@ -641,6 +822,8 @@ function getScenarioPrompt(scenario: string): string {
       return getSimulinkTestingPrompt();
     case 'simulink-profiling':
       return getSimulinkProfilingPrompt();
+    case 'scene2-modify':
+      return getScene2ModifyPrompt();
     default:
       return '';
   }
@@ -922,6 +1105,7 @@ export function getSimulinkReference(topic: string): string {
  *   - 'simulink-simulation': 仿真场景
  *   - 'simulink-testing': 测试场景
  *   - 'simulink-profiling': 性能分析场景
+ *   - 'scene2-modify': Scene 2 已有模型修改场景 (v11.5)
  * @returns 核心 + 场景 提示词字符串
  */
 export function getSimulinkSystemPrompt(scenario?: string): string {
@@ -959,6 +1143,7 @@ export const SUPPORTED_SCENARIOS = [
   'simulink-simulation',
   'simulink-testing',
   'simulink-profiling',
+  'scene2-modify',
 ] as const;
 
 export const SUPPORTED_REFERENCE_TOPICS = [

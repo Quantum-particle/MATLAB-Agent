@@ -33,6 +33,11 @@ function result = sl_add_line_safe(modelName, varargin)
 %     .error        - 错误信息（仅 status='error' 时）
 
     % ===== 解析参数格式 =====
+    % [v11.5] 兼容 MATLAB string 类型: 将 string 转为 char (双引号 "x" → 单引号 'x')
+    if isstring(modelName), modelName = char(modelName); end
+    if length(varargin) >= 1 && isstring(varargin{1}), varargin{1} = char(varargin{1}); end
+    if length(varargin) >= 2 && isstring(varargin{2}), varargin{2} = char(varargin{2}); end
+    
     % 检测是格式1 (5+参数) 还是格式2 (3参数: model, 'src/port', 'dst/port')
     if length(varargin) >= 2 && ischar(varargin{1}) && ~isempty(strfind(varargin{1}, '/')) ...
             && ischar(varargin{2}) && ~isempty(strfind(varargin{2}, '/'))

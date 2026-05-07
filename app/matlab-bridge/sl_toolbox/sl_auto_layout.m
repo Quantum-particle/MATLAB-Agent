@@ -47,10 +47,16 @@ function result = sl_auto_layout(modelName, varargin)
     result = struct('status', 'ok', 'layout', struct(), 'error', '');
     
     % ===== 确保模型已加载 =====
+    % [v11.5] 提取顶层模型名: bdIsLoaded/load_system 不接受子系统路径
+    if ~isempty(strfind(modelName, '/'))
+        topModel = modelName(1:strfind(modelName, '/')-1);
+    else
+        topModel = modelName;
+    end
     if opts.loadModelIfNot
         try
-            if ~bdIsLoaded(modelName)
-                load_system(modelName);
+            if ~bdIsLoaded(topModel)
+                load_system(topModel);
             end
         catch ME
             result.status = 'error';
@@ -58,7 +64,7 @@ function result = sl_auto_layout(modelName, varargin)
             return;
         end
     else
-        if ~bdIsLoaded(modelName)
+        if ~bdIsLoaded(topModel)
             result.status = 'error';
             result.error = 'Model not loaded. Set loadModelIfNot=true to auto-load.';
             return;

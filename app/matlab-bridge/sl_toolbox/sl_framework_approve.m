@@ -26,7 +26,8 @@ function result = sl_framework_approve(modelName, varargin)
     end
 
     % ===== 获取大框架（优先从参数，其次从 MATLAB workspace）=====
-    fw_var = ['mFW_' modelName];
+    model_safe = strrep(modelName, '/', '__');
+    fw_var = ['mFW_' model_safe];
     if isempty(fieldnames(p.macroFramework))
         % 参数没有传入，尝试从 workspace 获取
         try
@@ -41,7 +42,7 @@ function result = sl_framework_approve(modelName, varargin)
     end
 
     % ===== 写入大框架快照 =====
-    snapshot_var = ['mFWSnap_' modelName];
+    snapshot_var = ['mFWSnap_' model_safe];
     assignin('base', snapshot_var, fw);
 
     % [P1-1 FIX] 审批后同时写入框架数据到 workspace
@@ -49,11 +50,11 @@ function result = sl_framework_approve(modelName, varargin)
     assignin('base', fw_var, fw);
 
     % ===== 写入锁定标记 =====
-    lock_var = ['mFWLock_' modelName];  % [P1-4 FIX] 统一命名: framework_locked_ → mFWLock_
+    lock_var = ['mFWLock_' model_safe];  % [P1-4 FIX] 统一命名: framework_locked_ → mFWLock_
     assignin('base', lock_var, p.locked);
 
     % ===== 记录审批时间 =====
-    approve_time_var = ['mFWApprovedAt_' modelName];  % [P1-4 FIX] 统一命名: fwApprovedAt_ → mFWApprovedAt_
+    approve_time_var = ['mFWApprovedAt_' model_safe];  % [P1-4 FIX] 统一命名: fwApprovedAt_ → mFWApprovedAt_
     assignin('base', approve_time_var, sl_framework_utils('format_timestamp'));
 
     % ===== 返回结果 =====

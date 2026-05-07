@@ -1,6 +1,6 @@
 # sl_toolbox API 使用说明书
 
-> **版本**: v18.0 (v11.3 建模流程强制门控)  
+> **版本**: v19.0 (v11.5 Scene 2 已有模型修改工作流)  
 > **更新日期**: 2026-04-29  
 > **适用范围**: 大模型通过 @skill://matlab-agent 调用 Simulink 建模函数时，**必须先阅读本手册**，防止语法错误  
 > **同步规则**: 任何 .m 函数的 API 签名或返回结构变更后，**必须同步更新本手册对应条目**
@@ -3195,6 +3195,173 @@ end
 % 修复后重新检查
 result = sl_model_complete('Quadrotor_FDM', 'action', 'complete');
 ```
+
+---
+
+> **Step 7: Scene 2 — 已有模型修改工作流 (v11.5 新增)**
+
+## S2.1 场景检测
+
+### `sl_scene_detect(workspaceDir)`
+自动检测工作区场景类型 (Scene 1 或 Scene 2)
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| workspaceDir | char | 工作区目录绝对路径 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| status | char | 'ok' / 'error' |
+| scene | double | 1=从零建模 (Scene 1), 2=修改已有模型 (Scene 2) |
+| models | cell{struct} | Scene 2 时返回 .slx/.mdl 文件列表 {name, ext, fullpath} |
+| reason | char | 判断依据 |
+| confirmationToken | char | 令牌 (随机UUID)，用户确认时必须传回 |
+
+### `sl_scene_confirm(scene, modelName)`
+用户确认场景选择 (Bridge 层令牌验证)
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| scene | double | 1=Scene 1, 2=Scene 2 |
+| modelName | char | Scene 2 时的工作模型名 |
+| confirmationToken | char | 从 sl_scene_detect 获取的令牌 (AI 不可绕过) |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| sceneConfirmed | logical | 场景是否已锁定 |
+| workflowHint | char | 后续步骤提示 |
+
+## S2.2 模型加载 (Gate_S2_LOAD)
+
+### `sl_model_load(modelName)`
+加载已有 Simulink 模型，验证存在性、可加载性、非空性。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 模型名称 (不含扩展名) |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| status | char | 'ok' / 'error' |
+| modelPath | char | 模型文件完整路径 |
+| modelVersion | char | Simulink 版本号 |
+| blockCount | double | 顶层模块数 |
+| topLevelBlocks | cell | 顶层模块路径列表 |
+| loadedAt | char | 加载时间戳 |
+
+## S2.3 模型理解
+
+### `sl_model_understand(modelName)`
+自动分析已有模型的完整结构。必须先用 sl_model_load 加载。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 模型名称 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| modelTree.totalBlocks | double | 总模块数 |
+| modelTree.subsystemCount | double | 子系统数量 |
+| modelTree.topLevelBlocks | cell | 顶层非子系统模块 |
+| signalFlow.lineCount | double | 信号线数量 |
+| signalFlow.connections | cell{struct} | 连接关系 {srcBlock, dstBlock} |
+| ioInterface.inports | cell{struct} | Inport 列表 {path, port} |
+| ioInterface.outports | cell{struct} | Outport 列表 {path, port} |
+| ioInterface.gotoTags | cell | Goto 标签列表 |
+| ioInterface.fromTags | cell | From 标签列表 |
+| keyParams.gains | cell{struct} | Gain 模块 {path, value} |
+| config.solver | char | 求解器 |
+| config.stopTime | char | 仿真停止时间 |
+| config.solverType | char | 求解器类型 |
+| issues | struct | 预存问题 (来自 sl_get_model_issues) |
+
+## S2.4 修改计划
+
+### `sl_modify_plan(modelName, taskDescription, modelUnderstanding)`
+Scene 2 修改意图 Prompt 组装器。返回 AI 设计引导和输出规范。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 模型名称 |
+| taskDescription | char | 修改任务的自然语言描述 |
+| modelUnderstanding | struct | 来自 sl_model_understand 的完整结果 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| modifyPrompt | char | AI 设计引导提示词 (含 Sandbox 隔离规则) |
+| outputSchema.sandboxSubsystem | struct | 沙盒子系统输出规范 |
+| outputSchema.existingModifications | struct | 已有修改声明规范 |
+| outputSchema.reasoning | char | 设计推理说明 |
+
+### `sl_modify_review(modifyPlan)`
+修改计划自检：沙盒完整性、连接点定义、修改风险评估。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modifyPlan | struct | AI 生成的修改计划 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| passed | logical | 是否通过自检 |
+| issues | cell | 问题列表 |
+| message | char | 审查结论 |
+
+### `sl_modify_approve(modelName, modifyPlan)`
+审批修改计划 + Gate_S2_APPROVE。设置 mS2Approved_ 和 mS2SandboxName_ 标志。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 模型名称 |
+| modifyPlan | struct | 修改计划 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| approved | logical | 是否批准 |
+| sandboxName | char | 沙盒子系统名称 |
+
+## S2.5 沙盒创建
+
+### `sl_model_sandbox(modelName, sandboxName, modifyPlan)`
+自动在模型中创建沙盒子系统 + Inport/Outport + Goto/From 信号连接。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 模型名称 |
+| sandboxName | char | 沙盒子系统名称 |
+| modifyPlan | struct | 修改计划 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| sandboxPath | char | 沙盒在模型中的完整路径 |
+| sandboxCreated | logical | 是否创建成功 |
+| ports.inports | cell{struct} | 创建的 Inport {block, connectedFrom, gotoTag} |
+| ports.outports | cell{struct} | 创建的 Outport {block, connectTo} |
+
+## S2.6 修改验证
+
+### `sl_modify_verify_step(modelName, stepIndex, modifyPlan)`
+逐条验证 Scene 2 修改步骤是否与计划一致。
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 模型名称 |
+| stepIndex | double | 步骤编号 |
+| modifyPlan | struct | 修改计划 (含 executionSteps) |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| verified | logical | 是否验证通过 |
+| mismatches | cell | 不匹配项列表 |
+| message | char | 验证结论 |
+
+## Gate 速查 (Scene 2)
+
+| Gate | 触发点 | 作用 |
+|------|--------|------|
+| Gate_S0 | 所有 Simulink 操作 | 令牌门控: 场景未确认→拦截一切 |
+| Gate_S2_LOAD | sl_model_load | 模型文件存在 + 可加载 + 非空 |
+| Gate_S2_APPROVE | sl_modify_approve | 连接点存在性验证 (Bridge 硬编码) |
+| Gate_S2_MODIFY | add_block/line/param 等写操作 | 沙盒外修改需用户确认 |
 
 ---
 

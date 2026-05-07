@@ -59,6 +59,10 @@ function result = sl_framework_review(taskDescription, varargin)
             return;
         end
     end
+    
+    % [v11.6.8] Normalize: ensure struct arrays for (i) indexing compatibility.
+    % Uses global sl_fw_normalize utility (idempotent — no-op for struct arrays).
+    macroFramework = sl_fw_normalize(macroFramework);
 
     % ===== 执行检查 =====
     checks = cell(length(p.checkItems), 1);
@@ -318,6 +322,61 @@ function r = check_goto_from(fw)
                     r.issue = sprintf('Goto destination "%s" not found in subsystems', dstSubsystems{j});
                     r.suggestion = 'Ensure all Goto destination subsystems exist';
                     return;
+                end
+            end
+        end
+        % [P1-5 FIX] Check for cross-subsystem Goto/From usage (R2 enforcement)
+        % If srcSubsystem != dstSubsystem(s), this is a cross-boundary violation
+        % Goto/From must ONLY be used within a single subsystem
+        if isfield(gf, 'srcSubsystem') && isfield(gf, 'dstSubsystems')
+            dstList = gf.dstSubsystems;
+            if iscell(dstList)
+                for j = 1:length(dstList)
+                    if ~strcmp(srcSubsystem, dstList{j})
+                        r.passed = false;
+                        r.confidence = 0.5;
+                        r.issue = sprintf('CROSS-BOUNDARY: Goto tag "%s" spans from "%s" to "%s". Goto/From must NOT cross subsystem boundaries. Use Inport/Outport for subsystem interfaces.', gf.tag, srcSubsystem, dstList{j});
+                        r.suggestion = 'Replace Goto/From with Inport/Outport standard interfaces between subsystems.';
+                        return;
+                    end
+                end
+            end
+        end
+    end
+    % [P1-5 FIX] Also check the new format: gotoFromPlan with usedWithinSubsystem
+    % If usedWithinSubsystem is specified, validate it exists in subsystems list
+    for i = 1:nGf
+        if iscell(fw.gotoFromPlan)
+            gf = fw.gotoFromPlan{i};
+        else
+            gf = fw.gotoFromPlan(i);
+        end
+        if isfield(gf, 'usedWithinSubsystem') && ~isempty(gf.usedWithinSubsystem)
+            if ~any(strcmp(subsysNames, gf.usedWithinSubsystem))
+                r.passed = false;
+                r.confidence = 0.6;
+                r.issue = sprintf('Goto/From scope "%s" not found in subsystems list', gf.usedWithinSubsystem);
+                r.suggestion = sprintf('Ensure usedWithinSubsystem references an existing subsystem: %s', sl_framework_utils('strjoin_safe', subsysNames, ', '));
+                return;
+            end
+        end
+        % [P1-5/R2-3 FIX v11.7] Check dstBlocks for cross-boundary violations
+        % If any dstBlock references a subsystem name, it's a cross-boundary Goto/From
+        if isfield(gf, 'dstBlocks') && ~isempty(gf.dstBlocks)
+            dstBlocks = gf.dstBlocks;
+            if ischar(dstBlocks)
+                dstBlocks = {dstBlocks};
+            end
+            if iscell(dstBlocks)
+                for db = 1:length(dstBlocks)
+                    dst = dstBlocks{db};
+                    if ischar(dst) && any(strcmp(dst, subsysNames))
+                        r.passed = false;
+                        r.confidence = 0.0;
+                        r.issue = sprintf('CROSS-BOUNDARY: Goto tag "%s" targets subsystem "%s". Goto/From cannot cross subsystem boundaries.', gf.tag, dst);
+                        r.suggestion = 'Use Inport/Outport for subsystem-to-subsystem signals. Goto/From is only for within-subsystem local routing.';
+                        return;
+                    end
                 end
             end
         end

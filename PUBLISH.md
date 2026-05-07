@@ -9,7 +9,7 @@
 
 | 项目 | 路径 | 说明 |
 |------|------|------|
-| **Skill 目录**（唯一源码） | `C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent\` | MATLAB Agent 智能体的原始目录 |
+| **Skill 目录**（唯一源码） | `C:\Users\泰坦\.workbuddy\skills\matlab-agent\` | MATLAB Agent 智能体的原始目录 |
 | **GitHub 仓库** | https://github.com/Quantum-particle/MATLAB-Agent | 公开源码仓库（文件全量相同，敏感字段脱敏） |
 | **本地 git** | Skill 目录内 `.git/` | 直接在 Skill 目录初始化 git，关联远程仓库 |
 
@@ -31,7 +31,7 @@
 
 | 敏感字段 | 本地值 | GitHub 替换为 | 涉及文件 |
 |----------|--------|---------------|----------|
-| 用户名 | `YOUR_USERNAME` | `YOUR_USERNAME` | 所有含路径的文件 |
+| 用户名 | `泰坦` | `泰坦` | 所有含路径的文件 |
 | Token | （本地保留） | `（已脱敏）` | GITHUB.md |
 | 邮箱 | （本地保留） | `（已脱敏）` | GITHUB.md |
 
@@ -74,7 +74,7 @@ references/troubleshooting.md
 当只修改了部分文件，且修改文件不含敏感信息时：
 
 ```powershell
-cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent"
+cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
 
 # 0. 🔴 更新 README.md（版本号、新特性、变更日志等）
 #    确保首页展示的信息与本次推送一致
@@ -102,14 +102,14 @@ git -c http.proxy="" -c https.proxy="" push origin main
 当修改了 assume-unchanged 保护的文件时：
 
 ```powershell
-cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent"
+cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
 
 # 0. 🔴 更新 README.md（版本号、新特性、变更日志等）
 
 # 1. 取消 assume-unchanged 保护
 git update-index --no-assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/ensure-running.bat app/server/system-prompts.ts references/troubleshooting.md
 
-# 2. 脱敏：替换 "YOUR_USERNAME" → "YOUR_USERNAME"
+# 2. 脱敏：替换 "泰坦" → "泰坦"
 #    （用脚本或手动替换所有受保护文件中的敏感字段）
 
 # 3. 暂存 + 提交 + 推送
@@ -118,7 +118,7 @@ git commit -m "feat(vX.Y): 提交说明"
 git -c http.proxy="" -c https.proxy="" push origin main
 
 # 4. 🔴 恢复本地敏感信息
-#    将 "YOUR_USERNAME" 替换回 "YOUR_USERNAME"
+#    将 "泰坦" 替换回 "泰坦"
 #    （用脚本或手动恢复）
 
 # 5. 🔴 重新标记 assume-unchanged
@@ -130,7 +130,7 @@ git update-index --assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md a
 当发现 GitHub 上的文件内容与本地不一致（如版本号停留在旧版）：
 
 ```powershell
-cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent"
+cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
 
 # 0. 🔴 更新 README.md（版本号、新特性、变更日志等）
 #    确保首页展示的信息与本次推送一致
@@ -139,7 +139,7 @@ cd "C:\Users\YOUR_USERNAME\.workbuddy\skills\matlab-agent"
 git update-index --no-assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/ensure-running.bat app/server/system-prompts.ts references/troubleshooting.md
 
 # 2. 脱敏处理
-#    替换所有受保护文件中的 "YOUR_USERNAME" → "YOUR_USERNAME"
+#    替换所有受保护文件中的 "泰坦" → "泰坦"
 
 # 3. 清空 git 索引（删除所有文件的追踪，但不删本地文件！）
 git rm -r --cached .
@@ -156,7 +156,7 @@ git commit -m "feat(vX.Y): 清仓重推 — 全量同步到最新版本"
 git -c http.proxy="" -c https.proxy="" push origin main
 
 # 7. 🔴 恢复本地敏感信息
-#    将 "YOUR_USERNAME" 替换回 "YOUR_USERNAME"
+#    将 "泰坦" 替换回 "泰坦"
 
 # 8. 🔴 重新标记 assume-unchanged
 git update-index --assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/ensure-running.bat app/server/system-prompts.ts references/troubleshooting.md
@@ -170,7 +170,7 @@ git update-index --assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md a
 
 ```powershell
 # 检查暂存区中是否有敏感内容
-git diff --cached | Select-String "YOUR_USERNAME|169663|ghp_"
+git diff --cached | Select-String "泰坦|169663|ghp_"
 
 # 如果有输出，说明还有未脱敏的内容，需要处理后再推送
 # 如果无输出，说明脱敏完成，可以安全推送

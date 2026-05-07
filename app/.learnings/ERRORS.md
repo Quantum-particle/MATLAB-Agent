@@ -1672,3 +1672,5955 @@ cannot access local variable '_fw_mn' where it is not associated with a value
 - Related Files: matlab_bridge.py
 
 ---
+
+## [ERR-20260430-sl_scene] sl_scene_detect
+
+**Logged**: 2026-04-30T16:43:06.235126
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_detect
+
+### Error
+```
+expected str, bytes or os.PathLike object, not NoneType
+```
+
+### Context
+- Command: sl_scene_detect
+- Params: {'workspaceDir': 'D:\\MATLAB_Workspace\\MATLAB_Agent开发'}
+- MATLAB Version: unknown
+- Bridge Mode: cli
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_scene] sl_scene_detect
+
+**Logged**: 2026-04-30T16:44:24.508725
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_detect
+
+### Error
+```
+expected str, bytes or os.PathLike object, not NoneType
+```
+
+### Context
+- Command: sl_scene_detect
+- Params: {'workspaceDir': 'D:\\MATLAB_Workspace\\MATLAB_Agent开发'}
+- MATLAB Version: unknown
+- Bridge Mode: cli
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_frame] sl_framework_approve
+
+**Logged**: 2026-04-30T23:47:45.081329
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'FinalTest/TestSandbox', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': []}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_frame] sl_framework_approve
+
+**Logged**: 2026-04-30T23:47:59.184249
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'FinalTest/TestSandbox', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': {'connections': []}}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_frame] sl_framework_approve
+
+**Logged**: 2026-04-30T23:51:30.545526
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'FinalTest/TestClosure', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': {'connections': []}}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_frame] sl_framework_approve
+
+**Logged**: 2026-04-30T23:51:42.269270
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'FinalTest/TestClosure', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': {'connections': []}}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_frame] sl_framework_approve
+
+**Logged**: 2026-04-30T23:52:17.309342
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'FinalTest/TestClosure', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': {'connections': []}}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_frame] sl_framework_approve
+
+**Logged**: 2026-04-30T23:54:24.618052
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'FinalTest/ClosureTest', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': {'connections': []}}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_frame] sl_framework_approve
+
+**Logged**: 2026-04-30T23:59:04.062167
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'FinalTest/FinalClosure', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': {'connections': []}}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260430-sl_frame] sl_framework_approve
+
+**Logged**: 2026-04-30T23:59:15.906120
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'FinalTest/FinalClosure', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': {'connections': []}}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260501-sl_frame] sl_framework_approve
+
+**Logged**: 2026-05-01T00:01:21.630683
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'NormalModel', 'macroFramework': {'name': 'test'}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260501-sl_frame] sl_framework_approve
+
+**Logged**: 2026-05-01T00:01:21.835632
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'NormalModel/Subsys', 'macroFramework': {'name': 'test'}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260501-sl_frame] sl_framework_approve
+
+**Logged**: 2026-05-01T00:01:49.066243
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'TestModelOnly', 'macroFramework': {'name': 'test', 'subsystems': [], 'signalFlow': {'connections': []}}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260501-sl_frame] sl_framework_approve
+
+**Logged**: 2026-05-01T00:03:08.950960
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_framework_approve
+
+### Error
+```
+变量名称在 MATLAB 中无效
+```
+
+### Context
+- Command: sl_framework_approve
+- Params: {'modelName': 'T', 'macroFramework': {'name': 'T', 'subsystems': []}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:28.347144
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:28.600880
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:28.865351
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:29.132455
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Deriv_Kd', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:29.397105
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:29.658074
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Deriv_Kd', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:29.923239
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:32.357781
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:32.630418
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:32.896444
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:33.158851
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Integ', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:33.424823
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Integ', 'srcPort': 1, 'dstBlock': 'Gain_Ki', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:33.689335
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:33.953588
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Gain_Ki', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:34.216897
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:35.808366
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Thrust', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:36.070353
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Torque', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:36.329891
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'Gain_Thrust', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:36.596027
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'Gain_Torque', 'srcPort': 1, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:36.883895
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:37.179392
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:37.464961
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:37.760566
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:38.060200
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:38.353347
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:38.622023
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:02:38.915305
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:05:51.831761
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:05:52.106921
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:05:52.376711
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:05:52.655671
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:05:52.920330
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:05:53.175089
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:05:53.447575
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:05:53.727364
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:25.332251
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:25.594028
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:25.838359
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:26.092232
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Deriv_Kd', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:26.337666
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:26.589016
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Deriv_Kd', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:26.833905
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:29.199347
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:29.461787
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:29.723818
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:29.990339
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Integ', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:30.256605
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Integ', 'srcPort': 1, 'dstBlock': 'Gain_Ki', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:30.521977
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:30.785438
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Gain_Ki', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:31.048814
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:32.628179
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Thrust', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:32.888289
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Torque', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:33.131482
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'Gain_Thrust', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:33.388320
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'Gain_Torque', 'srcPort': 1, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:33.674693
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:33.954829
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:34.230041
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:34.499265
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:34.782709
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:35.070336
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:35.343001
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:07:35.632243
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:15:17.670570
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:15:17.930942
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:15:18.193720
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:15:18.454247
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:15:18.714301
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:15:18.976840
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:15:19.236808
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:15:19.498263
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:00.902363
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:01.162068
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:01.404664
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:01.673938
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Deriv_Kd', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:01.938869
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:02.201150
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Deriv_Kd', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:02.445312
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Pos_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:04.893059
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:05.157853
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:05.401723
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:05.666750
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Integ', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:05.927479
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Integ', 'srcPort': 1, 'dstBlock': 'Gain_Ki', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:06.195066
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:06.456976
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Gain_Ki', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:06.722689
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Vel_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:08.265202
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Thrust', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:08.528217
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Torque', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:08.790267
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'Gain_Thrust', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:09.055125
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3/Thrust_Map', 'srcBlock': 'Gain_Torque', 'srcPort': 1, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:09.320791
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:09.603456
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:09.885989
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:10.165613
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:10.448472
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:10.713090
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:10.995658
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:16:11.276823
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:18:59.192656
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:18:59.436188
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:18:59.683297
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:18:59.933356
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:00.185137
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:00.418743
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:00.652722
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:00.902833
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:49.165101
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:49.401571
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:49.641735
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:49.899573
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:50.135785
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:50.372225
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:50.631639
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:19:50.868460
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_v3', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:29.526021
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:29.771301
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Pos_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:30.016461
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Pos_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:30.282599
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Deriv_Kd', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:30.550460
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Pos_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:30.795777
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Pos_PID', 'srcBlock': 'Deriv_Kd', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:31.041688
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Pos_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:33.430578
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Vel_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:33.675213
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Vel_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:33.921297
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:34.183482
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Integ', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:34.433318
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Vel_PID', 'srcBlock': 'Integ', 'srcPort': 1, 'dstBlock': 'Gain_Ki', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:34.700140
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Vel_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:34.959591
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Vel_PID', 'srcBlock': 'Gain_Ki', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:35.220896
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Vel_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:36.812083
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Thrust', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:37.059275
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Torque', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:37.304931
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Thrust_Map', 'srcBlock': 'Gain_Thrust', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:37.562675
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022/Thrust_Map', 'srcBlock': 'Gain_Torque', 'srcPort': 1, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:37.823626
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:38.066318
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:38.338416
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:38.602603
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:38.846885
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:39.090443
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:39.333796
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:20:39.579205
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98022', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:35.938169
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:36.202638
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Pos_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:36.442572
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Pos_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:36.700494
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Deriv_Kd', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:36.941590
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Pos_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:37.196532
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Pos_PID', 'srcBlock': 'Deriv_Kd', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:37.459028
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Pos_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:42.594551
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Vel_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:42.853189
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Vel_PID', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:43.103845
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Gain_Kp', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:43.372877
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Vel_PID', 'srcBlock': 'Sum_Err', 'srcPort': 1, 'dstBlock': 'Integ', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:43.635670
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Vel_PID', 'srcBlock': 'Integ', 'srcPort': 1, 'dstBlock': 'Gain_Ki', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:43.897142
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Vel_PID', 'srcBlock': 'Gain_Kp', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:44.160908
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Vel_PID', 'srcBlock': 'Gain_Ki', 'srcPort': 1, 'dstBlock': 'Sum_Out', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:44.423204
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Vel_PID', 'srcBlock': 'Sum_Out', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:47.794404
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Thrust', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:48.056583
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Thrust_Map', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Gain_Torque', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:48.323117
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Thrust_Map', 'srcBlock': 'Gain_Thrust', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:48.567585
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Thrust_Map', 'srcBlock': 'Gain_Torque', 'srcPort': 1, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:48.840346
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:49.111664
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204', 'srcBlock': 'In3', 'srcPort': 1, 'dstBlock': 'Pos_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:49.398575
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204', 'srcBlock': 'In2', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:49.692484
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204', 'srcBlock': 'In4', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 2}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:49.963289
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204', 'srcBlock': 'Pos_PID', 'srcPort': 1, 'dstBlock': 'Vel_PID', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:50.249258
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204', 'srcBlock': 'Vel_PID', 'srcPort': 1, 'dstBlock': 'Thrust_Map', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:50.523818
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204', 'srcBlock': 'Thrust_Map', 'srcPort': 1, 'dstBlock': 'Out1', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:23:50.807497
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204', 'srcBlock': 'Thrust_Map', 'srcPort': 2, 'dstBlock': 'Out2', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_add_l] sl_add_line
+
+**Logged**: 2026-05-06T00:30:39.022661
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_line
+
+### Error
+```
+argument of type 'int' is not iterable
+```
+
+### Context
+- Command: sl_add_line
+- Params: {'modelName': 'Quadrotor_FDM/PID_Rebuilt_98204/Pos_PID', 'srcBlock': 'In1', 'srcPort': 1, 'dstBlock': 'Sum_Err', 'dstPort': 1}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_user_confirm
+
+**Logged**: 2026-05-06T10:01:38.041919
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_user_confirm
+
+### Error
+```
+cannot access local variable 'uuid' where it is not associated with a value
+```
+
+### Context
+- Command: sl_scene_user_confirm
+- Params: {'detectionToken': 'ac6dfc4f2f844bdf', 'scene': 2, 'modelName': 'Quadrotor_FDM'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_user_confirm
+
+**Logged**: 2026-05-06T10:01:38.643229
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_user_confirm
+
+### Error
+```
+cannot access local variable 'uuid' where it is not associated with a value
+```
+
+### Context
+- Command: sl_scene_user_confirm
+- Params: {'detectionToken': '466ab20f0ba54d0c', 'scene': 2, 'modelName': 'Quadrotor_FDM'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_user_confirm
+
+**Logged**: 2026-05-06T10:01:39.053818
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_user_confirm
+
+### Error
+```
+cannot access local variable 'uuid' where it is not associated with a value
+```
+
+### Context
+- Command: sl_scene_user_confirm
+- Params: {'detectionToken': '60091d459f3e48ba', 'scene': 2, 'modelName': 'Quadrotor_FDM'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_model] sl_model_complete
+
+**Logged**: 2026-05-06T11:53:28.698508
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_model_complete
+
+### Error
+```
+cannot access local variable 'model_name_for_verify' where it is not associated with a value
+```
+
+### Context
+- Command: sl_model_complete
+- Params: {'modelName': 'Quadrotor_FDM', 'action': 'complete'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_detect
+
+**Logged**: 2026-05-06T21:23:03.649861
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_detect
+
+### Error
+```
+name 'ci' is not defined
+```
+
+### Context
+- Command: sl_scene_detect
+- Params: {'workspaceDir': 'D:/MATLAB_Workspace/MATLAB_Agent开发'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_detect
+
+**Logged**: 2026-05-06T21:23:04.043143
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_detect
+
+### Error
+```
+name 'ci' is not defined
+```
+
+### Context
+- Command: sl_scene_detect
+- Params: {'workspaceDir': 'D:/MATLAB_Workspace/MATLAB_Agent开发'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_detect
+
+**Logged**: 2026-05-06T21:25:37.429745
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_detect
+
+### Error
+```
+name 'ci' is not defined
+```
+
+### Context
+- Command: sl_scene_detect
+- Params: {'workspaceDir': 'D:/MATLAB_Workspace/MATLAB_Agent开发'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_detect
+
+**Logged**: 2026-05-06T21:29:58.162224
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_detect
+
+### Error
+```
+name 'ci' is not defined
+```
+
+### Context
+- Command: sl_scene_detect
+- Params: {'workspaceDir': 'D:/MATLAB_Workspace/MATLAB_Agent开发'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_detect
+
+**Logged**: 2026-05-06T21:29:58.567524
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_detect
+
+### Error
+```
+name 'ci' is not defined
+```
+
+### Context
+- Command: sl_scene_detect
+- Params: {'workspaceDir': 'D:/MATLAB_Workspace/MATLAB_Agent开发'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260506-sl_scene] sl_scene_detect
+
+**Logged**: 2026-05-06T21:30:23.952436
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_scene_detect
+
+### Error
+```
+name 'ci' is not defined
+```
+
+### Context
+- Command: sl_scene_detect
+- Params: {'workspaceDir': 'D:/MATLAB_Workspace/MATLAB_Agent开发'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---

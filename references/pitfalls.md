@@ -95,6 +95,44 @@
 - 每次操作返回 `_workflow` 字段引导下一步
 - 排版由代码自动触发，AI 不需要主动调用
 
+### 34. 参数管理最佳实践 (v11.6.7)
+
+**物理参数应定义为 workspace 变量**，在 Gain 块中引用变量名而非硬编码字面值:
+
+```matlab
+% ✅ DO: workspace 变量 + 块引用变量名
+k_T = 1e-5;   k_Q = 1e-7;   tau_m = 0.1;
+m = 1.5;      g = 9.81;
+Jxx = 0.02;   Jyy = 0.02;   Jzz = 0.04;
+set_param(gainBlock, 'Gain', 'k_T');  % 引用变量名
+
+% ❌ DON'T: 硬编码字面值
+set_param(gainBlock, 'Gain', num2str(1e-5));  % 调参需改 .slx
+```
+
+**原因**: workspace 变量方式允许通过修改变量值后重新仿真来快速调参，
+无需重新编辑和保存 .slx 文件。
+
+### 35. 安全清除顶层连线 (v11.6.7)
+
+**DO**: 使用 `sl_clear_top_lines(modelName)`:
+```matlab
+result = sl_clear_top_lines('Quadrotor_FDM');
+% → 仅清除顶层连线，子系统内部不受影响
+```
+
+**DON'T**: 使用 `find_system(mn, 'FindAll','on', 'type','line')` + `delete_line`:
+```matlab
+% ❌ 递归删除所有层级连线，包括子系统内部！
+lines = find_system(mn, 'FindAll', 'on', 'type', 'line');
+for i = 1:length(lines); delete_line(lines(i)); end
+```
+
+**替代方案**: 如果必须使用 find_system，加 `SearchDepth=1` 限制递归深度:
+```matlab
+lines = find_system(mn, 'SearchDepth', 1, 'FindAll', 'on', 'type', 'line');
+```
+
 ---
 
 > **详细版本**: 见 SKILL.md (已精简) 或 git 历史

@@ -22,6 +22,12 @@ function result = sl_set_param_safe(blockPath, params, varargin)
 %     .error        - 错误信息（仅 status='error' 时）
 
     % ===== 解析参数 =====
+    % [v11.5] Convert MATLAB strings to char arrays
+    if isstring(blockPath), blockPath = char(blockPath); end
+    for vi = 1:length(varargin)
+        if isstring(varargin{vi}), varargin{vi} = char(varargin{vi}); end
+    end
+    
     opts = struct( ...
         'validateAfter', true, ...
         'skipPreCheck', false, ...
@@ -53,8 +59,14 @@ function result = sl_set_param_safe(blockPath, params, varargin)
     % ===== 确保模型已加载 =====
     if opts.loadModelIfNot
         try
-            if ~bdIsLoaded(modelName)
-                load_system(modelName);
+            % [v11.5] Extract top-level model for bdIsLoaded/load_system
+            if ~isempty(strfind(modelName, '/'))
+                topModel = modelName(1:strfind(modelName, '/')-1);
+            else
+                topModel = modelName;
+            end
+            if ~bdIsLoaded(topModel)
+                load_system(topModel);
             end
         catch ME
             result.status = 'error';

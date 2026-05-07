@@ -1110,6 +1110,142 @@ app.post("/api/matlab/simulink/framework_modify_reject", async (req, res) => {
   }
 });
 
+// ============= v11.5: Scene Detection (Gate_S0) =============
+
+// POST /api/matlab/simulink/scene/detect — auto-detect scene
+app.post("/api/matlab/simulink/scene/detect", async (req, res) => {
+  try {
+    const { workspaceDir } = req.body;
+    const result = await matlab.sceneDetect(workspaceDir);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/scene/confirm — user confirms scene (requires confirmationToken)
+// [v11.7.1 B1 FIX] Accept detectionToken as alias for confirmationToken (API returns detectionToken)
+app.post("/api/matlab/simulink/scene/confirm", async (req, res) => {
+  try {
+    const { scene, modelName, confirmationToken, detectionToken } = req.body;
+    const token = confirmationToken || detectionToken || '';
+    const result = await matlab.sceneConfirm(scene, modelName, token);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/model_load — load existing model (Scene 2)
+app.post("/api/matlab/simulink/model_load", async (req, res) => {
+  try {
+    const { modelName } = req.body;
+    const result = await matlab.modelLoad(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/model_understand — analyze existing model (Scene 2)
+app.post("/api/matlab/simulink/model_understand", async (req, res) => {
+  try {
+    const { modelName } = req.body;
+    const result = await matlab.modelUnderstand(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/modify_plan — generate modification design prompt (Scene 2)
+app.post("/api/matlab/simulink/modify_plan", async (req, res) => {
+  try {
+    const { modelName, taskDescription, modelUnderstanding } = req.body;
+    const result = await matlab.modifyPlan(modelName, taskDescription, modelUnderstanding);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/modify_review — self-check modify plan (Scene 2)
+app.post("/api/matlab/simulink/modify_review", async (req, res) => {
+  try {
+    const { modifyPlan } = req.body;
+    const result = await matlab.modifyReview(modifyPlan);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/modify_approve — approve modify plan + Gate_S2 (Scene 2)
+app.post("/api/matlab/simulink/modify_approve", async (req, res) => {
+  try {
+    const { modelName, modifyPlan } = req.body;
+    const result = await matlab.modifyApprove(modelName, modifyPlan);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/s2mod/confirm — user confirms Scene 2 modification
+app.post("/api/matlab/simulink/s2mod/confirm", async (req, res) => {
+  try {
+    const { permissionId, approved, modelName, command, target } = req.body;
+    const result = await matlab.s2ModConfirm(permissionId, approved, modelName, command, target);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/model_sandbox — create sandbox subsystem (Scene 2)
+app.post("/api/matlab/simulink/model_sandbox", async (req, res) => {
+  try {
+    const { modelName, sandboxName, modifyPlan } = req.body;
+    const result = await matlab.modelSandbox(modelName, sandboxName, modifyPlan);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/modify_verify_step — verify Scene 2 modification step
+app.post("/api/matlab/simulink/modify_verify_step", async (req, res) => {
+  try {
+    const { modelName, stepIndex, modifyPlan } = req.body;
+    const result = await matlab.modifyVerifyStep(modelName, stepIndex, modifyPlan);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/model_complete — Gate_4 完成门控
+app.post("/api/matlab/simulink/model_complete", async (req, res) => {
+  try {
+    const { modelName, action } = req.body;
+    const result = await matlab.simulinkModelComplete(modelName, action || 'complete');
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/model_issues — 获取模型问题诊断
+app.post("/api/matlab/simulink/model_issues", async (req, res) => {
+  try {
+    const { modelName } = req.body;
+    const result = await matlab.simulinkModelIssues(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
 // v8.0: 结构化状态报告 API
 app.post("/api/matlab/simulink/model_status", async (req, res) => {
   try {

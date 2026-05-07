@@ -61,8 +61,14 @@ function result = sl_subsystem_expand(modelName, subsystemPath, varargin)
 
     % ===== 加载模型 =====
     try
-        if opts.loadModelIfNot && ~bdIsLoaded(modelName)
-            load_system(modelName);
+        % [v11.5] Extract top-level model for bdIsLoaded/load_system
+        if ~isempty(strfind(modelName, '/'))
+            topModel = modelName(1:strfind(modelName, '/')-1);
+        else
+            topModel = modelName;
+        end
+        if opts.loadModelIfNot && ~bdIsLoaded(topModel)
+            load_system(topModel);
         end
     catch me
         result = struct('status', 'error', 'error', ['Failed to load model: ' me.message]);

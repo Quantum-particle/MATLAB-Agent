@@ -1,5 +1,7 @@
 function r = sl_check_signal_closure(fw)
 % SL_CHECK_SIGNAL_CLOSURE Check signal flow references valid subsystems (v11.4)
+    % [v11.6.8] Normalize via global utility (idempotent)
+    fw = sl_fw_normalize(fw);
     r = struct('item', 'signal_closure', 'passed', true, 'confidence', 0.95, 'issue', '', 'suggestion', '');
     if ~isfield(fw, 'subsystems') || ~isfield(fw, 'signalFlow') || isempty(fw.signalFlow)
         r.confidence = 0.8; return;

@@ -32,7 +32,8 @@ function result = sl_model_design(taskDescription, varargin)
         end
         % Mark design as approved in persistent storage
         try
-            assignin('base', ['design_approved_' modelName], true);
+            model_safe = strrep(modelName, '/', '__');
+            assignin('base', ['design_approved_' model_safe], true);
             result = struct('status', 'ok', 'message', sprintf('Design approved for model: %s', modelName), ...
                            'designApproved', true, 'modelName', modelName);
         catch ME

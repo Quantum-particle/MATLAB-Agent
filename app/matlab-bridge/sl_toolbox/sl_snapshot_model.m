@@ -68,8 +68,14 @@ function result = sl_snapshot_model(modelName, action, varargin)
     if strcmpi(action, 'create') || strcmpi(action, 'rollback')
         if opts.loadModelIfNot
             try
-                if ~bdIsLoaded(modelName)
-                    load_system(modelName);
+                % [v11.5] Extract top-level model for bdIsLoaded/load_system
+                if ~isempty(strfind(modelName, '/'))
+                    topModel = modelName(1:strfind(modelName, '/')-1);
+                else
+                    topModel = modelName;
+                end
+                if ~bdIsLoaded(topModel)
+                    load_system(topModel);
                 end
             catch ME
                 result.status = 'error';
@@ -77,7 +83,7 @@ function result = sl_snapshot_model(modelName, action, varargin)
                 return;
             end
         else
-            if ~bdIsLoaded(modelName)
+            if ~bdIsLoaded(topModel)
                 result.status = 'error';
                 result.error = 'Model not loaded. Set loadModelIfNot=true to auto-load.';
                 return;

@@ -36,6 +36,29 @@ function result = sl_add_block_safe(modelName, sourceBlock, varargin)
         'loadModelIfNot', true, ...
         'skipAntiPatternCheck', false);
     
+    % [P0-9 FIX] Handle blockName as first positional varargin
+    % Bridge passes blockName as _pos_3 → varargin{1} in MATLAB.
+    % But sl_add_block_safe only has 2 formal params + varargin.
+    % The name-value parser below expects pairs (key, val, key, val...).
+    % A lone string "Pos_PID" is not a valid opts field → silently ignored.
+    %
+    % Fix: detect when varargin{1} is a plain string (not a field name)
+    % and treat it as the block name → destPath.
+    if ~isempty(varargin) && ischar(varargin{1})
+        fn = fieldnames(opts);
+        if ~any(strcmp(varargin{1}, fn))
+            % varargin{1} is a block name, not a parameter key
+            name_val = varargin{1};
+            % Build destPath: if name contains '/', use as-is; otherwise prepend modelName
+            if ~isempty(strfind(name_val, '/'))
+                opts.destPath = name_val;
+            else
+                opts.destPath = [modelName '/' name_val];
+            end
+            varargin = varargin(2:end);  % Remove consumed block name
+        end
+    end
+    
     idx = 1;
     while idx <= length(varargin)
         if ischar(varargin{idx}) && idx < length(varargin)
@@ -99,6 +122,12 @@ function result = sl_add_block_safe(modelName, sourceBlock, varargin)
             typeName = parts{end};
         end
         destPath = [modelName '/' typeName];
+    else
+        % [P0-9 FIX] Ensure destPath has full path prefix
+        % If destPath is just a block name (no '/'), prepend modelName
+        if isempty(strfind(destPath, '/'))
+            destPath = [modelName '/' destPath];
+        end
     end
     
     % ===== 检查名称冲突 =====

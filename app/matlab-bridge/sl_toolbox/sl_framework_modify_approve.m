@@ -129,7 +129,8 @@ function result = sl_framework_modify_approve(modelName, varargin)
     assignin('base', history_var, history);
 
     % Record modification timestamp
-    assignin('base', ['mFWModifiedAt_' modelName], sl_framework_utils('format_timestamp'));
+    model_safe = strrep(modelName, '/', '__');
+    assignin('base', ['mFWModifiedAt_' model_safe], sl_framework_utils('format_timestamp'));
 
     % ===== Clear pending modification =====
     % [P1-6 FIX] Use empty array [] instead of empty struct() to clear pending

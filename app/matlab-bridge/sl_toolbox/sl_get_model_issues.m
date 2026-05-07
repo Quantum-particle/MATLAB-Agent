@@ -18,8 +18,8 @@ function result = sl_get_model_issues(modelName)
 
     % ===== Ensure model loaded =====
     try
-        if ~bdIsLoaded(modelName)
-            load_system(modelName);
+        model_safe = strrep(modelName, '/', '__'); if isempty(strfind(modelName, '/')), topModel = modelName; else topModel = modelName(1:strfind(modelName, '/')-1); end; if ~bdIsLoaded(topModel)
+            load_system(topModel);
         end
     catch ME
         result = struct('status', 'error', 'error', ['Model not loaded: ' ME.message]);

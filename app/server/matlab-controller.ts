@@ -1160,6 +1160,77 @@ export async function simulinkFrameworkModifyReject(params: Record<string, any>)
   return executeBridgeCommand({ action: 'sl_framework_modify_reject', params });
 }
 
+// ============= v11.5: Scene Detection (Gate_S0) =============
+
+/** v11.5: 场景自动检测 — 扫描 workspace 中的 .slx/.mdl 文件 */
+export async function sceneDetect(workspaceDir: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_scene_detect', params: { workspaceDir } });
+}
+
+/** v11.5: 场景确认 — 用户确认 Scene 1 或 Scene 2（需要 confirmationToken） */
+export async function sceneConfirm(scene: number, modelName?: string, confirmationToken?: string): Promise<MATLABResult> {
+  return executeBridgeCommand({
+    action: 'sl_scene_confirm',
+    params: { scene, modelName: modelName || '', confirmationToken: confirmationToken || '' }
+  });
+}
+
+/** v11.5: 模型加载 — 加载已有 Simulink 模型用于 Scene 2 修改 */
+export async function modelLoad(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_model_load', params: { modelName } });
+}
+
+/** v11.5: 模型理解 — 自动分析已有模型的完整结构 */
+export async function modelUnderstand(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_model_understand', params: { modelName } });
+}
+
+/** v11.5: 修改计划 — 生成 Scene 2 修改设计的 Prompt */
+export async function modifyPlan(modelName: string, taskDescription: string, modelUnderstanding: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_modify_plan', params: { modelName, taskDescription, modelUnderstanding } });
+}
+
+/** v11.5: 修改审查 — AI 自检修改计划 */
+export async function modifyReview(modifyPlan: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_modify_review', params: { modifyPlan } });
+}
+
+/** v11.5: 修改审批 — 审批修改计划 + 设置 Gate_S2 标志 */
+export async function modifyApprove(modelName: string, modifyPlan: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_modify_approve', params: { modelName, modifyPlan } });
+}
+
+/** v11.5: S2 修改确认 — 用户确认/拒绝已有模型的修改 */
+export async function s2ModConfirm(
+  permissionId: string, approved: boolean,
+  modelName: string, command: string, target: string
+): Promise<MATLABResult> {
+  return executeBridgeCommand({
+    action: 'sl_s2mod_confirm',
+    params: { permissionId, approved, modelName, command, target }
+  });
+}
+
+/** v11.5: 创建沙盒子系统 — 在模型中创建隔离修改的子空间 */
+export async function modelSandbox(modelName: string, sandboxName: string, modifyPlan: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_model_sandbox', params: { modelName, sandboxName, modifyPlan } });
+}
+
+/** v11.5: 逐条验证 — 验证 Scene 2 修改步骤与计划一致 */
+export async function modifyVerifyStep(modelName: string, stepIndex: number, modifyPlan: Record<string, any>): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_modify_verify_step', params: { modelName, stepIndex, modifyPlan } });
+}
+
+/** Gate_4 完成门控 — 模型完整性检查 */
+export async function simulinkModelComplete(modelName: string, action: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_model_complete', params: { modelName, action } });
+}
+
+/** 模型问题诊断 — 未连接端口/GotoFrom/孤立模块 */
+export async function simulinkModelIssues(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_get_model_issues', params: { modelName } });
+}
+
 // ============= v8.0: 结构化状态报告 =============
 
 /** v8.0: 结构化状态报告 — 获取模型完整状态快照(含端口坐标) */

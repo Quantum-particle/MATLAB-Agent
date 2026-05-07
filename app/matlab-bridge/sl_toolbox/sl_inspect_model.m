@@ -43,9 +43,15 @@ function result = sl_inspect_model(modelName, varargin)
     end
     
     % ===== 确保模型已加载 =====
+    % [v11.5] 提取顶层模型名：find_system 接受路径，bdIsLoaded/load_system 只接受顶层模型
+    if ~isempty(strfind(modelName, '/'))
+        topModel = modelName(1:strfind(modelName, '/')-1);
+    else
+        topModel = modelName;
+    end
     try
-        if ~bdIsLoaded(modelName)
-            load_system(modelName);
+        if ~bdIsLoaded(topModel)
+            load_system(topModel);
         end
     catch ME
         result = struct('status', 'error', 'error', ...

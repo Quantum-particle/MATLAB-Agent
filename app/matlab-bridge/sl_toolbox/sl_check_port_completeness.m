@@ -1,6 +1,8 @@
 function r = sl_check_port_completeness(fw)
 % SL_CHECK_PORT_COMPLETENESS Check subsystem port completeness (v11.4)
 %   Verifies every subsystem's Inport/Outport appears in signalFlow or gotoFromPlan.
+    % [v11.6.8] Normalize via global utility (idempotent)
+    fw = sl_fw_normalize(fw);
     r = struct('item', 'port_completeness', 'passed', true, 'confidence', 0.95, 'issue', '', 'suggestion', '');
     if ~isfield(fw, 'subsystems') || isempty(fw.subsystems)
         r.passed = false; r.confidence = 0.3; r.issue = 'No subsystems defined'; return;

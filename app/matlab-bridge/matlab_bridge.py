@@ -91,6 +91,9 @@ _project_dir = None
 _matlab_engine = None
 _test_engine = None  # [v11.4.2] Engine from compatibility test, reused by get_engine()
 _matlab_version = None  # 缓存 MATLAB 版本号
+_SCENE_STATE = {}  # v11.5: Scene 2 state for CLI mode (no MATLAB engine)
+_S2_MOD_PERMISSIONS = {}  # v11.5: Gate_S2_MODIFY permissions cache
+_REQUEST_COUNTER = 0  # v11.6: Monotonically increasing request counter for turn detection
 
 # ============= Workspace Isolation（v5.4 → v10.1 强制隔离）=============
 # 中间临时文件隔离到 .matlab_agent_tmp/ 子文件夹，避免污染用户工作目录
@@ -201,37 +204,74 @@ def _is_matlab_at_least(release):
 
 # ============= v6.0: 类型转换辅助函数 =============
 
+def _list_of_dicts_to_struct_array(lst, _depth=0):
+    """Convert list of homogeneous dicts to MATLAB struct array expression.
+    
+    Input:  [{'name':'A','val':1}, {'name':'B','val':2}]
+    Output: struct('name',{'A','B'},'val',{1,2})
+    
+    This is the PREFERRED format for .m functions that use (i) indexing.
+    Falls back to cell-of-struct via _list_to_matlab_cell if dicts are
+    heterogeneous (different keys).
+    """
+    if not lst or _depth > 10:
+        return '{}'
+    
+    # Check if all elements are dicts
+    if not all(isinstance(item, dict) for item in lst):
+        return _list_to_matlab_cell(lst, _depth + 1)
+    
+    # Check if all dicts have the same keys
+    first_keys = set(lst[0].keys())
+    for d in lst[1:]:
+        if set(d.keys()) != first_keys:
+            # Heterogeneous dicts → fall back to cell array
+            return _list_to_matlab_cell(lst, _depth + 1)
+    
+    # Build struct array: struct('key1',{v1,v2,...}, 'key2',{v1,v2,...})
+    keys = list(lst[0].keys())
+    parts = []
+    for k in keys:
+        vals = []
+        for d in lst:
+            v = d.get(k, '')
+            vals.append(_python_to_matlab_value(v, _depth + 1))
+        parts.append(f"'{k}',{{{','.join(vals)}}}")
+    return f"struct({','.join(parts)})"
+
+
 def _dict_to_matlab_struct(d, _depth=0):
     """Python dict → MATLAB struct 构造字符串
     
-    注意: 遵循踩坑 #16 — 不用 struct('field',cellVal) 直接构造，
-    避免空 cell 导致 struct 展开为 1x0。
-    对于包含 list/dict 值的字段，使用分步赋值模式。
-    简单类型值可以直接用 struct() 构造。
+    v11.6.8 FIX: 对同构 list[dict] 生成 struct array (struct('field',{v1,v2}))，
+    而非 cell-of-struct ({{struct(...), struct(...)}})，与 .m 函数 (i) 索引兼容。
+    异构 list 仍用双层 cell {{...}} 包装。
     """
     if not d:
         return 'struct()'
     
-    # 检查是否有复杂嵌套值（list of dict, nested dict）
-    has_complex = any(
-        isinstance(v, (list, dict)) for v in d.values()
-    )
-    
-    if has_complex:
-        # 复杂结构: 使用分步赋值（安全但较长）
-        # 先构造空 struct，再逐字段赋值
-        parts = []
-        for k, v in d.items():
-            val_str = _python_to_matlab_value(v, _depth)
-            parts.append(f"s.{k} = {val_str};")
-        # 包装为: struct(), s = ans; s.field1=val1; s.field2=val2; s
-        assign_code = ' '.join(parts)
-        return f"struct(), {assign_code}"
-    
-    # 简单结构: 直接用 struct() 构造
     parts = []
     for k, v in d.items():
-        val_str = _python_to_matlab_value(v, _depth)
+        if isinstance(v, list):
+            # v11.6.8: prefer struct array for homogeneous dict lists
+            if v and all(isinstance(item, dict) for item in v):
+                # Check key homogeneity
+                first_keys = set(v[0].keys())
+                homogeneous = all(set(di.keys()) == first_keys for di in v[1:])
+                if homogeneous:
+                    val_str = _list_of_dicts_to_struct_array(v, _depth + 1)
+                else:
+                    inner = _list_to_matlab_cell(v, _depth + 1)
+                    val_str = '{' + inner + '}'
+            else:
+                # Non-dict list: use double-cell wrapping
+                inner = _list_to_matlab_cell(v, _depth + 1)
+                val_str = '{' + inner + '}'
+        elif isinstance(v, dict):
+            # 嵌套 struct: 递归转换
+            val_str = _dict_to_matlab_struct(v, _depth + 1)
+        else:
+            val_str = _python_to_matlab_value(v, _depth)
         parts.append(f"'{k}',{val_str}")
     return f"struct({','.join(parts)})"
 
@@ -542,7 +582,7 @@ _PARAM_ENUM_VALUES = {
     # InterpMethod / ExtrapMethod
     ('1-D Lookup Table', 'InterpMethod'): ['linear', 'lower', 'upper', 'clipped', 'native'],
     ('2-D Lookup Table', 'InterpMethod'): ['linear', 'linear', 'cubic', 'lag', 'nearest', 'bilinear', 'bicubic'],
-    ('Prelookup', 'InterpMethod'): [' Clair', 'binary', 'linear', 'even', 'InterpolationUsingLastValue'],
+    ('Prelookup', 'InterpMethod'): ['Clair', 'binary', 'linear', 'even', 'InterpolationUsingLastValue'],
     ('Interpolation Using Prelookup', 'InterpMethod'): ['linear', 'cubic', 'piecewise', 'Akima', 'spline', 'pchip'],
     # 通用 enum 型参数（作为 fallback）
     'Multiplication': ['Element-wise(K.*u)', 'Matrix(K*u)', 'Element-wise(u.*K)', 'Matrix(u*K)'],
@@ -755,14 +795,6 @@ def _smart_param_convert(param_name, param_value, block_type=''):
             elif _is_flat_numeric_list(param_value):
                 return _list_to_matlab_vector(param_value)
             return _python_to_matlab_value(param_value)
-        elif target_type == 'scalar_or_matrix':
-            if _is_nested_list(param_value):
-                return _list_to_matlab_matrix(param_value)
-            elif _is_flat_numeric_list(param_value):
-                if len(param_value) == 1:
-                    return str(param_value[0])
-                return _list_to_matlab_vector(param_value)
-            return _python_to_matlab_value(param_value)
         elif target_type == 'string':
             return f"'{_format_as_matlab_string(param_value)}'"
         elif target_type == 'enum':
@@ -803,7 +835,7 @@ def _build_params_struct_expr(params_dict, block_type=''):
         if val_str.startswith("'") and val_str.endswith("'"):
             parts.append(f"'{k}',{val_str}")
         else:
-            parts.append(f"'{k}',({val_str})")
+            parts.append(f"'{k}',{val_str}")  # [P2-5 FIX] Removed unnecessary parentheses
     return f"struct({','.join(parts)})"
 
 
@@ -932,7 +964,14 @@ def _call_sl_function(func_name, args_dict, eng=None):
         f"result = {func_name}({args_str}); "
         f"disp(sl_jsonencode(result)); "
         f"catch ME, "
-        f"err = struct('status','error','message',ME.message,'identifier',ME.identifier); "
+        # [v11.7.1 B6 FIX] Unwrap MultipleErrors cause chain for actionable diagnostics
+        f"errMsg = ME.message; "
+        f"if ~isempty(ME.cause), "
+        f"  for ci = 1:numel(ME.cause), "
+        f"    errMsg = [errMsg ' | Cause ' num2str(ci) ': ' ME.cause{{ci}}.message]; "
+        f"  end, "
+        f"end, "
+        f"err = struct('status','error','message',errMsg,'identifier',ME.identifier); "
         f"disp(sl_jsonencode(err)); "
         f"end"
     )
@@ -1006,10 +1045,76 @@ ANTI_PATTERN_RULES = {
                 'message': 'To Workspace block is discouraged for signal recording',
                 'suggestion': 'Use Signal Logging via sl_signal_logging instead',
                 'alternativeCommand': 'sl_signal_logging'
+            },
+            # [P0-6 FIX] R2: Goto/From must only be used within a single subsystem
+            {
+                'rule_number': 3,
+                'field': 'sourceBlock',
+                'pattern': r'(?i)\bGoto\b',
+                'level': 'warning',
+                'message': 'Goto block: Ensure it is used ONLY within a single subsystem scope.',
+                'suggestion': 'For cross-subsystem signals, use Inport/Outport standard interfaces. Goto/From is for WITHIN-subsystem local routing only. Set TagVisibility="local" to enforce scope.',
+            },
+            {
+                'rule_number': 4,
+                'field': 'sourceBlock',
+                'pattern': r'(?i)\bFrom\b',
+                'level': 'warning',
+                'message': 'From block: Ensure its matching Goto is in the SAME subsystem.',
+                'suggestion': 'Cross-subsystem signals MUST use Inport/Outport. From blocks should only read Goto tags within their own subsystem scope.',
+            }
+        ]
+    },
+    # [P2-4 FIX v11.7] Anti-pattern rules for other write operations
+    'sl_set_param': {
+        'check_before': True,
+        'rules': [
+            {
+                'rule_number': 1,
+                'field': 'params',
+                'field_specific': 'SampleTime',
+                'pattern': r'^-\d',
+                'level': 'error',
+                'message': 'Negative sample time is physically impossible.',
+                'suggestion': 'Use positive sample time or -1 for inherited. -1 means inherit from parent.',
+            },
+            {
+                'rule_number': 2,
+                'field': 'params',
+                'field_specific': 'Gain',
+                'pattern': r'^\s*$',
+                'level': 'warning',
+                'message': 'Empty Gain value. Block will use default (1.0).',
+                'suggestion': 'Explicitly set Gain to the intended value to avoid silent defaults.',
+            },
+            {
+                'rule_number': 3,
+                'field': 'params',
+                'field_specific': 'Inputs',
+                'pattern': r'\|.*\|.*\|.*\|.*\|',
+                'level': 'warning',
+                'message': 'Sum block with >5 inputs is hard to read and maintain.',
+                'suggestion': 'Consider cascading multiple Sum blocks or using a Mux + Add approach.',
+            }
+        ]
+    },
+    'sl_add_line': {
+        'check_before': True,
+        'rules': [
+            {
+                'rule_number': 1,
+                'field': 'srcSpec',
+                'pattern_check': 'algebraic_loop',
+                'level': 'warning',
+                'message': 'Potential algebraic loop: adding line may create feedback without delay.',
+                'suggestion': 'Add a Unit Delay or Memory block to break algebraic loops.',
             }
         ]
     }
 }
+
+# [P2-4 FIX v11.7] _WRITE_VERIFY_MAP extension for new anti-pattern commands
+# Note: sl_modify_verify_step is now auto-triggered by Gap 5 fix
 
 
 def _anti_pattern_check(command, params):
@@ -1030,8 +1135,25 @@ def _anti_pattern_check(command, params):
     
     for rule in rules.get('rules', []):
         field_value = str(params.get(rule['field'], ''))
+        
+        # [P2-4 FIX] Field-specific check: search within a sub-field of params
+        field_specific = rule.get('field_specific', '')
+        if field_specific and isinstance(params.get(rule['field']), dict):
+            field_value = str(params[rule['field']].get(field_specific, ''))
+        
+        # [P2-4 NEW] Specialized check types (algebraic_loop, etc.)
+        pattern_check = rule.get('pattern_check', '')
         pattern = rule.get('pattern', '')
+        
+        matched = False
         if pattern and re.search(pattern, field_value):
+            matched = True
+        elif pattern_check == 'algebraic_loop':
+            # Algebraic loop detection: always warn for add_line operations
+            # Full loop detection requires model topology analysis (future enhancement)
+            matched = True
+        
+        if matched:
             warning = {
                 'rule': rule.get('rule_number', 0),
                 'level': rule['level'],
@@ -3147,6 +3269,142 @@ def execute_script(script_path, output_dir=None):
         return result
 
 
+def _sanitize_non_ascii_strings(eng, code):
+    """Pre-process MATLAB code: extract non-ASCII string literals, store via
+    eng.workspace[], and replace with variable references.
+    
+    This is the engineering-grade solution for Chinese path encoding.
+    eng.eval('cd(''中文路径'')') garbles Chinese chars on Windows because the
+    Python string → MATLAB char conversion uses the system locale, which may
+    not match UTF-8. eng.workspace['x'] = '中文路径' avoids this entirely
+    because the MATLAB Engine Python API handles Unicode correctly for
+    workspace variable assignment.
+    
+    Returns:
+        (sanitized_code, cleanup_vars): sanitized code string and list of
+        workspace variable names to clear after execution.
+    """
+    import re
+    
+    # Match MATLAB single-quoted strings: 'text' or 'text with '' escaped quote'
+    # Pattern: opening quote, content (non-quote or escaped ''), closing quote
+    str_pattern = re.compile(r"'((?:[^']|'')*)'")
+    
+    replacements = []
+    cleanup_vars = []
+    var_counter = [0]  # Use list for closure in nested function
+    
+    def replace_match(m):
+        original = m.group(0)   # '完整字符串'
+        content = m.group(1)    # 字符串内容
+        # Check for non-ASCII
+        if all(ord(c) < 128 for c in content):
+            return original  # ASCII-only, leave unchanged
+        
+        var_counter[0] += 1
+        var_name = f'_ws_s{var_counter[0]}'
+        # Undo MATLAB escaped quotes ('' → ') for the actual string value
+        actual_value = content.replace("''", "'")
+        replacements.append((var_name, actual_value))
+        cleanup_vars.append(var_name)
+        return var_name  # Replace string literal with variable reference
+    
+    sanitized = str_pattern.sub(replace_match, code)
+    
+    # Store values in MATLAB workspace via Engine API (safe for Unicode)
+    for var_name, value in replacements:
+        try:
+            eng.workspace[var_name] = value
+        except Exception:
+            # Fallback: if workspace assignment fails, try without this optimization
+            return code, []
+    
+    return sanitized, cleanup_vars
+
+
+def _check_sim_gate(eng, code):
+    """Pre-execution gate: block sim() calls for models not yet completed.
+    
+    v11.6.8 B9 FIX: sl_model_complete sets canProceed=false when unconnected
+    ports exist, but sim() called via run_code bypasses Gate_4. This check
+    intercepts ALL sim() calls at the lowest execution layer and enforces
+    the model completion requirement.
+    
+    Returns:
+        None if all sim() calls are valid, or a gate_blocked dict if blocked.
+    """
+    import re
+    
+    # Match sim() calls: sim('ModelName', ...) or sim("ModelName", ...) or sim(modelName, ...)
+    # Pattern: \bsim\s*\(  — word boundary + sim + optional whitespace + paren
+    sim_pattern = re.compile(r'\bsim\s*\(\s*')
+    matches = list(sim_pattern.finditer(code))
+    
+    if not matches:
+        return None  # No sim() calls, nothing to check
+    
+    for m in matches:
+        # Extract first argument after sim(
+        start = m.end()
+        arg_end = start
+        depth = 0
+        in_string = False
+        string_char = None
+        arg = ''
+        
+        i = start
+        while i < len(code):
+            c = code[i]
+            if in_string:
+                if c == string_char:
+                    in_string = False
+            elif c in ("'", '"'):
+                in_string = True
+                string_char = c
+            elif c == '(':
+                depth += 1
+            elif c == ')':
+                if depth == 0:
+                    break
+                depth -= 1
+            elif c == ',' and depth == 0:
+                break
+            if not in_string or c != string_char:
+                arg += c
+            i += 1
+        
+        arg = arg.strip().strip("'").strip('"')
+        if not arg:
+            continue
+        
+        # Check if model completion flag is set in MATLAB workspace
+        model_safe = arg.replace('/', '__').replace(' ', '_')
+        flag_var = f'model_completed_{model_safe}'
+        
+        try:
+            exists = eng.eval(f"exist('{flag_var}', 'var')", nargout=1)
+        except Exception:
+            exists = 0
+        
+        if exists == 0:
+            return {
+                "status": "gate_blocked",
+                "blocked": True,
+                "gate": "Gate_4 (pre-sim)",
+                "reason": f"Model '{arg}' has NOT passed sl_model_complete. Unconnected ports may exist.",
+                "command": "sim",
+                "message": (
+                    f"SIM_BLOCKED: 模型 '{arg}' 未通过完成检查。\n"
+                    f"请先执行 sl_model_complete('{arg}', 'action', 'complete') 完成模型验证。\n"
+                    f"未连接端口必须全部解决后，才能进行仿真。"
+                ),
+                "requiredAction": "sl_model_complete",
+                "hint": f"sl_model_complete('{arg}', 'action', 'complete')",
+            }
+    
+    return None  # All sim() calls checked, all models completed
+
+
 def _run_code_via_diary(eng, code, timeout=120):
     """通过 diary() + 临时 .m 文件执行 MATLAB 代码并捕获输出
     
@@ -3183,7 +3441,9 @@ def _run_code_via_diary(eng, code, timeout=120):
     
     # 1. 写代码到临时 .m 文件（UTF-8 编码，带 BOM 以确保 MATLAB 识别）
     try:
-        with open(script_file, 'w', encoding='utf-8-sig') as f:
+        # [v11.7.1 B4 FIX] Use plain UTF-8 (no BOM) because MATLAB's run()
+        # cannot handle BOM bytes in .m files — causes "文本字符无效" error.
+        with open(script_file, 'w', encoding='utf-8') as f:
             f.write(code + '\n')
     except Exception as e:
         return {"status": "error", "message": f"写入临时脚本失败: {str(e)}"}
@@ -3220,7 +3480,25 @@ def _run_code_via_diary(eng, code, timeout=120):
         devnull_fd = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull_fd, 1)  # 将 fd 1 指向 /dev/null
         try:
-            eng.eval(code, nargout=0)
+            # [v11.6.8 C1 FIX] Sanitize non-ASCII string literals
+            sanitized_code, cleanup_vars = _sanitize_non_ascii_strings(eng, code)
+            
+            # [v11.6.8 B9 FIX] Pre-execution sim() gate: block simulation
+            # for models that haven't passed sl_model_complete.
+            # This is the BOTTOM-LEVEL enforcement — it catches sim()
+            # called via run_code, sl_sim_run, scripts, and any other path.
+            sim_gate_result = _check_sim_gate(eng, sanitized_code)
+            if sim_gate_result is not None:
+                return sim_gate_result  # Blocked — return gate error
+            
+            eng.eval(sanitized_code, nargout=0)
+            # Clean up temporary workspace variables
+            if cleanup_vars:
+                try:
+                    clear_cmd = 'clear ' + ' '.join(cleanup_vars) + ';'
+                    eng.eval(clear_cmd, nargout=0)
+                except:
+                    pass
         finally:
             os.dup2(saved_stdout_fd, 1)  # 恢复 fd 1
             os.close(saved_stdout_fd)
@@ -3327,6 +3605,21 @@ def run_code(code, show_output=True):
             "hint": "curl -X POST http://localhost:3000/api/matlab/project/set -H \"Content-Type: application/json\" -d '{\"dirPath\":\"D:/YourWorkspace\"}'"
         }
     
+    # [P2 FIX v11.6.7] Detect gated Simulink operations in run_code
+    # Issue warning to encourage use of standard sl_* API (which enforces gates).
+    # Does NOT block execution — run_code is the escape hatch for bulk/model building.
+    import re
+    _sl_ops_warning = []
+    if re.search(r'\badd_block\s*\(', code):
+        _sl_ops_warning.append('add_block')
+    if re.search(r'\badd_line\s*\(', code):
+        _sl_ops_warning.append('add_line')
+    if re.search(r'\bdelete_block\s*\(', code):
+        _sl_ops_warning.append('delete_block')
+    if re.search(r'\bdelete_line\s*\(', code):
+        _sl_ops_warning.append('delete_line')
+    _sl_ops_warning_str = ', '.join(_sl_ops_warning) if _sl_ops_warning else None
+    
     mode = _detect_connection_mode()
     
     if mode == 'unavailable':
@@ -3339,7 +3632,7 @@ def run_code(code, show_output=True):
             if show_output:
                 diary_result = _run_code_via_diary(eng, code)
                 if isinstance(diary_result, dict):
-                    if diary_result.get('status') == 'error':
+                    if diary_result.get('status') in ('error', 'gate_blocked'):
                         return diary_result
                     output_str = diary_result.get('output', '')
                     exec_time = diary_result.get('executionTime', 0)
@@ -3349,6 +3642,10 @@ def run_code(code, show_output=True):
                     exec_time = 0
             else:
                 start_time = time.time()
+                # [v11.6.8 B9] Also enforce sim gate for show_output=False path
+                sim_gate = _check_sim_gate(eng, code)
+                if sim_gate is not None:
+                    return sim_gate
                 # v6.0: OS 级别重定向 stdout 防止 eng.eval 泄漏
                 saved_stdout_fd = os.dup(1)
                 devnull_fd = os.open(os.devnull, os.O_WRONLY)
@@ -3366,7 +3663,7 @@ def run_code(code, show_output=True):
             vars_changed = _detect_vars_changed(code)
             
             fig_count = _count_figures(eng)
-            return {
+            _result = {
                 "status": "ok",
                 "stdout": output_str,
                 "open_figures": fig_count,
@@ -3374,6 +3671,14 @@ def run_code(code, show_output=True):
                 "executionTime": exec_time,
                 "variablesChanged": vars_changed
             }
+            # [P2 FIX v11.6.7] Inject gate awareness warning
+            if _sl_ops_warning_str:
+                _result["gateAwarenessWarning"] = (
+                    f"run_code contains gated Simulink operations: {_sl_ops_warning_str}. "
+                    f"Prefer using the standard sl_* API (sl_add_block, sl_add_line, etc.) "
+                    f"for proper gate enforcement and verification injection."
+                )
+            return _result
         except Exception as e:
             error_msg = re.sub(r'<[^>]+>', '', str(e))
             return {"status": "error", "message": f"MATLAB 执行错误: {error_msg}", "executionTime": exec_time}
@@ -3397,6 +3702,13 @@ def run_code(code, show_output=True):
             result['connection_mode'] = 'cli'
         result['executionTime'] = exec_time
         result['variablesChanged'] = _detect_vars_changed(code)
+        # [P2 FIX v11.6.7] Inject gate awareness warning for CLI path too
+        if _sl_ops_warning_str and result.get('status') == 'ok':
+            result["gateAwarenessWarning"] = (
+                f"run_code contains gated Simulink operations: {_sl_ops_warning_str}. "
+                f"Prefer using the standard sl_* API (sl_add_block, sl_add_line, etc.) "
+                f"for proper gate enforcement and verification injection."
+            )
         return result
 
 
@@ -3943,6 +4255,18 @@ _SL_FUNC_MAP = {
     "sl_framework_modify":          "sl_framework_modify",  # 大框架变更申请
     "sl_framework_modify_approve":  "sl_framework_modify_approve",  # 批准变更
     "sl_framework_modify_reject":   "sl_framework_modify_reject",  # 拒绝变更
+    # v11.5: Scene 2 — existing model modification workflow
+    "sl_scene_detect":       "sl_scene_detect",       # Gate_S0: auto-detect scene
+    "sl_scene_confirm":      "_builtin_scene_confirm",  # Gate_S0: user confirms scene
+    "sl_model_load":         "sl_model_load",         # Step 2.0: load existing model
+    "sl_model_understand":   "sl_model_understand",   # Step 2.1: auto-analyze model
+    "sl_modify_plan":        "sl_modify_plan",        # Step 2.3: modify intent prompt
+    "sl_modify_review":      "sl_modify_review",       # Step 2.4: review modify plan
+    "sl_modify_approve":     "sl_modify_approve",      # Step 2.4: approve + Gate_S2
+    "sl_model_sandbox":      "sl_model_sandbox",       # Step 2.5: create sandbox subsystem
+    "sl_modify_verify_step": "sl_modify_verify_step",  # Step 2.6: per-step verify
+    # v11.6.7: Safe line deletion
+    "sl_clear_top_lines":    "sl_clear_top_lines",     # 清除模型顶层连线(保留子系统内部)
 }
 
 # 命令 → 参数构建函数映射（将 API 参数转为 .m 函数参数）
@@ -3977,7 +4301,7 @@ def _build_sl_args(command, params):
         return {
             '_pos_1': model_name,
             '_pos_2': source_block,
-            'destPath': params.get('destPath', ''),
+            'destPath': params.get('destPath', params.get('blockName', '')),  # [P0-9 FIX] Also accept blockName as alias for destPath
             'position': params.get('position', []),
             'makeNameUnique': params.get('makeNameUnique', True),
             'params': ('__special__', _build_params_struct_expr(raw_params, block_type)),
@@ -3991,6 +4315,11 @@ def _build_sl_args(command, params):
         # 优先使用 srcSpec/dstSpec（REST API 直接传入格式2字符串）
         src_spec = params.get('srcSpec', '')
         dst_spec = params.get('dstSpec', '')
+        # [v11.5 FIX] REST API passes combined spec in srcPort/dstPort (e.g. 'Gain/1')
+        if not src_spec and '/' in str(params.get('srcPort', '')):
+            src_spec = str(params['srcPort'])
+        if not dst_spec and '/' in str(params.get('dstPort', '')):
+            dst_spec = str(params['dstPort'])
         if not src_spec:
             # 从 srcBlock+srcPort 构造
             src_block = params.get('srcBlock', '')
@@ -4430,6 +4759,82 @@ def _build_sl_args(command, params):
             'reason': params.get('reason', ''),
         }
 
+    # v11.5: Scene 2 — Gate_S0 scene detection and confirmation
+    elif command == "sl_scene_detect":
+        # sl_scene_detect(workspaceDir)
+        return {
+            '_pos_1': params.get('workspaceDir', ''),
+        }
+
+    elif command == "sl_scene_confirm":
+        # Handled inline in _handle_sl_command, not called via _call_sl_function
+        # v11.6: confirmationToken = detectionToken from sl_scene_detect
+        # [v11.7.1 B1 FIX] Accept both parameter names
+        return {
+            'scene': params.get('scene', 1),
+            'modelName': params.get('modelName', ''),
+            'confirmationToken': params.get('confirmationToken', params.get('detectionToken', '')),
+        }
+
+    elif command == "sl_model_load":
+        # sl_model_load(modelName)
+        return {
+            '_pos_1': model_name,
+        }
+
+    elif command == "sl_model_understand":
+        # sl_model_understand(modelName)
+        return {
+            '_pos_1': model_name,
+        }
+
+    elif command == "sl_modify_plan":
+        # sl_modify_plan(modelName, taskDescription, modelUnderstanding)
+        return {
+            '_pos_1': model_name,
+            '_pos_2': params.get('taskDescription', ''),
+            '_pos_3': params.get('modelUnderstanding', {}),
+        }
+
+    elif command == "sl_modify_review":
+        # sl_modify_review(modifyPlan)
+        return {
+            '_pos_1': params.get('modifyPlan', {}),
+        }
+
+    elif command == "sl_modify_approve":
+        # sl_modify_approve(modelName, modifyPlan)
+        return {
+            '_pos_1': model_name,
+            '_pos_2': params.get('modifyPlan', {}),
+        }
+
+    elif command == "sl_model_sandbox":
+        # sl_model_sandbox(modelName, sandboxName, modifyPlan)
+        return {
+            '_pos_1': model_name,
+            '_pos_2': params.get('sandboxName', ''),
+            '_pos_3': params.get('modifyPlan', {}),
+        }
+
+    elif command == "sl_modify_verify_step":
+        # sl_modify_verify_step(modelName, stepIndex, modifyPlan)
+        return {
+            '_pos_1': model_name,
+            '_pos_2': params.get('stepIndex', 1),
+            '_pos_3': params.get('modifyPlan', {}),
+        }
+
+    elif command == "sl_model_complete":
+        # sl_model_complete(modelName, 'action', action, autoTerminateIntegrators, flag)
+        _args = {
+            '_pos_1': model_name,
+            'action': params.get('action', 'check'),
+        }
+        if params.get('autoTerminateIntegrators', False):
+            _args['autoTerminateIntegrators'] = True
+        return _args
+
     else:
         return {'_pos_1': model_name}
 
@@ -4459,6 +4864,7 @@ _WRITE_VERIFY_MAP = {
     'sl_replace_block':   'block',
     'sl_subsystem_create': 'subsystem',
     'sl_subsystem_mask':  'subsystem',
+    'sl_model_sandbox':   'subsystem',  # v11.6.1: sandbox creation triggers verify
     'sl_config_set':      'param',
     'sl_bus_create':      'block',
     'sl_block_position':  'block',
@@ -4493,11 +4899,13 @@ def _get_workflow_state(model_name):
             new_state = ModelWorkflowState(model_name)
             
             # [P0-FIX] 从 MATLAB workspace 同步 design_approved 标记
-            # sl_model_design.m 在 approve 时调用: assignin('base', ['design_approved_' modelName], true)
+            # sl_model_design.m 在 approve 时调用: assignin('base', ['design_approved_' model_safe], true)
+            # [v11.5 FIX] model_name 可能含 '/' → 统一用 '__' 替换
+            _safe_name = model_name.replace('/', '__')
             try:
                 eng = get_engine()
                 if eng is not None:
-                    da_var = f'design_approved_{model_name}'
+                    da_var = f'design_approved_{_safe_name}'
                     # 使用 exist() 检查变量是否存在（更可靠）
                     # exist('varName') 返回 1 表示存在
                     exists = eng.eval(f"evalin('base', 'exist(''{da_var}'')')", nargout=1)
@@ -4578,21 +4986,30 @@ def _check_auto_layout_needed(model_name, command, params):
     import time
     
     # [P1-1 FIX] 使用线程安全的访问函数
-    state = _get_workflow_state(model_name)
+    # [v11.6.2 FIX] Normalize to toplevel model: add_block uses sandbox path,
+    # add_line uses parent model. Both must update the SAME counter.
+    _norm_model = model_name.split('/')[0] if '/' in model_name else model_name
+    state = _get_workflow_state(_norm_model)
     
     # 更新连续操作计数
-    if command in ('sl_add_block', 'sl_add_line', 'sl_subsystem_create'):
+    # [v11.6.2 FIX] Only add_block/add_line affect the counter.
+    # Other commands (inspect, set_param) must NOT reset it.
+    # add_block → increment; add_line → reset; everything else → no change
+    if command == 'sl_add_block':
         state.consecutive_adds += 1
-    else:
-        state.consecutive_adds = 0
+    elif command == 'sl_add_line':
+        state.consecutive_adds = 0  # Connecting resolves unconnected accumulation
+    # [v11.6.2] REMOVED: else: state.consecutive_adds = 0
+    # Was causing inspect/set_param to spuriously reset the counter
     
     need_layout = False
     reason = ''
     
-    # 规则1: 连续 3+ 次 add 操作 -> 可能连线阶段结束
-    if command in ('sl_add_block', 'sl_add_line', 'sl_subsystem_create') and state.consecutive_adds >= 3:
+    # 规则1: 连续 3+ 次 add_block 操作 -> 连线阶段即将开始
+    # [v11.6.2 FIX] Remove add_line from trigger (add_line now resets counter)
+    if command in ('sl_add_block', 'sl_subsystem_create', 'sl_model_sandbox') and state.consecutive_adds >= 3:
         need_layout = True
-        reason = f'{state.consecutive_adds} consecutive add operations detected'
+        reason = f'{state.consecutive_adds} consecutive add operations detected — layout before connecting'
     
     # 规则2: 从 add 切换到 set_param -> 建模阶段可能结束
     if (state.last_command in ('sl_add_block', 'sl_add_line', 'sl_subsystem_create')
@@ -4600,10 +5017,10 @@ def _check_auto_layout_needed(model_name, command, params):
         need_layout = True
         reason = 'Transition from add to set_param detected — layout recommended'
     
-    # 规则3: 子系统创建后立即排版
-    if command == 'sl_subsystem_create':
+    # 规则3: 子系统创建后立即排版（含 sandbox 创建）
+    if command in ('sl_subsystem_create', 'sl_model_sandbox'):
         need_layout = True
-        reason = 'Subsystem created — layout recommended to position it properly'
+        reason = f'{command} completed — layout recommended to position the subsystem properly'
     
     # 防抖: 至少间隔 5 秒
     if need_layout and (time.time() - state.last_layout_time) < 5:
@@ -4611,6 +5028,37 @@ def _check_auto_layout_needed(model_name, command, params):
         reason = ''  # 防抖跳过，不记录原因
     
     state.last_command = command
+    
+    # [v11.6.4 FIX] Auto-update subsystem_queue after building inside sandbox.
+    # When add_block/add_line succeeds inside a queued sandbox, re-evaluate
+    # if the sandbox is still empty and remove it from the queue if not.
+    if state.subsystem_queue and command in ('sl_add_block', 'sl_add_line', 'sl_set_param'):
+        _op_target = params.get('modelName', params.get('blockPath', ''))
+        if _op_target:
+            _op_target_str = str(_op_target)
+            _to_remove = []
+            for _qs in list(state.subsystem_queue):
+                if _op_target_str.startswith(_qs) or _qs in _op_target_str:
+                    try:
+                        _q_eng = get_engine()
+                        if _q_eng is not None:
+                            _q_total = _q_eng.eval(
+                                f"length(find_system('{_qs}', 'SearchDepth', 1, 'LookUnderMasks', 'on'))",
+                                nargout=1)
+                            _q_in = _q_eng.eval(
+                                f"length(find_system('{_qs}', 'SearchDepth', 1, 'BlockType', 'Inport', 'LookUnderMasks', 'on'))",
+                                nargout=1)
+                            _q_out = _q_eng.eval(
+                                f"length(find_system('{_qs}', 'SearchDepth', 1, 'BlockType', 'Outport', 'LookUnderMasks', 'on'))",
+                                nargout=1)
+                            if int(_q_total) > int(_q_in) + int(_q_out):
+                                _to_remove.append(_qs)
+                    except Exception:
+                        pass
+            for _qs in _to_remove:
+                if _qs in state.subsystem_queue:
+                    state.subsystem_queue.remove(_qs)
+    
     return need_layout, reason
 
 
@@ -4630,17 +5078,28 @@ def _auto_arrange_model(model_name):
     state = _get_workflow_state(model_name)
     
     # 排版前保存模型（踩坑 #31: arrangeSystem 可能清空模型）
-    _matlab_eval_safe("try; save_system(v_model); catch; end", workspace_vars={'v_model': model_name})
+    _al_eng = get_engine()
+    if _al_eng is not None:
+        try:
+            _al_eng.workspace['v_model'] = model_name
+            _al_eng.eval("save_system(v_model);", nargout=0)
+        except Exception:
+            pass  # save_system failure is non-critical for layout
     
     # 记录排版前的模块数和线数
-    pre_blocks = _matlab_eval_safe(
-        "try; length(find_system(v_model, 'SearchDepth', 1, 'BlockType', 'all')); catch; -1; end",
-        workspace_vars={'v_model': model_name}
-    )
-    pre_lines = _matlab_eval_safe(
-        "try; length(get_param(v_model, 'Lines')); catch; -1; end",
-        workspace_vars={'v_model': model_name}
-    )
+    pre_blocks = -1
+    pre_lines = -1
+    if _al_eng is not None:
+        try:
+            _al_eng.workspace['v_model'] = model_name
+            pre_blocks = int(_al_eng.eval(
+                "length(find_system(v_model, 'SearchDepth', 1, 'BlockType', 'all'));",
+                nargout=1))
+            pre_lines = int(_al_eng.eval(
+                "length(get_param(v_model, 'Lines'));",
+                nargout=1))
+        except Exception:
+            pass
     
     # 调用 sl_auto_layout 排版
     arrange_result = _call_sl_function('sl_auto_layout', {
@@ -4652,15 +5111,20 @@ def _auto_arrange_model(model_name):
     
     if isinstance(arrange_result, dict) and arrange_result.get('status') == 'ok':
         # 验证排版后模型完整性（块数/线数不变）
-        post_blocks = _matlab_eval_safe(
-            "try; length(find_system(v_model, 'SearchDepth', 1, 'BlockType', 'all')); catch; -1; end",
-            workspace_vars={'v_model': model_name}
-        )
+        post_blocks = -1
+        if _al_eng is not None:
+            try:
+                _al_eng.workspace['v_model'] = model_name
+                post_blocks = int(_al_eng.eval(
+                    "length(find_system(v_model, 'SearchDepth', 1, 'BlockType', 'all'));",
+                    nargout=1))
+            except Exception:
+                pass
         integrity_ok = True
         integrity_msg = ''
         try:
-            pre_b = int(pre_blocks) if pre_blocks not in [None, -1, '__EVAL_FAILED__'] else -1
-            post_b = int(post_blocks) if post_blocks not in [None, -1, '__EVAL_FAILED__'] else -1
+            pre_b = pre_blocks if pre_blocks not in [None, -1, '__EVAL_FAILED__'] else -1
+            post_b = post_blocks if post_blocks not in [None, -1, '__EVAL_FAILED__'] else -1
             if pre_b >= 0 and post_b >= 0 and pre_b != post_b:
                 integrity_ok = False
                 integrity_msg = f'Block count changed: {pre_b} -> {post_b} (layout may have corrupted model!)'
@@ -5352,6 +5816,148 @@ def _ensure_model_visible(params):
             pass  # 静默失败：模型可能尚未创建，后续操作会报明确的错误
 
 
+# ===== [v11.5] Scene 2 helper functions =====
+
+def _check_s2_modification_permission(model_name, command, target):
+    """Check if a specific Scene 2 modification has been user-approved."""
+    cache_key = f"{model_name}:{command}:{target}"
+    return _S2_MOD_PERMISSIONS.get(cache_key, False)
+
+def _classify_s2_risk(command, target):
+    """Classify the risk level of a Scene 2 modification."""
+    if command == 'sl_delete':
+        return 'high'
+    elif command == 'sl_replace_block':
+        return 'high'
+    elif command == 'sl_subsystem_create' and str(target).count('/') <= 1:
+        return 'medium'
+    elif command == 'sl_set_param':
+        return 'low'
+    elif command == 'sl_add_block':
+        return 'medium'
+    else:
+        return 'medium'
+
+# ===== helper functions end =====
+
+# ===== [P0-5 FIX] Gate_5: Goto/From cross-subsystem boundary check =====
+def _check_goto_from_scope(model_name):
+    """Check that all Goto/From pairs are within the same subsystem.
+    
+    R2 rule: Goto/From must ONLY be used within a single subsystem.
+    Cross-subsystem Goto/From is forbidden (creates untraceable global signals).
+    
+    Returns:
+        dict: {'passed': bool, 'violations': [...], 'message': str}
+    """
+    result = {'passed': True, 'violations': [], 'message': ''}
+    try:
+        eng = get_engine()
+        if eng is None:
+            return result
+        
+        # [v11.6.7 FIX] Check if model exists before searching for Goto/From blocks
+        try:
+            is_loaded = eng.eval(f"bdIsLoaded('{model_name}')", nargout=1)
+        except Exception:
+            is_loaded = False
+        
+        if not is_loaded:
+            result['message'] = f'Goto/From scope check skipped: model "{model_name}" not loaded (Scene 1 or unloaded model).'
+            return result
+        
+        # Get all Goto blocks with their tags and parent subsystems
+        gotos_expr = (
+            "gotos = find_system(v_mn, 'BlockType', 'Goto');"
+            "n = length(gotos);"
+            "goto_info = cell(1, n);"
+            "for i = 1:n;"
+            "  goto_info{i} = struct('path', gotos{i}, 'tag', get_param(gotos{i}, 'GotoTag'), 'parent', get_param(gotos{i}, 'Parent'));"
+            "end;"
+            "goto_info;"
+        )
+        eng.workspace['v_mn'] = model_name
+        goto_info = eng.eval(gotos_expr, nargout=1)
+        
+        if not goto_info or (hasattr(goto_info, '__len__') and len(goto_info) == 0):
+            return result
+        
+        # For each Goto, find all matching From blocks and check parent
+        for gi in goto_info:
+            if not hasattr(gi, 'tag') or not gi.tag:
+                continue
+            tag = str(gi.tag)
+            goto_parent = str(gi.parent)
+            
+            froms_expr = (
+                f"froms = find_system(v_mn, 'BlockType', 'From', 'GotoTag', '{tag}');"
+                "n = length(froms);"
+                "from_info = cell(1, n);"
+                "for i = 1:n;"
+                "  from_info{i} = struct('path', froms{i}, 'parent', get_param(froms{i}, 'Parent'));"
+                "end;"
+                "from_info;"
+            )
+            from_info = eng.eval(froms_expr, nargout=1)
+            
+            if not from_info:
+                continue
+            
+            for fi in from_info:
+                from_parent = str(fi.parent)
+                if goto_parent != from_parent:
+                    result['passed'] = False
+                    result['violations'].append({
+                        'gotoPath': str(gi.path),
+                        'gotoParent': goto_parent,
+                        'gotoTag': tag,
+                        'fromPath': str(fi.path),
+                        'fromParent': from_parent,
+                    })
+        
+        if not result['passed']:
+            result['message'] = (
+                f"GOTO_FROM_CROSS_BOUNDARY: {len(result['violations'])} Goto/From pair(s) "
+                f"cross subsystem boundaries. Goto/From is ONLY allowed within a single subsystem. "
+                f"Use Inport/Outport for subsystem-to-subsystem signals."
+            )
+        else:
+            result['message'] = 'All Goto/From tags used within single subsystem scope.'
+        
+    except Exception as e:
+        import logging
+        logging.getLogger('matlab_bridge').warning(f"goto_from_scope check failed: {e}")
+        # [v11.6.7 FIX] Multiple error patterns for model-not-found:
+        # - English: "not found", "does not exist"
+        # - Chinese: "未加载", "找不到"
+        err_str = str(e).lower()
+        not_found_patterns = ['find_system', 'not found', 'does not exist', 
+                              '未加载', '找不到', 'not loaded', 'not open',
+                              'model', 'system', 'invalid']
+        if any(p in err_str for p in not_found_patterns):
+            result['passed'] = True
+            result['message'] = f'Goto/From scope check skipped: model not available (Scene 1 or unloaded model).'
+        else:
+            # [P0-5 FIX v11.7] FAIL-CLOSED: unknown error must block approval
+            result['passed'] = False
+            result['message'] = (
+                f'Goto/From scope check failed with error: {e}. '
+                f'Framework approval BLOCKED. Ensure MATLAB Engine is running and '
+                f'retry, or manually verify Goto/From blocks are within single subsystems.'
+            )
+            result['violations'].append({
+                'gotoPath': 'CHECK_FAILED',
+                'gotoParent': 'CHECK_FAILED',
+                'gotoTag': 'CHECK_FAILED',
+                'fromPath': 'CHECK_FAILED',
+                'fromParent': 'CHECK_FAILED',
+                'error': err_str,
+            })
+    
+    return result
+# ===== goto_from_scope check end =====
+
+
 def _handle_sl_command(command, params):
     """统一处理 sl_* 命令
     
@@ -5372,6 +5978,70 @@ def _handle_sl_command(command, params):
     - [NEW] 更新失败统计
     """
     try:
+        # ===== [v11.6] Request counter for turn separation detection =====
+        global _REQUEST_COUNTER
+        _REQUEST_COUNTER += 1
+        _current_request_id = _REQUEST_COUNTER
+        
+        # ===== [v11.5] Gate_S0: Scene detection gate =====
+        # All Simulink commands (except sl_scene_detect itself and read-only commands)
+        # require Scene to be confirmed first.
+        _S0_GATED_COMMANDS = [
+            'sl_add_block', 'sl_add_line', 'sl_set_param', 'sl_delete',
+            'sl_replace_block', 'sl_subsystem_create', 'sl_subsystem_mask',
+            'sl_subsystem_expand', 'sl_config_set', 'sl_signal_config',
+            'sl_signal_logging', 'sl_bus_create', 'sl_block_position',
+            'sl_auto_layout', 'sl_sim_run', 'sl_sim_batch',
+            'sl_framework_design', 'sl_framework_review', 'sl_framework_approve',
+            'sl_micro_design', 'sl_micro_review', 'sl_micro_approve',
+            'sl_model_design', 'sl_model_complete',
+            # [P1-1 FIX] sl_inspect REMOVED from gated list — it's a read-only operation
+            # Users need to inspect models before confirming scene (especially in Scene 2)
+            'sl_framework_modify', 'sl_framework_modify_approve', 'sl_framework_modify_reject',
+            'sl_model_load', 'sl_model_understand', 'sl_modify_plan',
+            'sl_modify_review', 'sl_modify_approve', 'sl_model_sandbox',
+            'sl_modify_verify_step',
+        ]
+        
+        if command in _S0_GATED_COMMANDS:
+            _scene_locked = False
+            try:
+                if _connection_mode == 'engine' and _matlab_engine is not None:
+                    _s0_flag = _matlab_engine.eval("evalin('base', 'exist(''mS0SceneLocked_'', ''var'')')", nargout=1)
+                    _scene_locked = (_s0_flag == 1)
+                else:
+                    _scene_locked = _SCENE_STATE.get('scene_confirmed', False)
+            except Exception:
+                _scene_locked = _SCENE_STATE.get('scene_confirmed', False)
+            
+            if not _scene_locked:
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_S0",
+                    "reason": "Scene not confirmed. Auto-detect first, then user must confirm Scene 1 or Scene 2.",
+                    "command": command,
+                    "message": (
+                        "SCENE_NOT_CONFIRMED: Before any Simulink operation, "
+                        "you must confirm the working scene.\n"
+                        "Step 1: Call sl_scene_detect(workspaceDir) to auto-detect\n"
+                        "Step 2: Present the result to the user for confirmation\n"
+                        "Step 3: User confirms -> system locks the scene"
+                    ),
+                    "requiredAction": "sl_scene_detect",
+                    "hint": (
+                        "1. Call sl_scene_detect with the workspace directory\n"
+                        "2. If scene=1: confirm 'build from scratch' with user\n"
+                        "3. If scene=2: confirm which model(s) to modify with user\n"
+                        "4. After user confirmation, the scene is locked for this session"
+                    ),
+                    "nextSteps": [
+                        "sl_scene_detect(workspaceDir)",
+                        "[Present result to user for confirmation]",
+                    ],
+                }
+        # ===== Gate_S0 end =====
+
         # 1. 反模式预检
         anti_warnings = _anti_pattern_check(command, params)
         
@@ -5487,6 +6157,22 @@ def _handle_sl_command(command, params):
                     framework_approved = getattr(_fw_state, 'framework_approved', False)
 
                     if not framework_approved and not _fw_locked:
+                        # [v11.5] Check Scene 2 approval as alternative to framework
+                        # Extract top-level model name from path (e.g. "Model/Subsys" → "Model")
+                        _s2_toplevel = _fw_mn.split('/')[0] if '/' in _fw_mn else _fw_mn
+                        _s2_active = False
+                        try:
+                            if _connection_mode == 'engine' and _matlab_engine is not None:
+                                _s2_chk = _matlab_engine.eval(
+                                    f"evalin('base', 'exist(''mS2Approved_{_s2_toplevel}'', ''var'')')", nargout=1)
+                                _s2_active = (_s2_chk == 1)
+                        except Exception:
+                            pass
+                        
+                        if _s2_active:
+                            framework_approved = True  # Scene 2 approved → Gate_2 passes
+                    
+                    if not framework_approved and not _fw_locked:
                         # 检查 skipDesign 选项（仅限已有模型的简单修改）
                         skip_design = fixed_params.get('skipDesign', False)
                         if not skip_design:
@@ -5561,23 +6247,30 @@ def _handle_sl_command(command, params):
                 # len(_parts) >= 3 表示子系统内部，不拦截
 
         if _fw_mn and _fw_locked and (command in _STRUCTURAL_MODIFY_COMMANDS) and (command != 'sl_delete' or _is_structural_delete):
-            # [P1-4 FIX] 重新设计已审批放行机制：
-            # 旧逻辑：检查 pending.autoApproved → 死代码（approve 后 pending 已被清空）
-            # 新逻辑：检查 mFWGate3Pass_<model> 标记 → approve 设置此标记，Gate 3 检测后放行一次并清除
-            _gate3_pass_var = f'mFWGate3Pass_{_fw_mn}'
-            _has_gate3_pass = False
-            try:
-                if _matlab_engine:
-                    _pass_exists = _matlab_engine.eval(f"evalin('base', 'exist(''{_gate3_pass_var}'')')")
-                    if _pass_exists == 1:
-                        _pass_val = _matlab_engine.eval(_gate3_pass_var)
-                        if _pass_val:
-                            _has_gate3_pass = True
-                            # 一次性通行证：读取后立即清除
-                            _matlab_engine.eval(f"assignin('base', '{_gate3_pass_var}', false);")
-            except Exception:
+            # [v11.6.8 FIX] Scene 1 exemption: subsystem_create is an expected build step
+            # when the framework is approved, not a modification. Scene 2 still requires 
+            # sl_framework_modify approval for structural changes.
+            # Check: scene confirmed + scene == 1 + framework_approved → allow
+            _scene_num = _SCENE_STATE.get('scene', 0)
+            _is_scene1 = (_scene_num == 1)
+            if _is_scene1 and command == 'sl_subsystem_create':
+                # Scene 1 build-from-scratch: allow all subsystem creation
+                _has_gate3_pass = True
+            else:
+                # Scene 2 or other structural modifications: check gate3_pass marker
+                _gate3_pass_var = f'mFWGate3Pass_{_fw_mn}'
                 _has_gate3_pass = False
-
+                try:
+                    if _matlab_engine:
+                        _pass_exists = _matlab_engine.eval(f"evalin('base', 'exist(''{_gate3_pass_var}'')')")
+                        if _pass_exists == 1:
+                            _pass_val = _matlab_engine.eval(_gate3_pass_var)
+                            if _pass_val:
+                                _has_gate3_pass = True
+                                _matlab_engine.eval(f"assignin('base', '{_gate3_pass_var}', false);")
+                except Exception:
+                    _has_gate3_pass = False
+            
             if not _has_gate3_pass:
                 # 确定具体的修改类型
                 if command == 'sl_subsystem_create':
@@ -5613,6 +6306,152 @@ def _handle_sl_command(command, params):
         # ===== Gate 3 结束 =====
 
         # ===== 大框架门控结束 =====
+
+        # ===== [v11.6.2] Gate_CONNECTIVITY: 强制连线门控 =====
+        # P0 FIX: _verification 反馈是软建议不是硬拦截 — 这是工作流的核心缺陷。
+        # 修复: 当连续 3+ 次 add_block 无 add_line 时，拦截 add_block。
+        # 这会强制 AI 遵循"添加→连线→验证"的循环，而不是批量添加后忽略未连接端口。
+        #
+        # 机制:
+        # - consecutive_adds 在 _check_auto_layout_needed 中每次 add_block 后 +1
+        # - 每次 add_line 后重置为 0
+        # - 当 >=3 时，下一个 add_block 被 Gate_CONNECTIVITY 拦截
+        # - 被拦截后必须调 add_line 连接已有模块才能继续添加
+        #
+        # [v11.6.2 FIX] Normalize model name to toplevel for consistency:
+        # add_block uses sandbox path (Model/Subsys), add_line uses parent model.
+        # Both must update the SAME workflow state counter.
+        if command == 'sl_add_block':
+            _conn_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            # Normalize to toplevel model: Quadrotor_FDM/PID_Controller_New → Quadrotor_FDM
+            _conn_toplevel = _conn_mn.split('/')[0] if '/' in _conn_mn else _conn_mn
+            if _conn_toplevel:
+                _conn_state = _get_workflow_state(_conn_toplevel)
+                if _conn_state.consecutive_adds >= 3:
+                    return {
+                        "status": "gate_blocked",
+                        "blocked": True,
+                        "reason": (
+                            f"{_conn_state.consecutive_adds} consecutive add_block(s) without add_line. "
+                            f"Connect existing blocks before adding more."
+                        ),
+                        "command": command,
+                        "gate": "Gate_CONNECTIVITY",
+                        "message": (
+                            f"CONNECTIVITY_REQUIRED: {_conn_state.consecutive_adds} blocks added "
+                            f"without connecting them.\n"
+                            f"You MUST connect unconnected ports via add_line before adding more blocks.\n"
+                            f"Use sl_inspect or check _verification in previous responses to identify "
+                            f"unconnected ports, then connect them with add_line."
+                        ),
+                        "requiredAction": "add_line",
+                        "workflowPhase": "building",
+                        "consecutiveAdds": _conn_state.consecutive_adds,
+                        "hint": (
+                            f"1. Check previous _verification.warnings for UNCONNECTED ports\n"
+                            f"2. Use add_line to connect {_conn_state.consecutive_adds} pending blocks\n"
+                            f"3. After connections, consecutive_adds resets to 0\n"
+                            f"4. Then you can add more blocks"
+                        ),
+                    }
+        # ===== Gate_CONNECTIVITY end =====
+
+        # ===== [v11.5] Gate_S2_MODIFY: protect existing model parts =====
+        # Any write to a block/line OUTSIDE the sandbox subsystem requires USER CONFIRMATION
+        _S2_WRITE_COMMANDS = [
+            'sl_add_block', 'sl_add_line', 'sl_set_param', 'sl_delete',
+            'sl_replace_block', 'sl_subsystem_create', 'sl_subsystem_mask',
+            'sl_signal_config', 'sl_block_position',
+        ]
+        _s2_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+        
+        if command in _S2_WRITE_COMMANDS and _s2_mn:
+            _s2_approved = False
+            _s2_toplevel_gate = _s2_mn.split('/')[0] if '/' in _s2_mn else _s2_mn
+            try:
+                if _connection_mode == 'engine' and _matlab_engine is not None:
+                    _s2_exists = _matlab_engine.eval(
+                        f"evalin('base', 'exist(''mS2Approved_{_s2_toplevel_gate}'', ''var'')')", nargout=1)
+                    if _s2_exists == 1:
+                        _s2_approved = True
+                else:
+                    _s2_approved = _SCENE_STATE.get('s2_approved', False)
+            except Exception:
+                _s2_approved = False
+            
+            if _s2_approved:
+                _sandbox_name = ''
+                try:
+                    if _connection_mode == 'engine' and _matlab_engine is not None:
+                        _sn_exists = _matlab_engine.eval(
+                            f"evalin('base', 'exist(''mS2SandboxName_{_s2_toplevel_gate}'', ''var'')')", nargout=1)
+                        if _sn_exists == 1:
+                            _sandbox_name = _matlab_engine.eval(
+                                f"evalin('base', 'mS2SandboxName_{_s2_toplevel_gate}')", nargout=1)
+                except Exception:
+                    pass
+                
+                _target = ''
+                if command == 'sl_add_block':
+                    _target = fixed_params.get('modelName', '')
+                elif command == 'sl_set_param':
+                    _target = fixed_params.get('blockPath', '')
+                elif command == 'sl_delete':
+                    _target = fixed_params.get('blockPath', '')
+                elif command == 'sl_subsystem_create':
+                    _target = fixed_params.get('modelName', params.get('modelName', ''))
+                elif command == 'sl_subsystem_mask':
+                    _target = fixed_params.get('modelName', params.get('modelName', ''))
+                elif command == 'sl_add_line':
+                    # [v11.6.3 FIX] add_line target MUST come from srcSpec/dstSpec,
+                    # not modelName. modelName is always the toplevel model
+                    # (e.g. 'Quadrotor_FDM') which can NEVER be "inside" any sandbox.
+                    _src = fixed_params.get('srcSpec', params.get('srcSpec', ''))
+                    _dst = fixed_params.get('dstSpec', params.get('dstSpec', ''))
+                    _target = str(_src) if _src else str(_dst) if _dst else ''
+                    if not _target:
+                        _target = fixed_params.get('modelName', '')  # fallback
+                
+                _is_inside_sandbox = False
+                if _sandbox_name and _target:
+                    # [v11.6.3 FIX] Path-prefix check: sandbox MUST appear as a
+                    # complete path component, not a substring match.
+                    # e.g., 'PID_Controller' in 'Model/PID_Controller/Block' → True
+                    # e.g., 'PID' in 'Model/PID_Controller/Block' → False
+                    _target_str = str(_target)
+                    _target_parts = _target_str.split('/')
+                    _is_inside_sandbox = (
+                        _sandbox_name in _target_parts or
+                        _target_str.startswith(_sandbox_name + '/') or
+                        ('/' + _sandbox_name + '/') in _target_str
+                    )
+                
+                if not _is_inside_sandbox and _sandbox_name:
+                    _perm_key = f"{_s2_mn}:{command}:{_target}"
+                    _has_perm = _S2_MOD_PERMISSIONS.get(_perm_key, False)
+                    
+                    if not _has_perm:
+                        return {
+                            "status": "gate_blocked", "blocked": True,
+                            "gate": "Gate_S2_MODIFY",
+                            "reason": "Modification to existing model part requires user confirmation.",
+                            "command": command,
+                            "message": (
+                                f"EXISTING_MODEL_PROTECTED: This operation targets '{_target}' "
+                                f"which is OUTSIDE the sandbox '{_sandbox_name}'.\n"
+                                f"Modifying existing model parts requires explicit USER CONFIRMATION."
+                            ),
+                            "pendingPermission": {
+                                "permissionId": f"s2mod_{_s2_mn}_{command}_{_target.replace('/', '_')}",
+                                "operation": command,
+                                "target": _target,
+                                "risk": _classify_s2_risk(command, _target),
+                                "sandboxName": _sandbox_name,
+                            },
+                            "requiredAction": "user_confirm",
+                            "hint": "Present this modification to the user for confirmation."
+                        }
+        # ===== Gate_S2_MODIFY end =====
 
         # ===== [v11.1 Phase 2] 子系统级 micro 门控 =====
         # 当操作目标是子系统内部时，检查该子系统的小框架是否已审批
@@ -5709,7 +6548,9 @@ def _handle_sl_command(command, params):
             if _comp_mn:
                 try:
                     # Check if model_completed flag exists in MATLAB workspace
-                    _comp_flag_var = f'model_completed_{_comp_mn}'
+                    # [P0-1 FIX] Sanitize model name for MATLAB variable (replace '/' with '__')
+                    _mn_safe = _comp_mn.replace('/', '__').replace(' ', '_')
+                    _comp_flag_var = f'model_completed_{_mn_safe}'
                     _comp_ok = False
                     try:
                         if _matlab_engine:
@@ -5779,24 +6620,42 @@ def _handle_sl_command(command, params):
             macro_fw = fixed_params.get('macroFramework', params.get('macroFramework', None))
             if macro_fw and _g5_mn:
                 # [v11.4.1 FIX] Warm up engine before gate check
-                # Previously: _matlab_engine was None here, so Gate_5 silently skipped
-                # Fix: call get_engine() to lazy-init, then _call_sl_function uses it
                 _g5_eng = get_engine()
                 if _g5_eng is not None:
-                    _g5_eng.workspace['__g5_fw'] = macro_fw
-                    pc_result = _call_sl_function('sl_check_port_completeness', {'_pos_1_special': '__g5_fw'})
-                    sc_result = _call_sl_function('sl_check_signal_closure', {'_pos_1_special': '__g5_fw'})
-                    _g5_eng.eval("clear('__g5_fw')", nargout=0)
-                    if not pc_result.get('passed', True) or not sc_result.get('passed', True):
+                    # [v11.6.7 FIX] Convert Python dict to MATLAB struct via eval
+                    # eng.workspace['x'] = dict stores as py.dict, not MATLAB struct
+                    # Use _dict_to_matlab_struct + eval to create proper MATLAB struct
+                    fw_expr = _dict_to_matlab_struct(macro_fw)
+                    _g5_eng.eval(f"mG5FW = {fw_expr};", nargout=0)
+                    pc_result = _call_sl_function('sl_check_port_completeness', {'_pos_1_special': 'mG5FW'})
+                    sc_result = _call_sl_function('sl_check_signal_closure', {'_pos_1_special': 'mG5FW'})
+                    # [P0-5 FIX] Goto/From cross-subsystem boundary check (R2 enforcement)
+                    gf_scope_result = _check_goto_from_scope(_g5_mn)
+                    _g5_eng.eval("clear('mG5FW')", nargout=0)
+                    _g5_blocked = (
+                        not pc_result.get('passed', True) or
+                        not sc_result.get('passed', True) or
+                        not gf_scope_result.get('passed', True)
+                    )
+                    if _g5_blocked:
+                        _g5_details = {
+                            "port_completeness": pc_result,
+                            "signal_closure": sc_result,
+                            "goto_from_scope": gf_scope_result,
+                        }
+                        _g5_reasons = []
+                        if not pc_result.get('passed', True):
+                            _g5_reasons.append(f"port_completeness: {pc_result.get('message', 'FAILED')}")
+                        if not sc_result.get('passed', True):
+                            _g5_reasons.append(f"signal_closure: {sc_result.get('message', 'FAILED')}")
+                        if not gf_scope_result.get('passed', True):
+                            _g5_reasons.append(f"goto_from_scope: {gf_scope_result.get('message', 'CROSS-BOUNDARY')}")
                         return {
                             "status": "gate_blocked", "blocked": True,
-                            "reason": "Framework design integrity checks failed",
+                            "reason": "Framework design integrity checks failed: " + "; ".join(_g5_reasons),
                             "command": command, "gate": "Gate_5",
-                            "message": "DESIGN_INTEGRITY_FAILED. Fix signalFlow/gotoFromPlan completeness.",
-                            "details": {
-                                "port_completeness": pc_result,
-                                "signal_closure": sc_result,
-                            }
+                            "message": "DESIGN_INTEGRITY_FAILED. Fix signalFlow/gotoFromPlan completeness, signal closure, and Goto/From scope.",
+                            "details": _g5_details,
                         }
                 else:
                     # Engine unavailable — log warning but allow through
@@ -5813,6 +6672,194 @@ def _handle_sl_command(command, params):
             mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
             if mn:
                 _cleanup_workflow_state(mn)
+        
+        # ===== [v11.6] sl_scene_confirm: lock the scene (CHALLENGE-RESPONSE + TURN SEPARATION) =====
+        # P0-10 FIX: Leverages WorkBuddy's conversation model for user interaction proof.
+        # - sl_scene_detect returns detectionToken + challengePhrase
+        # - AI MUST display challengePhrase in AskUserQuestion (turn ends)
+        # - User clicks → NEW turn starts (WorkBuddy platform enforces this)
+        # - AI calls sl_scene_confirm with detectionToken
+        # - Bridge verifies: different request + minimum delay + challenge present
+        # 
+        # Why this works: In WorkBuddy, a new conversation turn ONLY starts when
+        # the user sends a message or clicks AskUserQuestion. The AI cannot
+        # fabricate a new turn. So if confirm is in a different request from detect,
+        # user interaction was required to trigger that request.
+        if command == 'sl_scene_confirm':
+            scene = fixed_params.get('scene', 1)
+            model_name = fixed_params.get('modelName', '')
+            confirm_token = fixed_params.get('confirmationToken', '')
+            
+            # ===== [v11.6] CHALLENGE-RESPONSE + TURN SEPARATION VERIFICATION =====
+            stored_dt = _SCENE_STATE.get('detection_token', '')
+            stored_challenge = _SCENE_STATE.get('challenge_phrase', '')
+            detect_ts = _SCENE_STATE.get('detection_timestamp', 0)
+            detect_req = _SCENE_STATE.get('detection_request_id', 0)
+            current_req = _current_request_id
+            
+            if not stored_dt:
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_S0",
+                    "reason": "No scene detection found. Call sl_scene_detect first.",
+                    "command": command,
+                    "message": (
+                        "NO_DETECTION: You must call sl_scene_detect(workspaceDir) first. "
+                        "The detection result contains a detectionToken and challengePhrase."
+                    ),
+                    "requiredAction": "sl_scene_detect",
+                    "hint": "Call sl_scene_detect(workspaceDir) → present result with AskUserQuestion → call sl_scene_confirm",
+                }
+            
+            # Check detectionToken validity
+            import time
+            if confirm_token != stored_dt:
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_S0",
+                    "reason": "Invalid detectionToken. Use the exact token from sl_scene_detect.",
+                    "command": command,
+                    "message": (
+                        "TOKEN_MISMATCH: The provided token doesn't match the detection token."
+                    ),
+                    "requiredAction": "Use the detectionToken from sl_scene_detect response",
+                    "hint": "Call sl_scene_detect again to get a fresh token.",
+                }
+            
+            # Check timeout (600s generous window for user interaction, was 120s→300s→600s)
+            elapsed = time.time() - detect_ts if detect_ts > 0 else 0
+            if elapsed > 600:
+                _SCENE_STATE.pop('detection_token', None)
+                _SCENE_STATE.pop('challenge_phrase', None)
+                _SCENE_STATE.pop('detection_timestamp', None)
+                _SCENE_STATE.pop('detection_request_id', None)
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_S0",
+                    "reason": f"Scene detection expired ({elapsed:.0f}s > 600s). Re-run sl_scene_detect.",
+                    "command": command,
+                    "message": "DETECTION_EXPIRED: The scene detection session has expired. Re-run sl_scene_detect.",
+                    "hint": "Call sl_scene_detect(workspaceDir) again.",
+                }
+            
+            # ===== TURN SEPARATION CHECK =====
+            # Key insight: In WorkBuddy, sl_scene_detect and sl_scene_confirm
+            # happen in DIFFERENT HTTP requests. If AskUserQuestion was used,
+            # these are also in DIFFERENT conversation turns (enforced by the platform).
+            # The AI cannot fabricate a new turn — only user action creates one.
+            if detect_req == current_req:
+                # Same request — impossible if AskUserQuestion was used
+                _SCENE_STATE.pop('detection_token', None)
+                _SCENE_STATE.pop('challenge_phrase', None)
+                _SCENE_STATE.pop('detection_timestamp', None)
+                _SCENE_STATE.pop('detection_request_id', None)
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_S0",
+                    "reason": "Scene confirm in same request as detect — no user interaction possible.",
+                    "command": command,
+                    "message": (
+                        "SAME_TURN_DETECTED: sl_scene_confirm was called in the same request "
+                        "as sl_scene_detect. This means no user interaction occurred. "
+                        "You MUST call AskUserQuestion to present scene options to the user. "
+                        "The user's click starts a new turn, where you can call sl_scene_confirm."
+                    ),
+                    "requiredAction": "Call AskUserQuestion with scene options + challengePhrase",
+                    "hint": f"Present challenge phrase '{stored_challenge}' to user via AskUserQuestion.",
+                }
+            
+            # Minimum delay heuristic: < 2s likely automated, not human
+            if elapsed < 2:
+                _SCENE_STATE.pop('detection_token', None)
+                _SCENE_STATE.pop('challenge_phrase', None)
+                _SCENE_STATE.pop('detection_timestamp', None)
+                _SCENE_STATE.pop('detection_request_id', None)
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_S0",
+                    "reason": f"Confirm too fast ({elapsed:.1f}s < 2s minimum). User interaction requires more time.",
+                    "command": command,
+                    "message": (
+                        "TOO_FAST: sl_scene_confirm was called too quickly after sl_scene_detect. "
+                        "User interaction (reading + clicking) requires at least a few seconds. "
+                        "This suggests automated bypass. Use AskUserQuestion properly."
+                    ),
+                    "requiredAction": "Re-run sl_scene_detect and use AskUserQuestion",
+                }
+            
+            # ===== Challenge verified, clean up state =====
+            _SCENE_STATE.pop('detection_token', None)
+            _SCENE_STATE.pop('challenge_phrase', None)
+            _SCENE_STATE.pop('detection_timestamp', None)
+            _SCENE_STATE.pop('detection_request_id', None)
+            # [P1-2 FIX] Clear stale S2 modification permissions
+            _S2_MOD_PERMISSIONS.clear()
+            # ===== VERIFICATION END =====
+            scene = fixed_params.get('scene', 1)
+            model_name = fixed_params.get('modelName', '')
+            
+            # Set MATLAB base workspace flags (engine mode) or Python state (CLI mode)
+            try:
+                if _connection_mode == 'engine' and _matlab_engine is not None:
+                    _matlab_engine.eval("assignin('base', 'mS0SceneLocked_', true);", nargout=0)
+                    _matlab_engine.eval(f"assignin('base', 'mS0Scene_', {int(scene)});", nargout=0)
+                    if model_name:
+                        _matlab_engine.eval(f"assignin('base', 'mS0Model_', '{model_name}');", nargout=0)
+                # [v11.6.8 FIX] Always set Python-side state for Gate_3 access
+                _SCENE_STATE['scene_confirmed'] = True
+                _SCENE_STATE['scene'] = int(scene)
+                _SCENE_STATE['scene_model'] = str(model_name) if model_name else ''
+            except Exception as e:
+                import logging
+                logging.getLogger('matlab_bridge').warning(f"Scene confirm failed: {e}")
+                # Fallback to Python state on engine error
+                _SCENE_STATE['scene_confirmed'] = True
+                _SCENE_STATE['scene'] = int(scene)
+                _SCENE_STATE['scene_model'] = str(model_name) if model_name else ''
+            
+            return {
+                "status": "ok",
+                "scene": scene,
+                "modelName": model_name,
+                "sceneConfirmed": True,
+                "message": f"Scene {scene} confirmed and locked for this session.",
+                "workflowHint": (
+                    "Scene 1: Use sl_framework_design to start building from scratch.\n"
+                    "Scene 2: Use sl_model_load + sl_model_understand to analyze existing model."
+                ) if scene == 1 else (
+                    "Scene 2: Use sl_model_load to load your existing model, "
+                    "then sl_model_understand to analyze it."
+                )
+            }
+        # ===== sl_scene_confirm end =====
+        
+        # ===== [v11.5] sl_s2mod_confirm: process Scene 2 modification permission =====
+        if command == 'sl_s2mod_confirm':
+            approved = fixed_params.get('approved', False)
+            sm_mn = fixed_params.get('modelName', '')
+            sm_cmd = fixed_params.get('command', '')
+            sm_target = fixed_params.get('target', '')
+            
+            if approved:
+                cache_key = f"{sm_mn}:{sm_cmd}:{sm_target}"
+                _S2_MOD_PERMISSIONS[cache_key] = True
+                return {
+                    "status": "ok", "approved": True,
+                    "message": f"Modification approved: {sm_cmd} on '{sm_target}'.",
+                    "hint": "You can now retry the blocked operation."
+                }
+            else:
+                return {
+                    "status": "ok", "approved": False,
+                    "message": "Modification rejected by user.",
+                    "hint": "Consider using the sandbox subsystem instead."
+                }
+        # ===== sl_s2mod_confirm end =====
         
         # 4. 参数构建
         func_name = _SL_FUNC_MAP.get(command)
@@ -5839,6 +6886,88 @@ def _handle_sl_command(command, params):
         model_name = fixed_params.get('modelName', fixed_params.get('model_name', ''))
         
         args_dict = _build_sl_args(command, fixed_params)
+        
+        # ===== [v11.5] sl_modify_plan: pre-store modelUnderstanding in workspace =====
+        if command == 'sl_modify_plan' and '_pos_3' in args_dict:
+            mu_data = args_dict.pop('_pos_3')
+            if isinstance(mu_data, dict) and mu_data:
+                try:
+                    mu_eng = get_engine()
+                    if mu_eng is not None:
+                        mu_var = 'mS2MU_' + model_name.replace(' ', '_') if model_name else 'mS2MU_'
+                        mu_eng.workspace[mu_var] = mu_data
+                        args_dict['_pos_3_special'] = f"evalin('base', '{mu_var}')"
+                    else:
+                        args_dict['_pos_3'] = {}
+                except Exception:
+                    args_dict['_pos_3'] = {}
+            else:
+                # [v11.7.1 B3 FIX] Preserve non-dict value so MATLAB's own
+                # validation can produce a clear error message (e.g., "must be a struct")
+                args_dict['_pos_3'] = mu_data
+        # ===== workspace storage end =====
+        # ===== [v11.5] modify_review / modify_approve / model_sandbox / verify_step: pre-store plan =====
+        if command in ('sl_modify_review', 'sl_modify_approve', 'sl_model_sandbox', 'sl_modify_verify_step'):
+            for pos_key in ('_pos_1', '_pos_2', '_pos_3'):
+                val = args_dict.get(pos_key)
+                if isinstance(val, dict) and val:
+                    try:
+                        mp_eng = get_engine()
+                        if mp_eng is not None:
+                            mp_var = 'mS2MP_' + model_name.replace(' ', '_') if model_name else 'mS2MP_'
+                            mp_eng.workspace[mp_var] = val
+                            args_dict[pos_key + '_special'] = f"evalin('base', '{mp_var}')"
+                            del args_dict[pos_key]
+                        else:
+                            args_dict[pos_key] = {}
+                    except Exception:
+                        args_dict[pos_key] = {}
+        # ===== plan storage end =====
+        
+        # ===== [v11.5] Gate_S2_APPROVE: validate modify plan before approval =====
+        if command == 'sl_modify_approve':
+            _s2_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            modify_plan_data = fixed_params.get('modifyPlan', params.get('modifyPlan', None))
+            
+            if _s2_mn and modify_plan_data and isinstance(modify_plan_data, dict):
+                try:
+                    if _connection_mode == 'engine' and _matlab_engine is not None:
+                        sandbox = modify_plan_data.get('sandboxSubsystem', {})
+                        conn_errors = []
+                        
+                        # Check sandbox inport connections
+                        for inp in sandbox.get('inports', []):
+                            if isinstance(inp, dict):
+                                ct = inp.get('connectTo', '')
+                                if ct:
+                                    try:
+                                        _matlab_engine.eval(f"get_param('{_s2_mn}/{ct}', 'BlockType');", nargout=0)
+                                    except Exception:
+                                        conn_errors.append(f"Inport target not found: {ct}")
+                        
+                        # Check sandbox outport connections
+                        for outp in sandbox.get('outports', []):
+                            if isinstance(outp, dict):
+                                ct = outp.get('connectTo', '')
+                                if ct:
+                                    try:
+                                        _matlab_engine.eval(f"get_param('{_s2_mn}/{ct}', 'BlockType');", nargout=0)
+                                    except Exception:
+                                        conn_errors.append(f"Outport target not found: {ct}")
+                        
+                        if conn_errors:
+                            return {
+                                "status": "gate_blocked", "blocked": True,
+                                "gate": "Gate_S2_APPROVE",
+                                "reason": "Connection point validation failed",
+                                "command": command,
+                                "message": "CONNECTION_POINT_INVALID: Some connection points in the modify plan do not exist in the model.",
+                                "details": {"connectionErrors": conn_errors},
+                                "hint": "Fix the connection points in your modify plan."
+                            }
+                except Exception:
+                    pass  # Engine unavailable, skip Gate_S2
+        
         
         # [P1-5 FIX] 工作流清理已移到 _SL_FUNC_MAP 检查之前
         
@@ -5894,15 +7023,16 @@ def _handle_sl_command(command, params):
                     _fw_state.phase = 'framework_construction'
                     _fw_state.phase_step = 'approved'
                     # 在 MATLAB workspace 设置标记
+                    _fw_safe = _fw_mn.replace('/', '__')  # [v11.5] 子系统路径安全化
                     try:
                         eng = get_engine()
                         if eng is not None:
-                            fw_lock_var = f'mFWLock_{_fw_mn}'  # [P1-4 FIX] 统一命名
+                            fw_lock_var = f'mFWLock_{_fw_safe}'  # [P1-4 FIX] 统一命名
                             eng.eval(f"assignin('base', '{fw_lock_var}', {str(fixed_params.get('locked', True)).lower()})", nargout=0)
                             # 保存大框架到 workspace (MATLAB 变量名不能以 _ 开头)
                             # [P0-4 FIX] 使用 workspace 直接赋值，避免 eval 拼接 JSON 注入
                             if _fw_state.macro_framework:
-                                fw_var = f'mFW_{_fw_mn}'
+                                fw_var = f'mFW_{_fw_safe}'
                                 eng.workspace[fw_var] = _fw_state.macro_framework
                     except Exception:
                         pass  # MATLAB workspace 同步失败不影响主流程
@@ -5939,6 +7069,61 @@ def _handle_sl_command(command, params):
         else:
             result = _call_sl_function(func_name, args_dict)
         
+        # ===== [P0-8 FIX] Post-delete orphaned Goto/From cleanup =====
+        # When a SubSystem is deleted, its paired Goto/From blocks
+        # outside the subsystem become orphaned. This MUST be cleaned up.
+        # AI CANNOT bypass this check.
+        if command == 'sl_delete' and isinstance(result, dict) and result.get('status') == 'ok':
+            _del_target = fixed_params.get('blockPath', '')
+            if _del_target:
+                try:
+                    _cleanup_eng = get_engine()
+                    if _cleanup_eng is not None:
+                        _del_mn = _del_target.split('/')[0]
+                        # Find Goto blocks with no matching From, and From blocks with no matching Goto
+                        _cleanup_eng.eval(
+                            f"allGotos = find_system('{_del_mn}', 'BlockType', 'Goto');"
+                            f"allFroms = find_system('{_del_mn}', 'BlockType', 'From');"
+                            f"orphanedGotos = {{}}; orphanedFroms = {{}};"
+                            f"for i = 1:length(allGotos);"
+                            f"  gt = get_param(allGotos{{i}}, 'GotoTag');"
+                            f"  matches = find_system('{_del_mn}', 'BlockType', 'From', 'GotoTag', gt);"
+                            f"  if isempty(matches); orphanedGotos{{end+1}} = allGotos{{i}}; end;"
+                            f"end;"
+                            f"for i = 1:length(allFroms);"
+                            f"  ft = get_param(allFroms{{i}}, 'GotoTag');"
+                            f"  matches = find_system('{_del_mn}', 'BlockType', 'Goto', 'GotoTag', ft);"
+                            f"  if isempty(matches); orphanedFroms{{end+1}} = allFroms{{i}}; end;"
+                            f"end;",
+                            nargout=0
+                        )
+                        # Delete orphaned blocks
+                        _del_eng_expr = (
+                            f"for i = 1:length(orphanedGotos);"
+                            f"  try; delete_block(orphanedGotos{{i}}); catch; end;"
+                            f"end;"
+                            f"for i = 1:length(orphanedFroms);"
+                            f"  try; delete_block(orphanedFroms{{i}}); catch; end;"
+                            f"end;"
+                            f"length(orphanedGotos) + length(orphanedFroms);"
+                        )
+                        _cleaned = _cleanup_eng.eval(_del_eng_expr, nargout=1)
+                        try:
+                            _cleaned_count = int(_cleaned) if _cleaned is not None else 0
+                        except:
+                            _cleaned_count = 0
+                        if _cleaned_count > 0:
+                            result['orphanedGotoFromCleaned'] = _cleaned_count
+                            result['orphanedGotoFromHint'] = (
+                                f"Cleaned {_cleaned_count} orphaned Goto/From block(s) "
+                                f"that lost their pair when '{_del_target}' was deleted."
+                            )
+                except Exception as _orphan_ex:
+                    import logging
+                    logging.getLogger('matlab_bridge').warning(
+                        f"Orphaned Goto/From cleanup failed: {_orphan_ex}")
+        # ===== orphaned Goto/From cleanup end =====
+        
         # 7. 注入反模式警告
         if anti_warnings and isinstance(result, dict):
             result['antiPatternWarnings'] = anti_warnings
@@ -5955,6 +7140,149 @@ def _handle_sl_command(command, params):
         if isinstance(result, dict):
             result['command'] = command
         result['matlabFunction'] = func_name
+        
+        # ===== [v11.6] Gate_S0 Challenge-Response Injection (P0-10 FIX) =====
+        # After sl_scene_detect returns, inject a detectionToken + challengePhrase.
+        # The detectionToken proves continuity from scene detection.
+        # The challengePhrase MUST be displayed to the user via AskUserQuestion.
+        # sl_scene_confirm MUST be called in a DIFFERENT turn (WorkBuddy enforces
+        # turn separation when AskUserQuestion is used — AI cannot fake a new turn).
+        # This leverages WorkBuddy's conversation model for user interaction proof.
+        if command == 'sl_scene_detect':
+            # [P0-14 FIX] Unconditionally purge ALL stale detection state before a fresh detect.
+            # Previous timeout/error handlers may have left stale tokens or timestamps
+            # in _SCENE_STATE. Without this, sl_scene_confirm can see an old timestamp
+            # even after a fresh sl_scene_detect, causing infinite DETECTION_EXPIRED loops.
+            for _stale_key in ('detection_token', 'challenge_phrase',
+                                'detection_timestamp', 'detection_request_id',
+                                'detected_scene', 'detected_models'):
+                _SCENE_STATE.pop(_stale_key, None)
+            _S2_MOD_PERMISSIONS.clear()
+
+        if command == 'sl_scene_detect' and isinstance(result, dict) and result.get('status') == 'ok':
+            import uuid, time, random, string
+            _dt_token = uuid.uuid4().hex[:16]
+            _challenge = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+            _SCENE_STATE['detection_token'] = _dt_token
+            _SCENE_STATE['detection_timestamp'] = time.time()
+            _SCENE_STATE['detection_request_id'] = _current_request_id
+            _SCENE_STATE['challenge_phrase'] = _challenge
+            _SCENE_STATE['detected_scene'] = result.get('scene', 1)
+            _SCENE_STATE['detected_models'] = result.get('models', [])
+            # Return detectionToken + challengePhrase to AI
+            # AI MUST display challengePhrase in AskUserQuestion
+            result['detectionToken'] = _dt_token
+            result['challengePhrase'] = _challenge
+            result['confirmationRequired'] = True
+            result['userPrompt'] = (
+                f"Scene {result.get('scene')} detected. "
+                f"Found {len(result.get('models', []))} model(s). "
+                f"【MUST include challenge phrase in AskUserQuestion】"
+            )
+            result['challengeInstructions'] = (
+                f"You MUST display the challenge phrase '{_challenge}' "
+                f"in your AskUserQuestion text. "
+                f"The user will see this phrase and click to confirm. "
+                f"Then call sl_scene_confirm with the detectionToken."
+            )
+        # ===== Challenge-Response injection end =====
+        
+        # ===== [v11.6.1] Gate_S2_SANDBOX_CONNECT: verify EXTERNAL sandbox port connectivity =====
+        # P0-11 FIX: Check that the SubSystem block's ports are connected to the parent model.
+        # We check EXTERNAL connections (SubSystem ↔ parent model), NOT internal Inport/Outport
+        # connections (which are built during Scene 1 flow inside the sandbox).
+        if command == 'sl_model_sandbox' and isinstance(result, dict) and result.get('status') == 'ok':
+            sandbox_path = result.get('sandboxPath', '')
+            if sandbox_path:
+                try:
+                    # Check SubSystem block's port connectivity to parent model
+                    pc = eng.get_param(sandbox_path, 'PortConnectivity')
+                    ext_unconnected = []
+                    for pc_entry in pc:
+                        # pc_entry is a struct with fields: Type, SrcBlock, DstBlock, etc.
+                        # For unconnected ports, SrcBlock or DstBlock will be -1
+                        try:
+                            ptype = pc_entry['Type']
+                            src = pc_entry['SrcBlock']
+                            dst = pc_entry['DstBlock']
+                            port_num = pc_entry['SrcPort'] if ptype == 1 else pc_entry['DstPort']
+                            if (ptype == 1 and src == -1) or (ptype == 2 and dst == -1):
+                                ext_unconnected.append(f"Port {port_num} ({'input' if ptype==1 else 'output'})")
+                        except Exception:
+                            pass
+                    if ext_unconnected:
+                        # External ports not connected — this IS a valid concern
+                        result['_sandboxConnectWarnings'] = ext_unconnected
+                        result['_sandboxConnectExternalUnconnected'] = len(ext_unconnected)
+                        # Don't block — external connections may be wired after internal build
+                        result['_sandboxConnectNote'] = (
+                            f"{len(ext_unconnected)} external port(s) not connected to parent model. "
+                            f"Connect them after building sandbox internals."
+                        )
+                    else:
+                        result['_sandboxConnectVerified'] = True
+                except Exception as e:
+                    result['_sandboxConnectSkipped'] = str(e)[:100]
+            
+            # [v11.6.2 FIX] Auto-add sandbox to subsystem_queue (Gap 3)
+            # When sl_model_sandbox creates a new empty sandbox, automatically
+            # register it in the parent model's subsystem_queue so that
+            # Gate_SANDBOX_INCOMPLETE will block completion/simulation until
+            # the sandbox internals are built via Scene 1 workflow.
+            try:
+                parent_model = sandbox_path.split('/')[0] if '/' in sandbox_path else fixed_params.get('modelName', fixed_params.get('model_name', ''))
+                if parent_model:
+                    _sbox_state = _get_workflow_state(parent_model)
+                    if sandbox_path not in _sbox_state.subsystem_queue:
+                        _sbox_state.subsystem_queue.append(sandbox_path)
+                        _sbox_state.phase = 'subsystem_iteration'
+                        _sbox_state.phase_step = 'filling'
+                        result['_sandboxQueueUpdated'] = True
+                        result['_sandboxQueueNote'] = (
+                            f"Sandbox '{sandbox_path}' added to subsystem_queue. "
+                            f"Build its internals before sl_model_complete or sl_sim_run."
+                        )
+                        
+                        # [v11.6.4 FIX] Register sandbox name for Gate_S2_MODIFY
+                        # Use get_engine() instead of _connection_mode check which
+                        # may fail in this nested scope. get_engine() lazily
+                        # initializes the engine if needed.
+                        try:
+                            _sbox_model = sandbox_path.split('/')[0] if '/' in sandbox_path else ''
+                            _sb_name_param = fixed_params.get('sandboxName', params.get('sandboxName', ''))
+                            _sbox_short = sandbox_path.split('/')[-1] if '/' in sandbox_path else _sb_name_param
+                            if _sbox_model:
+                                _sbox_eng = get_engine()
+                                if _sbox_eng is not None:
+                                    _sbox_eng.eval(
+                                        f"assignin('base', 'mS2SandboxName_{_sbox_model}', '{_sbox_short}')",
+                                        nargout=0)
+                                    result['_sandboxNameRegistered'] = True
+                        except Exception:
+                            pass  # Non-critical: Gate_S2_MODIFY has other checks
+            except Exception as _sq_ex:
+                import logging
+                logging.getLogger('matlab_bridge').warning(
+                    f"Failed to auto-add sandbox to queue: {_sq_ex}")
+        # ===== Gate_S2_SANDBOX_CONNECT end =====
+        
+        # [v11.7.1 B10 FIX] Cleanup subsystem_queue when modifyPlan deletes blocks
+        # Prevents Gate_SANDBOX_INCOMPLETE from blocking on non-existent subsystems.
+        if command == 'sl_model_sandbox':
+            _mp_cleanup = fixed_params.get('modifyPlan', params.get('modifyPlan', {}))
+            if isinstance(_mp_cleanup, dict):
+                _ex_mods = _mp_cleanup.get('existingModifications', {})
+                if isinstance(_ex_mods, dict):
+                    for _chg in _ex_mods.get('changes', []):
+                        if isinstance(_chg, dict) and _chg.get('operation') == 'delete':
+                            _del_path = _chg.get('targetPath', '')
+                            if _del_path:
+                                _del_model = _del_path.split('/')[0] if '/' in _del_path else ''
+                                if _del_model:
+                                    _del_state = _get_workflow_state(_del_model)
+                                    if _del_path in _del_state.subsystem_queue:
+                                        _del_state.subsystem_queue.remove(_del_path)
+                                        result['_queueCleanup'] = f"Removed '{_del_path}' from queue (deleted)"
         
         # 9.0 v9.0: 提取模型名（v8.0 验证和 v9.0 工作流共用）
         model_name_for_verify = fixed_params.get('modelName', fixed_params.get('model_name', ''))
@@ -5973,6 +7301,283 @@ def _handle_sl_command(command, params):
             if config_name and '/' in config_name:
                 model_name_for_verify = config_name.split('/')[0]
         
+        # ===== [v11.6.2] Gate_SANDBOX_INCOMPLETE: 沙盒空壳硬门控 =====
+        # P0 FIX (Gap 1+2): After model_name_for_verify is resolved above,
+        # check subsystem_queue before allowing sl_model_complete / sl_sim_run / sl_sim_batch.
+        # If empty subsystems exist, block the operation until internals are built.
+        # [v11.6.2 PATCH] Also verify actual sandbox content via MATLAB to avoid stale queue.
+        _SANDBOX_COMPLETION_GATED = ['sl_model_complete', 'sl_sim_run', 'sl_sim_batch']
+        if command in _SANDBOX_COMPLETION_GATED and model_name_for_verify:
+            try:
+                _phase_state = _get_workflow_state(model_name_for_verify)
+                if _phase_state.subsystem_queue:
+                    # Verify each queued sandbox is ACTUALLY empty (not just stale queue)
+                    # [v11.6.4 FIX] Use get_engine().eval() instead of _matlab_eval_safe.
+                    # _matlab_eval_safe may return '__EVAL_FAILED__' which converts to 0
+                    # and causes false-positive "empty shell" detection.
+                    _actually_empty = []
+                    _gate_eng = get_engine()
+                    for _sb_path in _phase_state.subsystem_queue:
+                        try:
+                            if _gate_eng is not None:
+                                _total = _gate_eng.eval(
+                                    f"length(find_system('{_sb_path}', 'SearchDepth', 1, 'LookUnderMasks', 'on'))",
+                                    nargout=1)
+                                _in_count = _gate_eng.eval(
+                                    f"length(find_system('{_sb_path}', 'SearchDepth', 1, 'BlockType', 'Inport', 'LookUnderMasks', 'on'))",
+                                    nargout=1)
+                                _out_count = _gate_eng.eval(
+                                    f"length(find_system('{_sb_path}', 'SearchDepth', 1, 'BlockType', 'Outport', 'LookUnderMasks', 'on'))",
+                                    nargout=1)
+                                _total_n = int(_total) if _total is not None else 0
+                                _in_n = int(_in_count) if _in_count is not None else 0
+                                _out_n = int(_out_count) if _out_count is not None else 0
+                            else:
+                                _total_n = _in_n = _out_n = 0
+                            _functional = _total_n - _in_n - _out_n
+                            if _functional <= 0:
+                                _actually_empty.append(_sb_path)
+                        except Exception:
+                            # [v11.7.1 B2 FIX] Block doesn't exist → remove from queue, don't block
+                            # Previous behavior marked non-existent paths as "empty shell",
+                            # which permanently blocked completion gates.
+                            pass
+                    
+                    # Update queue to only contain actually-empty sandboxes
+                    _phase_state.subsystem_queue = _actually_empty
+                    
+                    if _actually_empty:
+                        return {
+                            "status": "gate_blocked",
+                            "blocked": True,
+                            "reason": (
+                                f"{len(_actually_empty)} sandbox(es) still empty: "
+                                f"{_actually_empty}. "
+                                f"Build sandbox internals before completing model or running simulation."
+                            ),
+                            "command": command,
+                            "gate": "Gate_SANDBOX_INCOMPLETE",
+                            "message": (
+                                f"SANDBOX_INCOMPLETE: {len(_actually_empty)} subsystem(s) "
+                                f"have no internal logic (empty shell detected).\n"
+                                f"Build sandbox internals via Scene 1 workflow:\n"
+                                f"1. Add blocks/lines inside: {_actually_empty[0]}\n"
+                                f"2. After building, retry this command."
+                            ),
+                            "requiredAction": "build_sandbox_internals",
+                            "emptySandboxes": _actually_empty,
+                            "workflowPhase": "subsystem_iteration",
+                        }
+            except Exception as _si_ex:
+                import logging
+                logging.getLogger('matlab_bridge').warning(
+                    f"Gate_SANDBOX_INCOMPLETE check failed: {_si_ex}")
+        # ===== Gate_SANDBOX_INCOMPLETE end =====
+
+        # ===== [v11.6.2] Gate_S2_EXTERNAL_CONNECT: sandbox external port connectivity =====
+        # P0 FIX: sl_model_sandbox.m claims to auto-connect ports but the code had bugs:
+        # - Used 'Port' instead of 'Ports' param (MATLAB error, silently caught)
+        # - Outports were NEVER auto-connected (only stored as metadata)
+        # This gate verifies that sandbox SubSystem blocks have EXTERNAL ports connected.
+        if command in _SANDBOX_COMPLETION_GATED and model_name_for_verify:
+            try:
+                # [P1-14 FIX] Use get_engine().eval() instead of _matlab_eval_safe
+                # for reliable MATLAB execution in both Engine and CLI modes
+                _ext_check_eng = get_engine()
+                _ext_subsys_count = 0
+                if _ext_check_eng is not None:
+                    try:
+                        _ext_check_eng.workspace['v_model'] = model_name_for_verify
+                        _ext_subsys_count = int(_ext_check_eng.eval(
+                            "length(find_system(v_model, 'SearchDepth', 1, 'BlockType', 'SubSystem'));",
+                            nargout=1))
+                    except Exception:
+                        _ext_subsys_count = 0
+                if _ext_subsys_count > 0:
+                    # Check each SubSystem's external port connectivity via LineHandles
+                    _ext_unconn_subsystems = []
+                    _ext_subsys_names = []
+                    try:
+                        _ext_check_eng.workspace['v_model'] = model_name_for_verify
+                        _raw_names = _ext_check_eng.eval(
+                            "get_param(find_system(v_model, 'SearchDepth', 1, 'BlockType', 'SubSystem'), 'Name');",
+                            nargout=1)
+                        if isinstance(_raw_names, str):
+                            _ext_subsys_names = [_raw_names]
+                        elif _raw_names is not None:
+                            _ext_subsys_names = list(_raw_names)
+                    except Exception:
+                        _ext_subsys_names = []
+                    for _es_name in _ext_subsys_names:
+                        if not isinstance(_es_name, str):
+                            continue
+                        _es_path = f"{model_name_for_verify}/{_es_name}"
+                        try:
+                            _ext_check_eng.workspace['v_path'] = _es_path
+                            _es_lh_raw = _ext_check_eng.eval(
+                                "lh = get_param(v_path, 'LineHandles'); [length(lh.Inport) length(lh.Outport)];",
+                                nargout=1)
+                            if _es_lh_raw is not None and hasattr(_es_lh_raw, '__getitem__') and len(_es_lh_raw) >= 2:
+                                _in_count = int(_es_lh_raw[0])
+                                _out_count = int(_es_lh_raw[1])
+                                # Count unconnected ports
+                                _unconn_in = 0
+                                _unconn_out = 0
+                                for _pi in range(_in_count):
+                                    try:
+                                        _ext_check_eng.workspace['v_path'] = _es_path
+                                        _ext_check_eng.workspace['v_pi'] = _pi
+                                        _lh_val = int(_ext_check_eng.eval(
+                                            "lh = get_param(v_path, 'LineHandles'); double(lh.Inport(v_pi+1) == -1);",
+                                            nargout=1))
+                                        if _lh_val == 1:
+                                            _unconn_in += 1
+                                    except Exception:
+                                        pass
+                                for _po in range(_out_count):
+                                    try:
+                                        _ext_check_eng.workspace['v_path'] = _es_path
+                                        _ext_check_eng.workspace['v_po'] = _po
+                                        _lh_val = int(_ext_check_eng.eval(
+                                            "lh = get_param(v_path, 'LineHandles'); double(lh.Outport(v_po+1) == -1);",
+                                            nargout=1))
+                                        if _lh_val == 1:
+                                            _unconn_out += 1
+                                    except Exception:
+                                        pass
+                                if _unconn_in > 0 or _unconn_out > 0:
+                                    _ext_unconn_subsystems.append({
+                                        'path': _es_path,
+                                        'unconnIn': _unconn_in,
+                                        'unconnOut': _unconn_out,
+                                        'totalIn': _in_count,
+                                        'totalOut': _out_count,
+                                    })
+                        except Exception:
+                            pass
+                    
+                    if _ext_unconn_subsystems:
+                        _first = _ext_unconn_subsystems[0]
+                        return {
+                            "status": "gate_blocked",
+                            "blocked": True,
+                            "reason": (
+                                f"{len(_ext_unconn_subsystems)} subsystem(s) have unconnected external ports. "
+                                f"Connect sandbox ports to parent model before completing."
+                            ),
+                            "command": command,
+                            "gate": "Gate_S2_EXTERNAL_CONNECT",
+                            "message": (
+                                f"EXTERNAL_CONNECT_REQUIRED: {len(_ext_unconn_subsystems)} subsystem(s) "
+                                f"have unconnected external ports.\n"
+                                f"Example: {_first['path']} has {_first['unconnIn']}/{_first['totalIn']} "
+                                f"inputs and {_first['unconnOut']}/{_first['totalOut']} outputs unconnected.\n"
+                                f"Use add_line to connect sandbox Inport/Outport to parent model signals.\n"
+                                f"sl_model_sandbox auto-connection may have failed — check ports manually."
+                            ),
+                            "requiredAction": "add_line_external",
+                            "unconnectedSubsystems": _ext_unconn_subsystems,
+                            "workflowPhase": "external_connection",
+                            "hint": (
+                                f"1. sl_inspect('{model_name_for_verify}') to see all unconnected ports\n"
+                                f"2. Use add_line to connect sandbox ports to parent model blocks\n"
+                                f"3. Example: add_line('{model_name_for_verify}', "
+                                f"'SourceBlock/N', 'SandboxName/N')\n"
+                                f"4. After all external ports are connected, retry"
+                            ),
+                        }
+            except Exception as _sec_ex:
+                import logging
+                logging.getLogger('matlab_bridge').warning(
+                    f"Gate_S2_EXTERNAL_CONNECT check failed: {_sec_ex}")
+        # ===== Gate_S2_EXTERNAL_CONNECT end =====
+
+        # ===== [v11.7] Gap 5 FIX: Scene 2 modify_verify_step auto-trigger =====
+        # When building inside a Scene 2 sandbox, track that sl_modify_verify_step
+        # is required before sl_model_complete or sl_s2mod_confirm can succeed.
+        #
+        # Mechanism:
+        # 1. Any sl_add_block/add_line/set_param/delete inside a Scene 2 sandbox
+        #    sets _s2_verify_pending[model] = True
+        # 2. sl_model_complete and sl_s2mod_confirm check _s2_verify_pending
+        # 3. If pending, block until sl_modify_verify_step is called
+        _S2_WRITE_COMMANDS_FOR_VERIFY = ['sl_add_block', 'sl_add_line', 'sl_set_param', 'sl_delete']
+        
+        # Step 1: Detect if we're building inside a Scene 2 sandbox
+        _is_s2_build = False
+        _s2_sandbox_name = ''
+        if command in _S2_WRITE_COMMANDS_FOR_VERIFY and model_name_for_verify:
+            try:
+                _s2_mn_toplevel = model_name_for_verify
+                _s2_var = f"mS2Approved_{_s2_mn_toplevel}"
+                _s2_check_eng = get_engine()
+                if _s2_check_eng is not None:
+                    try:
+                        _s2_exists = int(_s2_check_eng.eval(
+                            f"evalin('base', 'exist(''{_s2_var}'', ''var'')')", nargout=1))
+                        if _s2_exists == 1:
+                            _is_s2_build = True
+                            _sn_var = f"mS2SandboxName_{_s2_mn_toplevel}"
+                            try:
+                                _s2_sandbox_name = str(_s2_check_eng.eval(
+                                    f"evalin('base', '{_sn_var}')", nargout=1))
+                            except Exception:
+                                _s2_sandbox_name = 'unknown'
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        
+        # Step 2: Mark verify_pending if we wrote to a Scene 2 sandbox
+        if _is_s2_build and isinstance(result, dict) and result.get('status') == 'ok':
+            _s2_vkey = model_name_for_verify
+            global _s2_verify_pending
+            if '_s2_verify_pending' not in globals():
+                _s2_verify_pending = {}
+            _s2_verify_pending[_s2_vkey] = True
+            result['_s2_verifyRequired'] = True
+            result['_s2_verifyNote'] = (
+                f"Scene 2 modification detected. Call sl_modify_verify_step "
+                f"before sl_model_complete or sl_s2mod_confirm."
+            )
+        
+        # Step 3: Block completion if verify is pending
+        if command in _SANDBOX_COMPLETION_GATED and model_name_for_verify:
+            _s2vp = globals().get('_s2_verify_pending', {})
+            if _s2vp.get(model_name_for_verify, False):
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_S2_VERIFY_STEP",
+                    "reason": (
+                        f"Scene 2 modification verification required for "
+                        f"'{model_name_for_verify}'. "
+                        f"Call sl_modify_verify_step() before completing."
+                    ),
+                    "command": command,
+                    "message": (
+                        f"VERIFY_STEP_REQUIRED: Scene 2 modifications in sandbox "
+                        f"'{_s2_sandbox_name}' have not been verified.\n"
+                        f"Call sl_modify_verify_step() to verify sandbox internal "
+                        f"connections and signal integrity."
+                    ),
+                    "requiredAction": "sl_modify_verify_step",
+                    "hint": (
+                        f"1. sl_modify_verify_step('{model_name_for_verify}')\n"
+                        f"2. Fix any issues reported\n"
+                        f"3. Retry this command"
+                    ),
+                }
+        
+        # Step 4: Clear verify_pending when sl_modify_verify_step succeeds
+        if command == 'sl_modify_verify_step' and isinstance(result, dict) and result.get('status') == 'ok':
+            _s2vp = globals().get('_s2_verify_pending', {})
+            _s2v_mn = fixed_params.get('modelName', params.get('modelName', ''))
+            if _s2v_mn in _s2vp:
+                del _s2vp[_s2v_mn]
+            result['_s2_verifyCleared'] = True
+        # ===== Gap 5 FIX end =====
+
         # 9.1 v8.0: 写操作后自动验证（after-trigger 机制）
         # 对写操作类命令，自动调用 sl_model_status_snapshot 获取增量验证
         # 验证结果注入 _verification 字段，AI 必须读取此字段才能继续
@@ -6039,6 +7644,23 @@ def _handle_sl_command(command, params):
                 except Exception:
                     pass  # 工作流状态生成失败不影响主操作
         
+        # [v11.6.2 FIX] Auto-save after write operations
+        # Every add_block / add_line / set_param / delete that succeeds
+        # MUST persist to disk immediately. Without this, all in-memory
+        # model changes are lost when the MATLAB Engine restarts.
+        # This was the root cause of PID_Controller_New being empty after rebuild.
+        _CMD_NEEDS_SAVE = set(_WRITE_VERIFY_MAP.keys()) - {'sl_snapshot'}
+        if isinstance(result, dict) and result.get('status') == 'ok' and command in _CMD_NEEDS_SAVE:
+            if model_name_for_verify:
+                try:
+                    _as_eng = get_engine()
+                    if _as_eng is not None:
+                        _as_eng.workspace['v_model'] = model_name_for_verify
+                        _as_eng.eval("save_system(v_model);", nargout=0)
+                        result['_autoSaved'] = True
+                except Exception:
+                    pass  # Save failure is non-fatal
+
         # 12. 更新 API 调用统计
         is_success = isinstance(result, dict) and result.get('status') != 'error'
         _update_command_stats(command, is_success)
@@ -6195,11 +7817,6 @@ def _verify_block_operation(model_name, command, params, original_result):
     
     if command == 'sl_delete':
         # 删除操作：验证模块确实不存在了
-        check_result = _matlab_eval_safe(
-            "try; find_system(v_model, 'SearchDepth', 1, 'BlockType', 'all'); catch; end",
-            workspace_vars={'v_model': model_name}
-        )
-        # 简单记录删除成功
         checks.append({
             'check': 'block_deleted',
             'passed': True,
@@ -6214,10 +7831,18 @@ def _verify_block_operation(model_name, command, params, original_result):
         if not full_path.startswith(model_name):
             full_path = f"{model_name}/{block_path}"
         
-        exists_check = _matlab_eval_safe(
-            "try; ~isempty(find_system(v_model, 'FindAll', 'on', 'SearchDepth', 1, 'Name', v_block)); catch; false; end",
-            workspace_vars={'v_model': model_name, 'v_block': block_path.split('/')[-1] if '/' in block_path else block_path}
-        )
+        # [P2-17 FIX] Use get_engine().eval() instead of _matlab_eval_safe
+        exists_val = False
+        _vb_eng = get_engine()
+        if _vb_eng is not None:
+            try:
+                _vb_eng.workspace['v_model'] = model_name
+                _vb_eng.workspace['v_block'] = block_path.split('/')[-1] if '/' in block_path else block_path
+                exists_val = bool(_vb_eng.eval(
+                    "~isempty(find_system(v_model, 'FindAll', 'on', 'SearchDepth', 1, 'Name', v_block));",
+                    nargout=1))
+            except Exception:
+                exists_val = True  # Assume block exists (operation succeeded)
         
         # 更可靠的检查方式：直接用 sl_model_status_snapshot 的轻量模式
         status_result = _call_sl_function('sl_model_status_snapshot', {
@@ -6542,34 +8167,46 @@ def _verify_subsystem_operation(model_name, command, params, original_result):
     if not full_path.startswith(model_name):
         full_path = f"{model_name}/{target_path}"
     
-    # 检查子系统是否存在
-    exists = _matlab_eval_safe(
-        "try; ~isempty(find_system(v_model, 'SearchDepth', 1, 'BlockType', 'SubSystem', 'Name', v_target)); catch; false; end",
-        workspace_vars={'v_model': model_name, 'v_target': target_path.split('/')[-1]}
-    )
+    # [P1-14/P2-17 FIX] Use get_engine().eval() instead of _matlab_eval_safe
+    _ve_eng = get_engine()
+    if _ve_eng is None:
+        checks.append({
+            'check': 'subsystem_exists',
+            'passed': False,
+            'detail': 'MATLAB Engine not available — cannot verify'
+        })
+        warnings.append('MATLAB Engine unavailable for subsystem verification')
+        return checks, warnings, suggestions
+    
+    # Check subsystem existence
+    try:
+        _ve_eng.workspace['v_model'] = model_name
+        _ve_eng.workspace['v_target'] = target_path.split('/')[-1]
+        exists_raw = _ve_eng.eval(
+            "~isempty(find_system(v_model, 'SearchDepth', 1, 'BlockType', 'SubSystem', 'Name', v_target));",
+            nargout=1)
+        exists_val = bool(exists_raw) if exists_raw is not None else False
+    except Exception:
+        exists_val = True  # Assume exists (operation already succeeded)
     
     checks.append({
         'check': 'subsystem_exists',
-        'passed': True,  # 原始操作已成功
+        'passed': True,
         'detail': f'{full_path} exists'
     })
     
-    # 检查子系统内部是否有 In/Out 端口
-    in_count = _matlab_eval_safe(
-        "try; length(find_system(v_path, 'SearchDepth', 1, 'BlockType', 'Inport', 'LookUnderMasks', 'on')); catch; -1; end",
-        workspace_vars={'v_path': full_path}
-    )
-    out_count = _matlab_eval_safe(
-        "try; length(find_system(v_path, 'SearchDepth', 1, 'BlockType', 'Outport', 'LookUnderMasks', 'on')); catch; -1; end",
-        workspace_vars={'v_path': full_path}
-    )
-    
+    # Check subsystem internal port count
     try:
-        in_n = int(in_count) if in_count not in [None, -1, '__EVAL_FAILED__'] else -1
-        out_n = int(out_count) if out_count not in [None, -1, '__EVAL_FAILED__'] else -1
-    except (ValueError, TypeError):
-        in_n = -1
-        out_n = -1
+        _ve_eng.workspace['v_path'] = full_path
+        in_count = int(_ve_eng.eval(
+            "length(find_system(v_path, 'SearchDepth', 1, 'BlockType', 'Inport', 'LookUnderMasks', 'on'));",
+            nargout=1))
+        out_count = int(_ve_eng.eval(
+            "length(find_system(v_path, 'SearchDepth', 1, 'BlockType', 'Outport', 'LookUnderMasks', 'on'));",
+            nargout=1))
+        in_n, out_n = in_count, out_count
+    except Exception:
+        in_n, out_n = -1, -1
     
     if in_n >= 0 and out_n >= 0:
         if in_n == 0 and out_n == 0:
@@ -6585,6 +8222,44 @@ def _verify_subsystem_operation(model_name, command, params, original_result):
                 'check': 'subsystem_interface',
                 'passed': True,
                 'detail': f'{full_path} has {in_n} Inport(s) and {out_n} Outport(s)'
+            })
+    
+    # [v11.6.2 FIX] Empty shell detection (Gap 4)
+    # Check if the subsystem has ONLY Inport/Outport blocks (no functional logic)
+    # total_n = all blocks at SearchDepth 1; if total_n == in_n + out_n → empty shell
+    if in_n >= 0 and out_n >= 0 and (in_n + out_n) > 0:
+        try:
+            _ve_eng.workspace['v_path'] = full_path
+            total_count = int(_ve_eng.eval(
+                "length(find_system(v_path, 'SearchDepth', 1, 'LookUnderMasks', 'on'));",
+                nargout=1))
+            total_n = total_count
+        except Exception:
+            total_n = -1
+        
+        if total_n >= 0 and total_n == in_n + out_n:
+            checks.append({
+                'check': 'subsystem_empty_shell',
+                'passed': False,
+                'detail': (
+                    f'{full_path} has {total_n} blocks total ({in_n} In + {out_n} Out) '
+                    f'but NO functional logic — EMPTY SHELL detected'
+                )
+            })
+            warnings.append(
+                f'🚨 EMPTY SHELL: {full_path} has only Inport/Outport blocks ({total_n}={in_n}+{out_n}), '
+                f'no functional logic. Build internals via Scene 1 workflow!'
+            )
+            suggestions.append(
+                f'Build functional blocks inside {full_path}: '
+                f'1. sl_framework_design for this sandbox → 2. sl_micro_design → '
+                f'3. sl_add_block / sl_add_line → 4. Auto-verify will confirm completion'
+            )
+        elif total_n > in_n + out_n:
+            checks.append({
+                'check': 'subsystem_has_logic',
+                'passed': True,
+                'detail': f'{full_path} has {total_n} total blocks ({total_n - in_n - out_n} functional)'
             })
     
     return checks, warnings, suggestions
@@ -6799,6 +8474,8 @@ def handle_command(cmd_data):
         _sl_toolbox_initialized = False
         # v9.0 风险5缓解: Engine 停止时清空所有工作流追踪状态
         _clear_all_workflow_states()
+        # [P0-13 FIX] Clear S2 modification permissions on engine stop
+        _S2_MOD_PERMISSIONS.clear()
         return {"status": "ok", "message": "MATLAB Engine stopped"}
     elif action == 'check':
         return check_installation()

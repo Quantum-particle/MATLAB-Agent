@@ -96,7 +96,8 @@ function result = sl_framework_modify(modelName, action, varargin)
                 assignin('base', fw_var, fw);
                 result = struct('status', 'ok', 'action', action, 'modelName', modelName, 'skipDesign', true);
             otherwise
-                result = struct('status', 'ok', 'action', action, 'modelName', modelName, 'skipDesign', true, 'message', sprintf('skipDesign=true: %s executed without approval', action));
+                % [P0-7 FIX] skipDesign=true only supports renameSubsystem; other actions must use normal flow
+                result = struct('status', 'error', 'action', action, 'modelName', modelName, 'skipDesign', true, 'message', sprintf('skipDesign=true not supported for action "%s". Use normal flow without skipDesign.', action));
         end
         return;
     end
@@ -192,7 +193,8 @@ function result = sl_framework_modify(modelName, action, varargin)
         assignin('base', fw_var, fw);
         assignin('base', snap_var, preSnap);
         % Record modification timestamp
-        assignin('base', ['mFWModifiedAt_' modelName], sl_framework_utils('format_timestamp'));
+        model_safe = strrep(modelName, '/', '__');
+        assignin('base', ['mFWModifiedAt_' model_safe], sl_framework_utils('format_timestamp'));
         % [P1-5 FIX] Clear residual pending to prevent state leak
         pending_var_clear = ['mFWPending_' modelName];
         assignin('base', pending_var_clear, []);
@@ -555,20 +557,21 @@ function reviewResult = validate_modified_framework(fw, action)
     end
 
     % Check 3: physics equations exist (warning only)
+    % [P2-3 FIX] Use sprintf instead of [] concat for R2016a compatibility
     if ~isfield(fw, 'physicsEquations') || isempty(fw.physicsEquations)
         if ~isempty(reviewResult.warningDetails)
-            reviewResult.warningDetails = [reviewResult.warningDetails, '; '];
+            reviewResult.warningDetails = sprintf('%s; ', reviewResult.warningDetails);
         end
-        reviewResult.warningDetails = [reviewResult.warningDetails, 'No physics equations defined'];
+        reviewResult.warningDetails = sprintf('%sNo physics equations defined', reviewResult.warningDetails);
     end
 
     % Check 4: at least 1 subsystem
     if ~isfield(fw, 'subsystems') || isempty(fw.subsystems)
         reviewResult.passed = false;
         if ~isempty(reviewResult.checkDetails)
-            reviewResult.checkDetails = [reviewResult.checkDetails, ', '];
+            reviewResult.checkDetails = sprintf('%s, ', reviewResult.checkDetails);
         end
-        reviewResult.checkDetails = [reviewResult.checkDetails, 'FAIL:subsystem_count(Must have at least one subsystem)'];
+        reviewResult.checkDetails = sprintf('%sFAIL:subsystem_count(Must have at least one subsystem)', reviewResult.checkDetails);
     end
 end
 

@@ -49,8 +49,14 @@ function result = sl_config_set(modelName, config, varargin)
     % ===== 确保模型已加载 =====
     if opts.loadModelIfNot
         try
-            if ~bdIsLoaded(modelName)
-                load_system(modelName);
+            % [v11.5] Extract top-level model for bdIsLoaded/load_system
+            if ~isempty(strfind(modelName, '/'))
+                topModel = modelName(1:strfind(modelName, '/')-1);
+            else
+                topModel = modelName;
+            end
+            if ~bdIsLoaded(topModel)
+                load_system(topModel);
             end
         catch ME
             result.status = 'error';

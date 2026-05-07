@@ -79,8 +79,14 @@ function result = sl_profile_solver(modelName, varargin)
     % ===== 确保模型已加载 =====
     if opts.loadModelIfNot
         try
-            if ~bdIsLoaded(modelName)
-                load_system(modelName);
+            % [v11.5] Extract top-level model for bdIsLoaded/load_system
+            if ~isempty(strfind(modelName, '/'))
+                topModel = modelName(1:strfind(modelName, '/')-1);
+            else
+                topModel = modelName;
+            end
+            if ~bdIsLoaded(topModel)
+                load_system(topModel);
             end
         catch ME
             result.status = 'error';
@@ -89,7 +95,7 @@ function result = sl_profile_solver(modelName, varargin)
             return;
         end
     else
-        if ~bdIsLoaded(modelName)
+        if ~bdIsLoaded(topModel)
             result.status = 'error';
             result.error = ['Model not loaded: ' modelName '. Set loadModelIfNot=true to auto-load.'];
             result.message = result.error;

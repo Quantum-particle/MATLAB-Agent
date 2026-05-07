@@ -131,7 +131,7 @@ if ($old) {
 
 ### 0.5 含中文/空格/括号的路径问题
 
-**症状**: 路径如 `C:\Users\YOUR_USERNAME\` 或 `D:\Program Files(x86)\MATLAB2023b` 导致脚本失败。
+**症状**: 路径如 `C:\Users\泰坦\` 或 `D:\Program Files(x86)\MATLAB2023b` 导致脚本失败。
 
 **解决方案**: 
 - CMD 脚本中用引号包裹路径：`cd /d "%~dp0"`（`%~dp0` 自动含引号处理）
