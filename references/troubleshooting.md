@@ -560,7 +560,7 @@ cmd /c "start /B npx tsx server/index.ts"
 #   warming_bridge → warming_engine → ready / failed
 ```
 
-**一键脚本**：`start-matlab-agent.ps1` 封装了完整流程。
+**启动脚本**：`bash ensure-running.sh` 封装了完整流程。
 
 ---
 
@@ -613,7 +613,7 @@ MATLAB Engine 启动受系统负载、MATLAB 版本、Python 兼容性等影响�
 
 ### 解决方案
 - **预热超时不是致命错误**：服务器仍在运行，功能请求会触发延迟初始化
-- **启动脚本**：`start-matlab-agent.ps1` 预热超时后输出黄色警告，`exit 0`
+- **启动脚本**：`bash ensure-running.sh` 预热超时后继续运行，不阻塞
 - **API 层**：Node.js 预热超时标记 `warmupStatus = 'failed'`，但服务器继续运行
 - **Python 层**：`get_engine()` 带线程超时，超时自动切换到 CLI 回退模式
 - **最差情况**：自动降级到 CLI 模式（变量不跨命令保持）

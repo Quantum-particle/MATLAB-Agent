@@ -64,9 +64,7 @@ matlab-agent/
 │   └── main.tsx                     # React 入口
 ├── data/                            # 运行时数据（git 忽略）
 │   └── .gitkeep
-├── start.bat                        # ⭐ 一键启动脚本（最可靠）
-├── ensure-running.bat               # AI Agent 专用确保运行脚本
-├── start-matlab-agent.ps1           # PowerShell 启动脚本
+├── ensure-running.sh                # ⭐ 一键启动脚本（唯一方式，Git Bash）
 ├── package.json
 ├── tsconfig.json
 ├── vite.config.ts

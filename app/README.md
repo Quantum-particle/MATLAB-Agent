@@ -8,7 +8,7 @@
 
 ### v5.1 — 启动防弹 + Simulink 建模深坑固化
 - 🔴 **端口 3000 自动清理**: 启动前自动杀残留进程 → 等待端口释放 → 确认干净 → 再启动
-- **一键启动脚本**: `start.bat` / `ensure-running.bat` 防弹级启动，AI Agent 一行命令搞定
+- **一键启动脚本**: `bash ensure-running.sh` 防弹级启动，AI Agent 一行命令搞定
 - **Simulink 建模深坑固化**: 默认连线冲突、From/Goto 信号传递、自动排版等 6 大坑写入底层
 - **模型构建后自动排版**: `Simulink.BlockDiagram.arrangeSystem()` 确保用户看到整齐布局
 
@@ -80,14 +80,14 @@ python -m pip install matlabengine
 
 ```bash
 # 一键启动（自动清理端口、安装依赖、后台启动、轮询健康检查）
-cmd /c "start.bat"
+bash ensure-running.sh
 ```
 
 #### 方式 B：AI Agent 专用 — ensure-running
 
 ```bash
 # AI Agent 只需一行命令确保服务运行
-cmd /c "ensure-running.bat"
+bash ensure-running.sh
 # 返回码 0 = 服务可用
 ```
 
@@ -191,6 +191,7 @@ powershell -Command "$b = @{matlabRoot='D:\Program Files\MATLAB\R2023b';projectD
 - 🔴 **端口 3000 被旧进程占用**: 启动前必须杀掉残留进程，确认端口干净再启动
 - **node_modules 缺失**: 首次使用必须 `npm install --production`
 - **npx 在 Windows 是 .cmd**: 必须用 `cmd /c "npx tsx ..."`
+- **启动方式**: 统一使用 `bash ensure-running.sh`（唯一方式，Git Bash）
 - **绝对不能阻塞式启动**: 必须 `start /B` 后台启动 + 轮询
 
 ### Simulink 建模踩坑（v5.1 固化）
@@ -228,9 +229,7 @@ matlab-agent/
 │   └── config.ts                  # 动态配置
 ├── data/                     # 运行时数据（git 忽略）
 │   └── .gitkeep
-├── start.bat                 # ⭐ 一键启动脚本（最可靠）
-├── ensure-running.bat        # AI Agent 专用确保运行脚本
-├── start-matlab-agent.ps1    # PowerShell 启动脚本
+├── ensure-running.sh          # ⭐ 一键启动脚本（最可靠，Git Bash）
 ├── package.json
 ├── tsconfig.json
 └── vite.config.ts
