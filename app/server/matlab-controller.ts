@@ -1,33 +1,27 @@
 /**
-* MATLAB Controller v5.2 - 通用化后端 MATLAB 控制器
+* MATLAB Controller v6.0 - TCP Bridge 强制模式
 * 
-* 核心架构: 使用常驻 Python 桥接进程（--server 模式）
-* - Python 进程保持运行，MATLAB Engine 持久化
+* 核心架构: Python Bridge 由 bash 独立启动（--tcp-server），Node.js 通过 TCP 连接通信
+* - TCP 是唯一通信方式，spawn 模式已移除（v11.9 固化）
+* - 根因: Node.js spawn() 在 Windows 上导致 MATLAB Engine Exit status: 3
+* - Bridge 独立于 Node.js 进程运行，MATLAB Engine 持久化
 * - 变量跨命令保持，图形窗口实时显示
-* - 通过 stdin/stdout JSON 行协议通信
+* - JSON line protocol over TCP — 与原 stdin/stdout 协议完全一致
+* 
+* v6.0 变更（2026-05-11）:
+* - 🔴 移除 spawn fallback — TCP 是唯一 Bridge 连接方式（AI 不可绕过）
+* - 删除 ensureBridgeProcess() / server_mode / BridgeMode 'spawn'
+* - ensureBridgeConnection() 失败直接报错，不再降级
+* - restartBridge() 仅处理 TCP socket
+* - processQueue() 仅通过 TCP 发送命令
 * 
 * v5.2 变更（2026-04-14）:
 * - 新增 ensureDataDirSync(): 启动时自动检测并迁移 app/data/ 下的配置到 data/，彻底解决双目录问题
 * - 新增 LEGACY_DATA_DIR / LEGACY_CONFIG_FILE 常量标识冗余数据路径
 * - 修复 bat 脚本: PowerShell -NoProfile + 2>nul 替代 >nul 2>&1（避免 cmd /c 输入重定向错误）
-* 
-* v5.1.1 变更（2026-04-14）:
-* - 修复 loadConfigFromFile: 清理 DEBUG 日志 + 无效路径自动清理 + 损坏配置自动重建
-* - 修复 restartBridge: stop 命令加 5 秒超时，避免卡住
-* - 修复配置文件路径歧义: CONFIG_DIR 明确为 skills/matlab-agent/data/（非 app/data/）
-* 
-* v5.0 变更（2026-04-10）:
-* - 修复 executeMATLABScript 相对路径解析（基于项目目录而非 CWD）
-* - 添加项目目录缓存 getProjectDir()
-* - 与 Python Bridge v5.0 diary 重构配合
-* 
-* v4.1 变更:
-* - 移除自动检测逻辑，首次启动需用户手动输入 MATLAB 安装路径
-* - MATLAB_ROOT 优先级: 环境变量 > 配置文件（持久化）> 未配置
-* - 配置通过 POST /api/matlab/config 或环境变量 MATLAB_ROOT 设置
 */
 
-import { spawn, ChildProcess } from "child_process";
+import * as net from "net";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -389,13 +383,34 @@ function getTimeout(command: MATLABCommand): number {
   }
 }
 
-// ============= 常驻 Python 桥接进程管理 =============
-
-let bridgeProcess: ChildProcess | null = null;
-let responseBuffer = '';
+// ============= TCP Bridge 连接管理 (v11.9/v6.0 — TCP 唯一方式) =============
+// 🔴 TCP 是唯一 Bridge 连接方式 — AI 不可绕过！
+// 根因: Node.js spawn() 导致 MATLAB Engine Exit status: 3（Windows DLL 初始化崩溃）
+// Python Bridge 由 bash 独立启动（--tcp-server），Node.js 通过 TCP 连接通信。
+// spawn 模式已在 v6.0 中移除 — 不存在 fallback。
 
 // v5.0: Node.js 侧缓存项目目录，用于相对路径解析
 let _cachedProjectDir: string | null = null;
+
+const BRIDGE_DATA_DIR = LEGACY_DATA_DIR; // app/data/ — bridge 写端口文件的位置
+const BRIDGE_PORT_FILE = path.join(BRIDGE_DATA_DIR, 'matlab-bridge.port');
+const BRIDGE_PID_FILE = path.join(BRIDGE_DATA_DIR, 'matlab-bridge.pid');
+
+interface TCPBridgeState {
+  socket: net.Socket | null;
+  connected: boolean;
+  reconnectTimer: NodeJS.Timeout | null;
+  reconnectAttempts: number;
+  responseBuffer: string;
+}
+
+let tcpBridge: TCPBridgeState = {
+  socket: null,
+  connected: false,
+  reconnectTimer: null,
+  reconnectAttempts: 0,
+  responseBuffer: '',
+};
 
 // v4.1: 命令队列 — 替代全局 pendingResolve/pendingReject，支持并发安全
 interface PendingCommand {
@@ -415,124 +430,222 @@ const commandQueue: Array<{ command: MATLABCommand; id: string }> = [];
 let isProcessingCommand = false;
 
 /**
- * 确保常驻 Python 桥接进程已启动
+ * 读取 bridge 端口文件
  */
-function ensureBridgeProcess(): void {
-  if (bridgeProcess && !bridgeProcess.killed) {
-    return; // 已有运行中的进程
+function readBridgePort(): number | null {
+  try {
+    if (!fs.existsSync(BRIDGE_PORT_FILE)) return null;
+    const content = fs.readFileSync(BRIDGE_PORT_FILE, 'utf-8').trim();
+    const port = parseInt(content, 10);
+    return (port > 0 && port < 65536) ? port : null;
+  } catch {
+    return null;
   }
-  
-  const startTime = Date.now();
-  const currentMatlabRoot = getMATLABRoot();
-  console.log(`[MATLAB Bridge] Starting persistent bridge process...`);
-  console.log(`[MATLAB Bridge] MATLAB_ROOT: ${currentMatlabRoot}`);
+}
 
-  // [v11.4.1 FIX] windowsHide + detached to isolate bridge from CMD console
-  // start /B in CMD attaches the process to the parent console, which can
-  // cause MATLAB's libmwfl.dll to fail during DLL initialization.
-  // Detaching the bridge prevents console state propagation to MATLAB.exe.
-  bridgeProcess = spawn('python', [BRIDGE_SCRIPT, '--server'], {
-    cwd: path.dirname(BRIDGE_SCRIPT),
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-    env: { 
-      ...process.env, 
-      PYTHONIOENCODING: 'utf-8', 
-      PYTHONUNBUFFERED: '1',
-      MATLAB_ROOT: currentMatlabRoot,  // 传递 MATLAB_ROOT 给 Python Bridge
-    }
-  });
-
-  // 桥接进程启动后的就绪信号
-  const readyTimeout = setTimeout(() => {
-    const elapsed = Math.round((Date.now() - startTime) / 1000);
-    console.log(`[MATLAB Bridge] Bridge process running (${elapsed}s)`);
-  }, 1000);
-  
-  // 处理 stdout - JSON 行协议
-  bridgeProcess.stdout!.on('data', (data: Buffer) => {
-    responseBuffer += data.toString('utf-8');
-    // 尝试解析完整的 JSON 行
-    const lines = responseBuffer.split('\n');
-    // 最后一行可能不完整，保留在 buffer 中
-    responseBuffer = lines.pop() || '';
-    
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const result = JSON.parse(line.trim()) as MATLABResult & { _requestId?: string };
-        // v4.1: 使用请求 ID 匹配回调
-        const requestId = result._requestId;
-        if (requestId && pendingCommands.has(requestId)) {
-          const pending = pendingCommands.get(requestId)!;
-          clearTimeout(pending.timer);
-          if (pending.progressTimer) clearInterval(pending.progressTimer);
-          pendingCommands.delete(requestId);
-          pending.resolve(result);
-        } else if (!requestId && pendingCommands.size > 0) {
-          // 兼容旧格式：没有 _requestId 时，取最早的一条
-          const firstKey = pendingCommands.keys().next().value;
-          if (firstKey) {
-            const pending = pendingCommands.get(firstKey)!;
-            clearTimeout(pending.timer);
-            if (pending.progressTimer) clearInterval(pending.progressTimer);
-            pendingCommands.delete(firstKey);
-            pending.resolve(result);
-          }
-        }
-      } catch {
-        // [P1-4 FIX] 非 JSON 行 — 记录到日志，不静默丢弃
-        // Bridge 异常输出（Python traceback 等）可能包含关键诊断信息
-        console.warn('[MATLAB Bridge] Non-JSON output:', line.trim().substring(0, 200));
+/**
+ * 轮询等待端口文件出现（最多 maxWaitMs 毫秒）
+ */
+function waitForPortFile(maxWaitMs: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    const poll = () => {
+      const port = readBridgePort();
+      if (port) {
+        resolve(port);
+        return;
       }
-    }
-  });
-  
-  // stderr 只打印日志
-  bridgeProcess.stderr!.on('data', (data: Buffer) => {
-    const text = data.toString('utf-8');
-    process.stdout.write(`[Bridge] ${text}`);
-  });
-  
-  bridgeProcess.on('close', (code) => {
-    console.log(`[MATLAB Bridge] Process exited with code ${code}`);
-    bridgeProcess = null;
-    // 清理所有待处理命令
-    for (const [id, pending] of pendingCommands) {
-      clearTimeout(pending.timer);
-      if (pending.progressTimer) clearInterval(pending.progressTimer);
-      pending.reject(new Error('Bridge process exited unexpectedly'));
-    }
-    pendingCommands.clear();
-    commandQueue.length = 0;
-    isProcessingCommand = false;
-  });
-  
-  bridgeProcess.on('error', (err) => {
-    console.error('[MATLAB Bridge] Process error:', err.message);
-    bridgeProcess = null;
-    // 清理所有待处理命令
-    for (const [id, pending] of pendingCommands) {
-      clearTimeout(pending.timer);
-      if (pending.progressTimer) clearInterval(pending.progressTimer);
-      pending.reject(err);
-    }
-    pendingCommands.clear();
-    commandQueue.length = 0;
-    isProcessingCommand = false;
+      if (Date.now() - startTime > maxWaitMs) {
+        resolve(null);
+        return;
+      }
+      setTimeout(poll, 1000);
+    };
+    poll();
   });
 }
 
 /**
- * 通过常驻桥接进程发送命令（v4.1: 串行队列 + 请求 ID）
- * 使用 JSON 行协议：发送一行 JSON，接收一行 JSON 响应
+ * 建立 TCP 连接到 Python Bridge
+ */
+function connectTCP(port: number): Promise<net.Socket> {
+  return new Promise((resolve, reject) => {
+    const socket = new net.Socket();
+    socket.setKeepAlive(true, 30000); // TCP keepalive 30s
+    socket.setEncoding('utf-8');
+
+    const connectTimeout = setTimeout(() => {
+      socket.destroy();
+      reject(new Error(`TCP connect timeout to 127.0.0.1:${port}`));
+    }, 10000);
+
+    socket.connect(port, '127.0.0.1', () => {
+      clearTimeout(connectTimeout);
+      resolve(socket);
+    });
+
+    socket.on('error', (err) => {
+      clearTimeout(connectTimeout);
+      reject(err);
+    });
+  });
+}
+
+/**
+ * 处理 TCP 响应数据 — JSON line protocol 响应解析
+ */
+function handleTCPResponseData(data: string): void {
+  tcpBridge.responseBuffer += data;
+  const lines = tcpBridge.responseBuffer.split('\n');
+  tcpBridge.responseBuffer = lines.pop() || '';
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const result = JSON.parse(line.trim()) as MATLABResult & { _requestId?: string };
+      const requestId = result._requestId;
+      if (requestId && pendingCommands.has(requestId)) {
+        const pending = pendingCommands.get(requestId)!;
+        clearTimeout(pending.timer);
+        if (pending.progressTimer) clearInterval(pending.progressTimer);
+        pendingCommands.delete(requestId);
+        pending.resolve(result);
+      } else if (!requestId && pendingCommands.size > 0) {
+        const firstKey = pendingCommands.keys().next().value;
+        if (firstKey) {
+          const pending = pendingCommands.get(firstKey)!;
+          clearTimeout(pending.timer);
+          if (pending.progressTimer) clearInterval(pending.progressTimer);
+          pendingCommands.delete(firstKey);
+          pending.resolve(result);
+        }
+      }
+    } catch {
+      console.warn('[MATLAB Bridge TCP] Non-JSON output:', line.trim().substring(0, 200));
+    }
+  }
+}
+
+/**
+ * TCP 断连后调度重连（指数退避）
+ */
+function scheduleTCPReconnect(): void {
+  if (tcpBridge.reconnectTimer) {
+    clearTimeout(tcpBridge.reconnectTimer);
+  }
+
+  const delay = Math.min(1000 * Math.pow(2, tcpBridge.reconnectAttempts), 30000);
+  tcpBridge.reconnectAttempts++;
+
+  console.log(`[MATLAB Bridge TCP] Reconnecting in ${Math.round(delay / 1000)}s (attempt ${tcpBridge.reconnectAttempts})...`);
+
+  tcpBridge.reconnectTimer = setTimeout(async () => {
+    try {
+      await ensureBridgeConnection();
+    } catch (err) {
+      console.warn('[MATLAB Bridge TCP] Reconnect failed:', (err as Error).message);
+      scheduleTCPReconnect(); // 继续重连
+    }
+  }, delay);
+}
+
+/**
+ * 确保 TCP Bridge 连接已建立（v6.0 — TCP 唯一方式，无 fallback）
+ *
+ * 🔴 TCP 是唯一 Bridge 连接方式 — 不存在 spawn 降级！
+ * 连接失败 = 服务不可用，必须先运行 ensure-running.sh 启动 Bridge。
+ *
+ * 优先级:
+ * 1. 已有 TCP 连接 → 直接返回
+ * 2. 读端口文件 → TCP 连接
+ * 3. 等待端口文件 30s → TCP 连接
+ * 4. 全部失败 → 返回错误
+ */
+async function ensureBridgeConnection(): Promise<void> {
+  // 已连接 → 无需操作
+  if (tcpBridge.connected && tcpBridge.socket && !tcpBridge.socket.destroyed) {
+    return;
+  }
+
+  // 读取端口文件
+  let port = readBridgePort();
+
+  if (!port) {
+    // 端口文件不存在 — 可能 bridge 还没启动，等待 30 秒
+    console.log('[MATLAB Bridge TCP] Port file not found, waiting up to 30s for bridge...');
+    port = await waitForPortFile(30000);
+  }
+
+  if (!port) {
+    // 30 秒后仍无端口文件 → Bridge 未启动
+    console.error('[MATLAB Bridge TCP] ❌ Bridge port file not found after 30s. Bridge is not running!');
+    console.error('[MATLAB Bridge TCP] Please run: bash ensure-running.sh');
+    throw new Error('MATLAB Bridge 未启动。请先运行: bash ensure-running.sh');
+  }
+
+  // 尝试 TCP 连接
+  try {
+    const socket = await connectTCP(port);
+
+    tcpBridge.socket = socket;
+    tcpBridge.connected = true;
+    tcpBridge.reconnectAttempts = 0;
+    tcpBridge.responseBuffer = '';
+
+    console.log(`[MATLAB Bridge TCP] ✅ Connected to bridge on 127.0.0.1:${port}`);
+
+    // 响应处理
+    socket.on('data', (data: Buffer) => {
+      handleTCPResponseData(data.toString('utf-8'));
+    });
+
+    // 断连处理
+    socket.on('close', () => {
+      console.warn('[MATLAB Bridge TCP] Connection closed');
+      tcpBridge.connected = false;
+      tcpBridge.socket = null;
+
+      // 清理待处理命令
+      for (const [id, pending] of pendingCommands) {
+        clearTimeout(pending.timer);
+        if (pending.progressTimer) clearInterval(pending.progressTimer);
+        pending.reject(new Error('TCP connection closed'));
+      }
+      pendingCommands.clear();
+      commandQueue.length = 0;
+      isProcessingCommand = false;
+
+      // 调度重连
+      scheduleTCPReconnect();
+    });
+
+    socket.on('error', (err) => {
+      console.error('[MATLAB Bridge TCP] Socket error:', err.message);
+    });
+
+  } catch (err) {
+    console.error(`[MATLAB Bridge TCP] ❌ Failed to connect to 127.0.0.1:${port}:`, (err as Error).message);
+    console.error('[MATLAB Bridge TCP] Bridge is not running. Please run: bash ensure-running.sh');
+    throw new Error(`MATLAB Bridge 连接失败 (127.0.0.1:${port})。请先运行: bash ensure-running.sh`);
+  }
+}
+
+/**
+ * 通过 TCP Bridge 发送命令（v6.0: TCP 唯一方式）
+ * 使用 JSON line protocol over TCP：发送一行 JSON，接收一行 JSON 响应
  * 命令串行执行（Python Bridge 是单线程的），但多个请求可以排队等待
+ * 
+ * 🔴 TCP 是唯一通信方式 — 不存在 spawn 降级
  */
 async function executeBridgeCommand(command: MATLABCommand): Promise<MATLABResult> {
-  ensureBridgeProcess();
-  
-  if (!bridgeProcess || bridgeProcess.killed) {
-    return { status: 'error', message: '桥接进程不可用' };
+  // 确保 TCP 连接已建立
+  if (!tcpBridge.connected || !tcpBridge.socket || tcpBridge.socket.destroyed) {
+    await ensureBridgeConnection();
+  }
+
+  // 连接仍不可用
+  if (!tcpBridge.connected || !tcpBridge.socket || tcpBridge.socket.destroyed) {
+    return { status: 'error', message: 'MATLAB Bridge TCP 连接不可用。请先运行: bash ensure-running.sh' };
   }
   
   const timeout = getTimeout(command);
@@ -546,8 +659,8 @@ async function executeBridgeCommand(command: MATLABCommand): Promise<MATLABResul
       reject,
       timer: setTimeout(() => {
         pendingCommands.delete(requestId);
-        // 超时后重启桥接进程，否则Engine被锁死会导致后续所有命令都无法执行
-        console.log(`[MATLAB Bridge] ⚠️ 命令 ${command.action} 超时（${Math.round(timeout / 1000)}秒），重启桥接进程...`);
+        // 超时后重启桥接连接，否则Engine被锁死会导致后续所有命令都无法执行
+        console.log(`[MATLAB Bridge] ⚠️ 命令 ${command.action} 超时（${Math.round(timeout / 1000)}秒），重启桥接连接...`);
         restartBridge().catch(err => console.error('[MATLAB Bridge] 重启桥接失败:', err.message));
         reject(new Error(`MATLAB 执行超时（${Math.round(timeout / 1000)}秒），桥接进程已自动重启`));
       }, timeout),
@@ -569,18 +682,22 @@ async function executeBridgeCommand(command: MATLABCommand): Promise<MATLABResul
   });
 }
 
-/** 处理命令队列 — 串行发送命令给 Python Bridge */
+/** 处理命令队列 — 串行通过 TCP 发送命令给 Python Bridge (v6.0: TCP 唯一方式) */
 function processQueue(): void {
   if (isProcessingCommand || commandQueue.length === 0) return;
-  if (!bridgeProcess || bridgeProcess.killed) {
-    // 桥接进程不可用，拒绝所有排队命令
+
+  // 检查 TCP 连接可用性
+  const isTCPReady = tcpBridge.connected && tcpBridge.socket && !tcpBridge.socket.destroyed;
+
+  if (!isTCPReady) {
+    // TCP 连接不可用，拒绝所有排队命令
     for (const item of commandQueue) {
       const pending = pendingCommands.get(item.id);
       if (pending) {
         clearTimeout(pending.timer);
         if (pending.progressTimer) clearInterval(pending.progressTimer);
         pendingCommands.delete(item.id);
-        pending.resolve({ status: 'error', message: '桥接进程不可用' });
+        pending.resolve({ status: 'error', message: 'MATLAB Bridge TCP 连接不可用。请先运行: bash ensure-running.sh' });
       }
     }
     commandQueue.length = 0;
@@ -593,8 +710,9 @@ function processQueue(): void {
   // 注入 _requestId 到命令中，以便 Python Bridge 回传时能匹配
   const commandWithId = { ...command, _requestId: id };
   const cmdLine = JSON.stringify(commandWithId) + '\n';
-  
-  bridgeProcess.stdin!.write(cmdLine, 'utf-8');
+
+  // 通过 TCP 发送
+  tcpBridge.socket!.write(cmdLine, 'utf-8');
   
   // 监听该命令的完成（当 pendingCommands 中该 id 被 resolve 时触发）
   const checkDone = () => {
@@ -609,44 +727,31 @@ function processQueue(): void {
   setTimeout(checkDone, 200);
 }
 
-/** 重启桥接进程（切换 MATLAB 版本时使用）
+/** 重启桥接连接（切换 MATLAB 版本时使用）
+ * v6.0: TCP 唯一方式 — 仅处理 TCP socket
  * v5.1.1: stop 命令加 5 秒超时，避免卡住
- * [P1-3 FIX]: 使用 taskkill /F /T 杀进程树，确保孤儿 MATLAB Engine 也被终止
  */
 export async function restartBridge(): Promise<MATLABResult> {
   console.log('[MATLAB Bridge] Restarting bridge with new MATLAB_ROOT...');
   
-  // 先停止现有进程（5 秒超时，避免 stop 命令卡住）
-  if (bridgeProcess && !bridgeProcess.killed) {
+  // 先停止现有 TCP 连接（5 秒超时，避免 stop 命令卡住）
+  if (tcpBridge.socket && !tcpBridge.socket.destroyed) {
     try {
       await Promise.race([
         executeBridgeCommand({ action: 'stop', params: {} }),
         new Promise<void>((_, reject) => setTimeout(() => reject(new Error('stop timeout')), 5000))
       ]);
     } catch {
-      // 超时或错误，直接 kill
+      // 超时或错误
     }
-    try {
-      // [P1-3 FIX] 在 Windows 上使用 taskkill /F /T 杀进程树
-      // 确保 MATLAB Engine 子进程也被终止，避免孤儿进程
-      if (process.platform === 'win32' && bridgeProcess.pid) {
-        exec(`taskkill /F /T /PID ${bridgeProcess.pid}`, (err) => {
-          if (err) {
-            // taskkill 失败，fallback 到普通 kill
-            try { bridgeProcess!.kill(); } catch {}
-          }
-        });
-      } else {
-        bridgeProcess.kill();
-      }
-    } catch {
-      // 忽略 kill 错误
-    }
-    bridgeProcess = null;
+    // 关闭 TCP 连接
+    try { tcpBridge.socket.destroy(); } catch {}
+    tcpBridge.socket = null;
+    tcpBridge.connected = false;
   }
   
   // 清理状态
-  responseBuffer = '';
+  tcpBridge.responseBuffer = '';
   for (const [id, pending] of pendingCommands) {
     clearTimeout(pending.timer);
     if (pending.progressTimer) clearInterval(pending.progressTimer);
@@ -656,7 +761,7 @@ export async function restartBridge(): Promise<MATLABResult> {
   commandQueue.length = 0;
   isProcessingCommand = false;
   
-  // 重新启动（ensureBridgeProcess 会自动启动新进程，并传递新的 MATLAB_ROOT）
+  // 重新连接 TCP Bridge
   return startMATLAB();
 }
 
@@ -792,8 +897,50 @@ export async function runMATLABCode(code: string, showOutput: boolean = true): P
   });
 }
 
-export async function runMATLABCommand(command: string): Promise<MATLABResult> {
-  return executeBridgeCommand({ action: 'run_code', params: { code: command, show_output: true } });
+export async function runMATLABCommand(command: string, cmdToken: string = ''): Promise<MATLABResult> {
+  return executeBridgeCommand({ 
+    action: 'run_code', 
+    params: { code: command, show_output: true, cmd_token: cmdToken }
+  });
+}
+
+/**
+ * [v11.8.3] Gate_RAW_CMD: 请求用户授权执行原始 MATLAB 命令
+ * AI 必须先调用此函数获取 token+challenge，通过 AskUserQuestion 展示给用户，
+ * 用户确认后才能调用 runMATLABCommand 并传入 cmdToken。
+ */
+export async function requestRawCommand(commandPreview: string): Promise<MATLABResult> {
+  return executeBridgeCommand({
+    action: 'cmd_request',
+    params: { command: commandPreview }
+  });
+}
+
+/**
+ * [v11.8.2 Bug#1 FIX] 执行 sl_* 命令，通过 Bridge 的 _handle_sl_command 门控路径
+ * 
+ * 与 runMATLABCommand 的关键区别:
+ * - action = 'sl_xxx' 而非 'run_code'
+ * - Bridge 将路由到 _handle_sl_command() 而非 run_code()
+ * - 所有 6 层 Gate (S0~5) 生效
+ * - Token 注入 (detectionToken/challengePhrase) 生效
+ * 
+ * 🔴 此函数是 Gate_S0 令牌门控的唯一正确入口
+ */
+export async function executeSlCommand(
+  command: string,
+  params: Record<string, any> = {}
+): Promise<MATLABResult> {
+  if (!command.startsWith('sl_')) {
+    return {
+      status: 'error',
+      message: `executeSlCommand: 命令必须以 'sl_' 开头，收到: ${command}`
+    };
+  }
+  return executeBridgeCommand({
+    action: command,
+    params
+  });
 }
 
 // ============= 工作区管理 =============
@@ -1219,6 +1366,30 @@ export async function modelSandbox(modelName: string, sandboxName: string, modif
 /** v11.5: 逐条验证 — 验证 Scene 2 修改步骤与计划一致 */
 export async function modifyVerifyStep(modelName: string, stepIndex: number, modifyPlan: Record<string, any>): Promise<MATLABResult> {
   return executeBridgeCommand({ action: 'sl_modify_verify_step', params: { modelName, stepIndex, modifyPlan } });
+}
+
+// ============= v11.8: Recursive Hierarchy Management =============
+
+/** v11.8: 层级验证 — 递归验证全部子系统层级树 */
+export async function hierarchyValidate(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_hierarchy_validate', params: { modelName } });
+}
+
+/** v11.8: 树查询 — 从 MATLAB workspace 查询当前子系统树结构 */
+export async function subsystemTree(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_subsystem_tree', params: { modelName } });
+}
+
+// ============= v11.8: Recursive Workflow Builtin Commands =============
+
+/** v11.8: 构建状态 — 查询当前递归构建进度 */
+export async function buildStatus(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_build_status', params: { modelName } });
+}
+
+/** v11.8: 下一个目标 — 获取下一个构建目标子系统 */
+export async function nextTarget(modelName: string): Promise<MATLABResult> {
+  return executeBridgeCommand({ action: 'sl_next_target', params: { modelName } });
 }
 
 /** Gate_4 完成门控 — 模型完整性检查 */

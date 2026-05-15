@@ -38,7 +38,7 @@ function result = sl_framework_verify_built(modelName, macroFramework)
     plannedSubs = {};
     if isfield(macroFramework, 'subsystems')
         for i = 1:length(macroFramework.subsystems)
-            plannedSubs{end+1} = macroFramework.subsystems(i).name;
+            plannedSubs{end+1} = sl_safe_index(macroFramework.subsystems, i).name;
         end
     end
 

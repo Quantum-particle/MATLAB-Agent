@@ -1,8 +1,8 @@
-# MATLAB-Agent v11.6.8
+# MATLAB-Agent v11.8.1
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
-  跨平台 · 跨 Agent 框架 · 6 层硬编码门控 · 68 个 MATLAB 函数 · 50+ REST API<br>
+  跨平台 · 跨 Agent 框架 · 6 层硬编码门控 · 71 个 MATLAB 函数 · 50+ REST API<br>
   支持 WorkBuddy / Claude Code / Codex / Cursor / Cline / Augment 及所有兼容 MCP/REST 的 AI 工具
 </p>
 

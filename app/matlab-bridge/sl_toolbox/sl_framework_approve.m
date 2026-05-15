@@ -46,8 +46,36 @@ function result = sl_framework_approve(modelName, varargin)
     assignin('base', snapshot_var, fw);
 
     % [P1-1 FIX] 审批后同时写入框架数据到 workspace
-    % 确保 Bridge _get_workflow_state 和后续 sl_micro_design 能读取
     assignin('base', fw_var, fw);
+
+    % ===== [v11.8 NEW] Multi-level Hierarchy Validation =====
+    if isfield(fw, 'subsystems')
+        hierarchy_result = validate_hierarchy(modelName, fw.subsystems);
+        if ~hierarchy_result.passed
+            result = struct('status', 'error', ...
+                'message', 'Hierarchy validation failed. Framework approval REJECTED.', ...
+                'hierarchyIssues', {hierarchy_result.issues});
+            return;
+        end
+        
+        % Write hierarchy workspace variables
+        hier_appr_var = ['mHierarchyApproved_' model_safe];
+        assignin('base', hier_appr_var, true);
+        
+        max_depth = hierarchy_result.maxDepth;
+        hier_depth_var = ['mHierarchyDepth_' model_safe];
+        assignin('base', hier_depth_var, max_depth);
+        
+        total_nodes = hierarchy_result.totalNodes;
+        hier_nodes_var = ['mHierarchyNodes_' model_safe];
+        assignin('base', hier_nodes_var, total_nodes);
+        
+        % Store tree structure for Bridge persistence
+        if isfield(fw, 'subsystems')
+            hier_tree_var = ['mHierarchyTree_' model_safe];
+            assignin('base', hier_tree_var, fw.subsystems);
+        end
+    end
 
     % ===== 写入锁定标记 =====
     lock_var = ['mFWLock_' model_safe];  % [P1-4 FIX] 统一命名: framework_locked_ → mFWLock_
@@ -65,6 +93,13 @@ function result = sl_framework_approve(modelName, varargin)
         'frameworkSnapshot', fw, ...
         'modelName', modelName, ...
         'locked', p.locked);
+    
+    % [v11.8] Add hierarchy info to result if available
+    if exist('hierarchy_result', 'var')
+        result.hierarchyApproved = true;
+        result.maxDepth = hierarchy_result.maxDepth;
+        result.totalNodes = hierarchy_result.totalNodes;
+    end
 
     % ===== 打印确认信息 =====
     fprintf('[sl_framework_approve] Framework approved for model: %s\n', modelName);
@@ -75,5 +110,85 @@ function result = sl_framework_approve(modelName, varargin)
     end
     if isfield(fw, 'gotoFromPlan') && ~isempty(fw.gotoFromPlan)
         fprintf('[sl_framework_approve] Goto/From plans: %d\n', length(fw.gotoFromPlan));
+    end
+    % [v11.8] Hierarchy info
+    if exist('hierarchy_result', 'var')
+        fprintf('[sl_framework_approve] Hierarchy depth: %d, Total nodes: %d\n', ...
+            hierarchy_result.maxDepth, hierarchy_result.totalNodes);
+    end
+end
+
+% ===== [v11.8 NEW] Multi-level Gate_5: Hierarchy Validation =====
+function result = validate_hierarchy(modelName, subsystems)
+    % Walk the entire subsystem tree and validate at EVERY level
+    issues = {};
+    
+    [issues_out, max_depth, total_nodes] = validate_level(subsystems, modelName, issues, 0, 0, 1);
+    
+    passed = isempty(issues_out);
+    result = struct('passed', passed, 'issues', {issues_out}, ...
+        'maxDepth', max_depth, 'totalNodes', total_nodes);
+end
+
+function [issues, max_depth, total_nodes] = validate_level(subsystems, parent_path, issues, max_depth, total_nodes, depth)
+    % Anti-recursion explosion safeguard
+    if depth > 10
+        issues{end+1} = sprintf('RECURSION LIMIT EXCEEDED at depth %d under %s', depth, parent_path);
+        return;
+    end
+    
+    % [RED] HARD DEPTH LIMIT: depth > 5
+    if depth > 5
+        issues{end+1} = sprintf('[RED] DEPTH EXCEEDED at %s: depth=%d, max=5. Framework APPROVAL REJECTED.', ...
+            parent_path, depth);
+        return;
+    end
+    
+    if isempty(subsystems)
+        return;
+    end
+    
+    total_nodes = total_nodes + length(subsystems);
+    if depth > max_depth
+        max_depth = depth;
+    end
+    
+    for i = 1:length(subsystems)
+        if iscell(subsystems)
+            sub = subsystems{i};
+        else
+            sub = subsystems(i);
+        end
+        level_path = [parent_path '/' sub.name];
+        
+        % [RED] Check: absolute depth limit before any other validation
+        child_subs = [];
+        if isfield(sub, 'childSubsystems') && ~isempty(sub.childSubsystems)
+            child_subs = sub.childSubsystems;
+        end
+        if ~isempty(child_subs) && depth + 1 > 5
+            issues{end+1} = sprintf('[RED] DEPTH VIOLATION at %s: has children at depth %d (max 5). Approve BLOCKED.', ...
+                level_path, depth + 1);
+            return;
+        end
+        
+        % Check port completeness at this level
+        port_check = sl_check_port_completeness(sub);
+        if ~port_check.passed
+            issues{end+1} = sprintf('Port completeness failed at %s: %s', ...
+                level_path, port_check.issue);
+        end
+        
+        % Check signal closure at this level
+        sig_check = sl_check_signal_closure(sub);
+        if ~sig_check.passed
+            issues{end+1} = sprintf('Signal closure failed at %s: %s', ...
+                level_path, sig_check.issue);
+        end
+        
+        % Recurse into children
+        if ~isempty(child_subs)
+            [issues, max_depth, total_nodes] = validate_level(child_subs, level_path, issues, max_depth, total_nodes, depth + 1);
+        end
     end
 end

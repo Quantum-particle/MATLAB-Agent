@@ -145,3 +145,40 @@
 - **归档原因**: v5.0 已使用 sys.stdout.buffer.write() + UTF-8 编码，此踩坑不再适用
 - **原始内容**: Python sys.stdout.write() 在 Windows 下使用 GBK 编码，中文 JSON 乱码
 
+## v11.8 全递归工作流陷阱
+
+### [PIT-REC-001] 深度超限未拦截
+- **日期**: 2026-05-09
+- **现象**: AI 在深度 5 的叶层创建子子系统，未被门控拦截
+- **根因**: Gate_3 未实现深度检查
+- **修复**: v11.8 Gate_3 硬编码 depth>=5→gate_blocked；四重门控 (Gate_2/3/5/4)
+- **教训**: 深度限制必须硬编码在 Bridge 中，不可依赖提示词
+
+### [PIT-REC-002] 子系统树不完整
+- **日期**: 2026-05-09
+- **现象**: framework_approve 后 hierarchy tree 为空，build_order 返回 []
+- **根因**: sl_framework_approve 未正确设置 mHierarchyTree_ 变量
+- **修复**: validate_hierarchy 递归遍历子系统树并写入 workspace
+- **教训**: 树持久化需要 MATLAB workspace + Python Bridge 双写
+
+### [PIT-REC-003] micro_design 深度感知缺失
+- **日期**: 2026-05-09
+- **现象**: AI 在深度 4 子系统仍设计嵌套结构，不知已达深度限制
+- **根因**: micro_design prompt 未包含深度信息
+- **修复**: v11.8 注入 depth/depthAwareGuidance/childSubsystems/buildOrderPosition
+- **教训**: 层级上下文必须在每个 micro_design 调用时显式传递给 AI
+
+### [PIT-REC-004] Engine 重启后树丢失
+- **日期**: 2026-05-09
+- **现象**: MATLAB Engine 重启后 Python 侧 subsystem_tree 为 None
+- **根因**: Python _WorkflowState 在内存中，Engine 重启后丢失
+- **修复**: _reconstruct_tree_from_workspace() + _matlab_tree_to_python_dict()
+- **教训**: 树结构必须持久化到 MATLAB workspace 并支持恢复
+
+### [PIT-REC-005] 构建失败无恢复策略
+- **日期**: 2026-05-09
+- **现象**: 子系统构建失败（unconnected>0）后整个递归构建卡死
+- **根因**: 无 failed 状态标记机制
+- **修复**: _get_next_build_target 跳过 failed 节点，汇总 failedSubsystems 列表
+- **教训**: 递归构建需要容错机制，失败不应阻塞同级其他子系统
+

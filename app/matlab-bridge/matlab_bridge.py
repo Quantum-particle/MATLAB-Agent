@@ -94,6 +94,8 @@ _matlab_version = None  # 缓存 MATLAB 版本号
 _SCENE_STATE = {}  # v11.5: Scene 2 state for CLI mode (no MATLAB engine)
 _S2_MOD_PERMISSIONS = {}  # v11.5: Gate_S2_MODIFY permissions cache
 _REQUEST_COUNTER = 0  # v11.6: Monotonically increasing request counter for turn detection
+_RAW_CMD_STATE = {}  # v11.8.3: Raw MATLAB command gate (requires user confirmation like Gate_S0)
+_MICRO_APPROVED_SUBSYSTEMS = {}  # v11.8.4: Gate_SHELL_ONLY — tracks which subsystems have micro_approve. {model: set(subsys_paths)}
 
 # ============= Workspace Isolation（v5.4 → v10.1 强制隔离）=============
 # 中间临时文件隔离到 .matlab_agent_tmp/ 子文件夹，避免污染用户工作目录
@@ -2052,13 +2054,13 @@ def _log_self_improve_action(action_type, details):
 # PITFALL 模式匹配表（Layer 3: 预测学习）
 PITFALL_PATTERNS = {
     'PITFALL-SUM': {
-        'detect': lambda cmd, p: cmd == 'sl_add_block' and re.search(r'(?i)\bSum\b', str(p.get('sourceBlock', ''))),
+        'detect': lambda cmd, p: cmd in ('sl_add_block', 'sl_add_block_safe') and re.search(r'(?i)\bSum\b', str(p.get('sourceBlock', ''))),
         'level': 'warning',
         'message': 'Sum block is discouraged. Use Add/Subtract instead.',
         'suggestion': 'Use Add block for addition, Subtract for subtraction',
     },
     'PITFALL-TOWS': {
-        'detect': lambda cmd, p: cmd == 'sl_add_block' and re.search(r'(?i)To.?Workspace', str(p.get('sourceBlock', ''))),
+        'detect': lambda cmd, p: cmd in ('sl_add_block', 'sl_add_block_safe') and re.search(r'(?i)To.?Workspace', str(p.get('sourceBlock', ''))),
         'level': 'warning',
         'message': 'To Workspace block is discouraged. Use Signal Logging instead.',
         'suggestion': 'Use sl_signal_logging for signal recording',
@@ -2150,8 +2152,8 @@ def _auto_fix_args(command, params):
     
     # === Layer 2: 硬编码内置修复（保证基础可靠性）===
     
-    # 修正1: sl_set_param 的 params 应为 struct/dict，用户传了 Name-Value 对（list of str）
-    if command == 'sl_set_param':
+    # [v11.8.3 Bug#11 FIX] 同时匹配 sl_set_param 和 sl_set_param_safe
+    if command in ('sl_set_param', 'sl_set_param_safe'):
         p = fixed.get('params', {})
         if isinstance(p, list) and len(p) >= 2:
             # 检查是否全是字符串（Name-Value 对特征：偶数长度+全是字符串）
@@ -2175,7 +2177,7 @@ def _auto_fix_args(command, params):
                 fixes.append(f"config: Name-Value list -> struct dict ({len(new_config)} fields)")
     
     # 修正3: sl_add_line 的 srcPort/dstPort 合并（格式2优先）
-    if command == 'sl_add_line':
+    if command in ('sl_add_line', 'sl_add_line_safe'):
         src_block = fixed.get('srcBlock', '')
         src_port = fixed.get('srcPort', '')
         dst_block = fixed.get('dstBlock', '')
@@ -2193,7 +2195,7 @@ def _auto_fix_args(command, params):
             fixes.append("shortName: auto-set to empty (list all)")
     
     # 修正5: blockPath 缺模型前缀（常见于 sl_set_param / sl_delete）
-    if command in ('sl_set_param', 'sl_delete'):
+    if command in ('sl_set_param', 'sl_set_param_safe', 'sl_delete'):
         block_path = fixed.get('blockPath', '')
         model_name = fixed.get('modelName', '')
         if block_path and model_name and '/' not in block_path:
@@ -3233,13 +3235,29 @@ def execute_script(script_path, output_dir=None):
     
     if mode == 'engine':
         eng = get_engine()
+        saved_pwd = None  # [v11.8.2 Bug#6 FIX]
         try:
+            # [v11.8.2 Bug#6 FIX] Save current pwd before executing script
+            try:
+                saved_pwd = eng.eval("pwd", nargout=1)
+            except Exception:
+                saved_pwd = None
+            
             # v5.0: 使用 diary 替代 evalc，避免引号双写问题
             script_dir_safe = script_dir.replace('\\', '/')
             
-            # 构造要执行的代码
+            # [v11.8.2 Bug#5+Bug#6 FIX] pwd-aware execution with sanitization
             exec_code = f"cd('{script_dir_safe}'); run('{script_name}');"
-            matlab_output_raw = _run_code_via_diary(eng, exec_code)
+            if saved_pwd:
+                saved_pwd_safe = saved_pwd.replace('\\', '/')
+                exec_code = f"cd('{script_dir_safe}'); run('{script_name}'); cd('{saved_pwd_safe}');"
+            sanitized_code, cleanup_vars = _sanitize_non_ascii_strings(eng, exec_code)
+            matlab_output_raw = _run_code_via_diary(eng, sanitized_code)
+            
+            # 清理 workspace 变量
+            for var in cleanup_vars:
+                try: eng.eval(f"clear {var}", nargout=0)
+                except: pass
             
             if isinstance(matlab_output_raw, dict) and matlab_output_raw.get('status') == 'error':
                 matlab_output_raw["script_path"] = script_path
@@ -3256,6 +3274,13 @@ def execute_script(script_path, output_dir=None):
             fig_count = _count_figures(eng)
             return {"status": "ok", "stdout": matlab_output.strip(), "script_path": script_path, "open_figures": fig_count, "connection_mode": "engine"}
         except Exception as e:
+            # [v11.8.2 Bug#6 FIX] Ensure pwd recovery even on error
+            if saved_pwd:
+                try:
+                    eng.workspace['_ws_recover_pwd'] = saved_pwd
+                    eng.eval("cd(_ws_recover_pwd); clear _ws_recover_pwd;", nargout=0)
+                except Exception:
+                    pass
             error_msg = re.sub(r'<[^>]+>', '', str(e))
             return {"status": "error", "message": f"MATLAB 脚本执行错误: {error_msg}", "script_path": script_path}
     else:
@@ -3320,6 +3345,41 @@ def _sanitize_non_ascii_strings(eng, code):
             return code, []
     
     return sanitized, cleanup_vars
+
+
+def _safe_eval_with_paths(eng, code_template, path_params):
+    """[v11.8.2 Bug#5 FIX] 安全执行含路径的 MATLAB 代码。
+    
+    将所有路径参数通过 eng.workspace[] 传递（绕过 eng.eval 的编码问题），
+    然后执行代码模板（代码中使用变量引用）。
+    
+    Args:
+        code_template: MATLAB 代码，使用 {var} 引用路径变量
+        path_params: dict of {var_name: path_value}
+    
+    Example:
+        _safe_eval_with_paths(eng, 
+            "save_system('{model}', '{save_path}')",
+            {'model': 'Quadrotor_ADRC', 'save_path': 'd:/中文/路径.slx'})
+    """
+    cleanup = []
+    for var_name, path_value in path_params.items():
+        safe_name = f'_wp_{var_name}'
+        eng.workspace[safe_name] = path_value
+        cleanup.append(safe_name)
+    
+    formatted = code_template
+    for var_name in path_params:
+        formatted = formatted.replace(f'{{{var_name}}}', f'_wp_{var_name}')
+    
+    try:
+        eng.eval(formatted, nargout=0)
+    finally:
+        for var_name in cleanup:
+            try:
+                eng.eval(f"clear {var_name}", nargout=0)
+            except Exception:
+                pass
 
 
 def _check_sim_gate(eng, code):
@@ -3578,6 +3638,69 @@ def _run_code_via_diary(eng, code, timeout=120):
     return {"output": output_str, "executionTime": elapsed_ms}
 
 
+def _handle_cmd_request(command_preview):
+    """[v11.8.3] Gate_RAW_CMD: Generate token+challenge for raw MATLAB command execution.
+    
+    AI must call this BEFORE /api/matlab/command.
+    Returns a cmdToken + challengePhrase that AI MUST present to user via AskUserQuestion.
+    Token is one-time use, expires in 120s, requires turn separation.
+    """
+    import uuid, time, random, string
+    
+    # Clear any stale state
+    for stale_key in ('cmd_token', 'cmd_timestamp', 'cmd_request_id', 'cmd_preview'):
+        _RAW_CMD_STATE.pop(stale_key, None)
+    
+    _cmd_token = uuid.uuid4().hex[:16]
+    _challenge = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    _ts = time.time()
+    
+    global _REQUEST_COUNTER
+    _REQUEST_COUNTER += 1
+    _req = _REQUEST_COUNTER
+    
+    _RAW_CMD_STATE['cmd_token'] = _cmd_token
+    _RAW_CMD_STATE['cmd_timestamp'] = _ts
+    _RAW_CMD_STATE['cmd_request_id'] = _req
+    _RAW_CMD_STATE['cmd_preview'] = command_preview[:500] if command_preview else '(no preview)'
+    
+    return {
+        "status": "ok",
+        "cmdToken": _cmd_token,
+        "challengePhrase": _challenge,
+        "confirmationRequired": True,
+        "commandPreview": _RAW_CMD_STATE['cmd_preview'],
+        "userPrompt": (
+            f"【需要用户授权】AI 请求使用 /api/matlab/command 执行原始 MATLAB 命令。\n"
+            f"确认短语: {_challenge}\n\n"
+            f"命令预览: {_RAW_CMD_STATE['cmd_preview']}\n\n"
+            "请选择:\n"
+            "  (1) 同意使用 /api/matlab/command — 授权执行此原始命令\n"
+            "  (2) 用标准 Simulink 建模流程 — 拒绝原始命令, 要求 AI 改用 sl_* API"
+        ),
+        "challengeInstructions": (
+            f"You MUST display the challenge phrase '{_challenge}' in your AskUserQuestion text. "
+            "You MUST present TWO options to the user:\n"
+            "  Option 1 (Recommended if user wants raw MATLAB): 'Agree to use /api/matlab/command'\n"
+            "  Option 2 (DEFAULT for standard workflow): 'Use standard Simulink workflow (sl_* API)'\n"
+            "If user picks Option 2, do NOT call /api/matlab/command — instead use sl_* API."
+        ),
+        "options": {
+            "agree_raw": {
+                "label": "同意使用 /api/matlab/command",
+                "description": f"授权 AI 执行原始 MATLAB 命令 (令牌: {_cmd_token[:8]}...)",
+                "action": "call /api/matlab/command with cmdToken"
+            },
+            "use_standard": {
+                "label": "用标准 Simulink 建模流程",
+                "description": "拒绝原始命令, AI 应改用 sl_* API (sl_add_block_safe, sl_add_line_safe 等) 进行门控保护的标准建模流程",
+                "action": "use sl_* API workflow"
+            }
+        },
+        "hint": "If user picks 'standard workflow', DO NOT call /api/matlab/command. Use sl_* API instead."
+    }
+
+
 def run_code(code, show_output=True):
     """在持久化工作区中直接执行 MATLAB 代码
     
@@ -3605,7 +3728,51 @@ def run_code(code, show_output=True):
             "hint": "curl -X POST http://localhost:3000/api/matlab/project/set -H \"Content-Type: application/json\" -d '{\"dirPath\":\"D:/YourWorkspace\"}'"
         }
     
-    # [P2 FIX v11.6.7] Detect gated Simulink operations in run_code
+    # [v11.8.3] Gate_RAW_CMD: Raw MATLAB command requires user confirmation token
+    # AI cannot use /api/matlab/command directly — must first call /api/matlab/command/request
+    # and present the challenge phrase to the user via AskUserQuestion.
+    _raw_cmd_token = _RAW_CMD_STATE.pop('cmd_token', None)
+    _raw_cmd_ts = _RAW_CMD_STATE.pop('cmd_timestamp', 0)
+    _raw_cmd_req = _RAW_CMD_STATE.pop('cmd_request_id', 0)
+    _raw_cmd_preview = _RAW_CMD_STATE.pop('cmd_preview', '')
+    _current_ts = time.time()
+    
+    if not _raw_cmd_token:
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "Gate_RAW_CMD",
+            "message": (
+                "🔴 /api/matlab/command is DISABLED for direct AI use.\n"
+                "You have TWO options:\n"
+                "  (1) Standard workflow (PREFERRED): Use sl_* API (sl_add_block_safe, sl_add_line_safe, etc.)\n"
+                "      which enforces all 7 gate layers and injects automatic verification.\n"
+                "  (2) If sl_* API is truly insufficient: Request user permission via\n"
+                "      POST /api/matlab/command/request → AskUserQuestion → POST /api/matlab/command\n"
+                "      with the cmdToken. THE USER WILL CHOOSE between option (1) and (2)."
+            ),
+            "requiredAction": "use_sl_api_or_cmd_request",
+            "hint": "Prefer sl_* API. Only use /api/matlab/command/request as last resort."
+        }
+    
+    # Token expiration check (120s — commands must be executed promptly after user approval)
+    _elapsed = _current_ts - _raw_cmd_ts
+    if _elapsed > 120:
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "Gate_RAW_CMD",
+            "reason": f"Command token expired ({_elapsed:.0f}s > 120s). Re-request user confirmation.",
+            "message": "CMD_TOKEN_EXPIRED: The command confirmation token has expired. Re-run cmd_request.",
+            "hint": "Call POST /api/matlab/command/request again.",
+            "requiredAction": "cmd_request"
+        }
+    
+    # Token is one-time use (already popped above) + 120s expiration.
+    # The AskUserQuestion flow ensures user interaction; no need for explicit turn separation.
+    # Gate check passed — token consumed
+    # Include command preview in response for traceability
+    _cmd_preview_val = _raw_cmd_preview
     # Issue warning to encourage use of standard sl_* API (which enforces gates).
     # Does NOT block execution — run_code is the escape hatch for bulk/model building.
     import re
@@ -3619,6 +3786,8 @@ def run_code(code, show_output=True):
     if re.search(r'\bdelete_line\s*\(', code):
         _sl_ops_warning.append('delete_line')
     _sl_ops_warning_str = ', '.join(_sl_ops_warning) if _sl_ops_warning else None
+    # [v11.8.2 Bug#7 FIX] Flag for forced Simulink refresh after structural ops
+    _needs_simulink_refresh = bool(_sl_ops_warning)
     
     mode = _detect_connection_mode()
     
@@ -3678,6 +3847,12 @@ def run_code(code, show_output=True):
                     f"Prefer using the standard sl_* API (sl_add_block, sl_add_line, etc.) "
                     f"for proper gate enforcement and verification injection."
                 )
+            # [v11.8.2 Bug#7 FIX] Force Simulink refresh after structural operations
+            if _needs_simulink_refresh:
+                try:
+                    eng.eval("drawnow;", nargout=0)
+                except Exception:
+                    pass
             return _result
         except Exception as e:
             error_msg = re.sub(r'<[^>]+>', '', str(e))
@@ -4207,8 +4382,11 @@ def check_installation():
 _SL_FUNC_MAP = {
     "sl_inspect":          "sl_inspect_model",
     "sl_add_block":        "sl_add_block_safe",
+    "sl_add_block_safe":   "sl_add_block_safe",
     "sl_add_line":         "sl_add_line_safe",
+    "sl_add_line_safe":    "sl_add_line_safe",
     "sl_set_param":        "sl_set_param_safe",
+    "sl_set_param_safe":   "sl_set_param_safe",
     "sl_delete":           "sl_delete_safe",
     "sl_find_blocks":      "sl_find_blocks",
     "sl_replace_block":    "sl_replace_block",
@@ -4251,6 +4429,8 @@ _SL_FUNC_MAP = {
     "sl_micro_design":       "sl_micro_design",  # 子系统小框架设计
     "sl_micro_review":       "sl_micro_review",  # 子系统小框架自检
     "sl_micro_approve":      "sl_micro_approve",  # 子系统小框架审批
+    # v11.8: Unified review engine
+    "sl_review_core":        "sl_review_core",  # 四维统一审查（portPairing / paramAudit / connectionScan / layoutAudit）
     # v11.0 Phase 3: 大框架锁定后变更审批
     "sl_framework_modify":          "sl_framework_modify",  # 大框架变更申请
     "sl_framework_modify_approve":  "sl_framework_modify_approve",  # 批准变更
@@ -4267,6 +4447,14 @@ _SL_FUNC_MAP = {
     "sl_modify_verify_step": "sl_modify_verify_step",  # Step 2.6: per-step verify
     # v11.6.7: Safe line deletion
     "sl_clear_top_lines":    "sl_clear_top_lines",     # 清除模型顶层连线(保留子系统内部)
+    # v11.8: Recursive hierarchy management
+    "sl_hierarchy_validate":  "sl_hierarchy_validate",   # 验证完整层级树
+    "sl_subsystem_tree":      "sl_subsystem_tree",        # 查询树结构
+    # v11.8: Bridge-builtin recursive workflow commands
+    "sl_build_status":        "_builtin_build_status",    # 查询构建进度
+    "sl_next_target":         "_builtin_next_target",     # 获取下一个构建目标
+    # v11.9: Model lifecycle
+    "sl_model_create":        "sl_model_create",         # 创建新 Simulink 模型 (Scene 1)
 }
 
 # 命令 → 参数构建函数映射（将 API 参数转为 .m 函数参数）
@@ -4292,22 +4480,27 @@ def _build_sl_args(command, params):
             'includeConfig': params.get('includeConfig', False),
         }
     
-    elif command == "sl_add_block":
+    elif command in ("sl_add_block", "sl_add_block_safe"):
         # sl_add_block_safe(modelName, sourceBlock, varargin)
         # v10.1: 使用智能参数转换，支持矩阵/向量参数
-        source_block = params.get('sourceBlock', '')
+        # [v11.8.3 Bug#14 FIX] blockType as alias for sourceBlock
+        source_block = params.get('sourceBlock', params.get('blockType', ''))
         raw_params = params.get('params', {})
         block_type = _extract_block_type(source_block)
+        # [v11.8.3 Bug#14 FIX] SubSystem: extract params.Name -> destPath
+        dest_path = params.get('destPath', params.get('blockName', ''))  # [P0-9 FIX] Also accept blockName as alias for destPath
+        if not dest_path and source_block and 'subsystem' in str(source_block).lower():
+            dest_path = (raw_params or {}).get('Name', '')
         return {
             '_pos_1': model_name,
             '_pos_2': source_block,
-            'destPath': params.get('destPath', params.get('blockName', '')),  # [P0-9 FIX] Also accept blockName as alias for destPath
+            'destPath': dest_path,
             'position': params.get('position', []),
             'makeNameUnique': params.get('makeNameUnique', True),
             'params': ('__special__', _build_params_struct_expr(raw_params, block_type)),
         }
     
-    elif command == "sl_add_line":
+    elif command in ("sl_add_line", "sl_add_line_safe"):
         # sl_add_line_safe(modelName, varargin)
         # 格式1: sl_add_line_safe(model, srcBlock, srcPort, dstBlock, dstPort, ...)
         # 格式2: sl_add_line_safe(model, 'srcBlock/portNum', 'dstBlock/portNum', ...)
@@ -4338,7 +4531,7 @@ def _build_sl_args(command, params):
             'checkBusMatch': params.get('checkBusMatch', True),
         }
     
-    elif command == "sl_set_param":
+    elif command in ("sl_set_param", "sl_set_param_safe"):
         # sl_set_param_safe(blockPath, params, varargin)
         # v10.1: 使用智能参数转换，支持矩阵/向量参数
         block_path = params.get('blockPath', '')
@@ -4444,10 +4637,18 @@ def _build_sl_args(command, params):
         # sl_subsystem_create(modelName, subsystemName, mode, varargin)
         # REST API accepts 'blocks' as alias for 'blocksToGroup'
         blocks_to_group = params.get('blocksToGroup', params.get('blocks', []))
+        # [v11.8 Bug#5 FIX] Auto-detect mode: if blocksToGroup is empty, use 'empty' mode
+        _explicit_mode = params.get('mode', None)
+        if _explicit_mode:
+            _detected_mode = _explicit_mode
+        elif blocks_to_group:
+            _detected_mode = 'group'
+        else:
+            _detected_mode = 'empty'
         args = {
             '_pos_1': model_name,
             '_pos_2': params.get('subsystemName', ''),
-            '_pos_3': params.get('mode', 'group'),
+            '_pos_3': _detected_mode,
             'blocksToGroup': blocks_to_group,
         }
         # v11.1 修复: 添加 inputPorts 和 outputPorts 参数
@@ -4661,7 +4862,12 @@ def _build_sl_args(command, params):
         # sl_framework_review(macroFramework, varargin)
         # macroFramework 作为第一位置参数（可以是 struct 或 taskDescription string）
         macro_framework = params.get('macroFramework', params.get('taskDescription', ''))
-        check_items = params.get('checkItems', ['physics', 'signalFlow', 'subsystem', 'gotoFrom', 'dimensionality'])
+        # [v11.8] Include all 11 default checks (5 original + 6 new recursive hierarchy checks)
+        check_items = params.get('checkItems', [
+            'physics', 'signalFlow', 'subsystem', 'gotoFrom', 'dimensionality',
+            'nestingDepth', 'singleBlock', 'cohesion', 'crossLevelInterface',
+            'treeCompleteness', 'leafSubsystems'
+        ])
         return {
             '_pos_1': macro_framework,
             'checkItems': check_items,
@@ -4695,7 +4901,12 @@ def _build_sl_args(command, params):
         micro_framework = params.get('microFramework', {})
         result = {
             '_pos_1': subsystem,
-            'checkItems': params.get('checkItems', ['physics', 'blockPlan', 'signalDimensions', 'integrators']),
+            # [v11.8] Default: 4 design + 4 build checks via sl_review_core
+            'checkItems': params.get('checkItems', [
+                'physics', 'blockPlan', 'signalDimensions', 'integrators',
+                'portPairing', 'paramAudit', 'connectionScan', 'layoutAudit'
+            ]),
+            'modelName': model_name,  # [v11.8.1] needed for full path in sl_review_core
         }
         if micro_framework:
             result['microFramework'] = micro_framework
@@ -4713,6 +4924,14 @@ def _build_sl_args(command, params):
         if micro_framework:
             result['microFramework'] = micro_framework
         return result
+
+    # [v11.8.1] sl_review_core handler
+    elif command == "sl_review_core":
+        # sl_review_core(modelPath, action)
+        return {
+            '_pos_1': params.get('modelPath', ''),
+            '_pos_2': params.get('action', 'all'),
+        }
 
     # v11.0 Phase 3: 大框架锁定后变更审批
     elif command == "sl_framework_modify":
@@ -4775,6 +4994,16 @@ def _build_sl_args(command, params):
             'modelName': params.get('modelName', ''),
             'confirmationToken': params.get('confirmationToken', params.get('detectionToken', '')),
         }
+
+    elif command == "sl_model_create":
+        # sl_model_create(modelName, varargin)
+        # optional: 'saveTo', 'overwrite'
+        args = {'_pos_1': model_name}
+        if params.get('saveTo'):
+            args['saveTo'] = params['saveTo']
+        if params.get('overwrite') is not None:
+            args['overwrite'] = params['overwrite']
+        return args
 
     elif command == "sl_model_load":
         # sl_model_load(modelName)
@@ -4968,6 +5197,556 @@ class ModelWorkflowState:
         self.model_completed = False      # v11.3: 模型完成门控是否通过
         self.pending_issues = []          # v11.3: 未解决的问题列表
         self.last_verification_failed = False  # v11.3: 上次验证是否失败
+        # [v11.8] Phase 4: Recursive hierarchy tree management
+        self.subsystem_tree = None        # v11.8: 完整子系统树 (dict, nested children)
+        self.build_order = []             # v11.8: 自底向上的构建顺序 (list of dicts)
+        self.current_build_index = -1     # v11.8: 当前构建进度索引
+        self.hierarchy_approved = False   # v11.8: 层次结构是否通过审批
+        self.level_status = {}            # v11.8: {depth: 'pending'|'building'|'completed'}
+        self.nesting_warnings = []        # v11.8: 嵌套警告列表
+        self.max_depth = 0                # v11.8: 最大嵌套深度
+
+
+# ===== [v11.8 NEW] Recursive Hierarchy Tree Helpers =====
+MAX_DEPTH = 5  # [RED] Hard depth limit — gate_blocked if exceeded
+
+def _build_subsystem_tree_from_framework(fw, model_name):
+    """从层次化大框架构建子系统树
+    
+    Args:
+        fw: macroFramework dict with 'subsystems' list (each has optional 'childSubsystems')
+        model_name: top-level model name
+    
+    Returns:
+        dict: tree structure {path, depth, status, children: [...]}
+    """
+    tree = {
+        'path': model_name,
+        'depth': 0,
+        'status': 'root',
+        'children': []
+    }
+    
+    def _recursive_build(subsystems, parent_path, depth):
+        nodes = []
+        if not subsystems:
+            return nodes
+        for sub in subsystems:
+            if not isinstance(sub, dict):
+                continue
+            sub_name = sub.get('name', '')
+            if not sub_name:
+                continue
+            full_path = f"{parent_path}/{sub_name}" if parent_path else sub_name
+            
+            node = {
+                'path': full_path,
+                'name': sub_name,
+                'depth': depth,
+                'role': sub.get('role', ''),
+                'type': sub.get('type', 'subsystem'),
+                'status': 'pending',
+                'inputs': sub.get('inputs', []),
+                'outputs': sub.get('outputs', []),
+                'signalFlow': sub.get('signalFlow', []),
+                'children': []
+            }
+            
+            child_subs = sub.get('childSubsystems', [])
+            if child_subs:
+                node['children'] = _recursive_build(child_subs, full_path, depth + 1)
+            
+            nodes.append(node)
+        return nodes
+    
+    tree['children'] = _recursive_build(fw.get('subsystems', []), model_name, 1)
+    return tree
+
+
+def _compute_build_order(tree):
+    """计算自底向上的构建顺序（深度优先 → 叶子先入列）
+    
+    Args:
+        tree: subsystem tree dict
+    
+    Returns:
+        list of dicts: [{path, depth, name, status}, ...] in build order
+    """
+    order = []
+    
+    def _dfs(node, parent_path):
+        full_path = f"{parent_path}/{node['name']}" if parent_path else node['name']
+        
+        # 先处理子节点（深度优先 → 叶子先入列）
+        for child in node.get('children', []):
+            _dfs(child, full_path)
+        
+        # 当前节点（子节点已在前）
+        if node.get('depth', 0) > 0:  # 跳过根节点
+            order.append({
+                'path': full_path,
+                'depth': node['depth'],
+                'name': node['name'],
+                'status': 'pending'
+            })
+    
+    for child in tree.get('children', []):
+        _dfs(child, tree['path'])
+    
+    return order
+
+
+def _find_node_in_tree(tree, path):
+    """在树中查找指定路径的节点
+    
+    Args:
+        tree: subsystem tree dict
+        path: full Simulink path like 'Model/Controller/PID_Core'
+    
+    Returns:
+        dict or None: the node if found
+    """
+    if tree is None:
+        return None
+    
+    # Normalize path separators
+    path = path.replace('\\', '/')
+    
+    # Direct match at root
+    if tree.get('path', '') == path:
+        return tree
+    
+    # Search children recursively
+    for child in tree.get('children', []):
+        result = _find_node_in_tree(child, path)
+        if result is not None:
+            return result
+    
+    return None
+
+
+def _update_node_status(tree_or_model, path, new_status):
+    """线程安全地更新树中节点的状态
+    
+    v11.8: 支持两种调用模式：
+    - _update_node_status(tree, path, new_status): 直接操作树 (caller 负责加锁)
+    - _update_node_status(model_name, path, new_status): 通过 _global_lock 安全更新
+    
+    Args:
+        tree_or_model: subsystem tree dict 或 model_name 字符串
+        path: full Simulink path
+        new_status: 'pending'|'design'|'review'|'approved'|'building'|'completed'|'failed'
+    
+    Returns:
+        bool: True if node was found and updated
+    """
+    if isinstance(tree_or_model, str):
+        # Thread-safe mode: lock-protected via model name
+        with _global_lock:
+            state = _BUILD_PHASE_TRACKER.get(tree_or_model)
+            if state is None or state.subsystem_tree is None:
+                return False
+            node = _find_node_in_tree(state.subsystem_tree, path)
+            if node is not None:
+                node['status'] = new_status
+                return True
+            return False
+    else:
+        # Direct mode: caller handles locking
+        tree = tree_or_model
+        node = _find_node_in_tree(tree, path)
+        if node is not None:
+            node['status'] = new_status
+            return True
+        return False
+
+
+def _can_start_level(tree, path, depth):
+    """检查子系统是否可以开始构建：所有子子系统已完成 + 深度未超限
+    
+    Args:
+        tree: subsystem tree dict
+        path: full Simulink path
+        depth: current depth
+    
+    Returns:
+        (bool, str): (can_start, reason)
+    """
+    node = _find_node_in_tree(tree, path)
+    if node is None:
+        return False, f'Subsystem {path} not found in tree'
+    
+    # [RED] HARD DEPTH CHECK
+    if depth > MAX_DEPTH:
+        return False, f'SUBSYSTEM DEPTH {depth} EXCEEDS MAXIMUM {MAX_DEPTH}. Design REJECTED.'
+    
+    # Check all children are completed
+    for child in node.get('children', []):
+        if child.get('status') != 'completed':
+            return False, f'Child subsystem {child["path"]} is not yet completed (status: {child.get("status", "unknown")})'
+    
+    return True, 'All children completed'
+
+
+def _get_next_build_target(state):
+    """获取下一个构建目标（跳过已完成和已失败的）
+    
+    策略 A（默认）: 跳过 failed 节点 → 继续构建同深度其他子系统 → 最后汇总 failed 列表
+    
+    Args:
+        state: ModelWorkflowState instance
+    
+    Returns:
+        dict or None: next target {path, depth, name, status}
+    """
+    if not state.build_order or state.subsystem_tree is None:
+        return None
+    
+    skipped_failed = []
+    for i, target in enumerate(state.build_order):
+        node = _find_node_in_tree(state.subsystem_tree, target['path'])
+        if node is None:
+            continue
+        
+        node_status = node.get('status', 'pending')
+        
+        # Skip completed
+        if node_status == 'completed':
+            continue
+        
+        # Skip failed (Strategy A: continue, collect for later)
+        if node_status == 'failed':
+            skipped_failed.append(target['path'])
+            continue
+        
+        # 检查是否可以开始（所有子节点已完成）
+        can_start, reason = _can_start_level(
+            state.subsystem_tree, target['path'], target['depth']
+        )
+        if can_start:
+            state.current_build_index = i
+            return target
+    
+    # All pending/approved nodes are blocked, but there are failed ones
+    if skipped_failed:
+        return {
+            'path': '__FAILED_ITEMS__',
+            'depth': 0,
+            'name': '__FAILED__',
+            'status': 'failed',
+            'failedSubsystems': skipped_failed,
+        }
+    
+    return None  # 全部完成
+
+
+def _get_all_leaves(tree):
+    """获取所有叶子节点路径"""
+    leaves = []
+    
+    def _walk(node, path):
+        full_path = f"{path}/{node['name']}" if path else node['name']
+        children = node.get('children', [])
+        if not children and node.get('depth', 0) > 0:
+            leaves.append(full_path)
+        for child in children:
+            _walk(child, full_path)
+    
+    for child in tree.get('children', []):
+        _walk(child, tree.get('path', ''))
+    
+    return leaves
+
+
+def _matlab_tree_to_python_dict(matlab_struct):
+    """将 MATLAB struct 树递归转换为 Python dict 树
+    
+    Args:
+        matlab_struct: MATLAB struct (from eng.eval or eng.workspace)
+    
+    Returns:
+        list of dict: Python list of node dicts
+    """
+    if matlab_struct is None:
+        return []
+    
+    result = []
+    
+    def _convert_node(ms_node):
+        """单节点转换"""
+        node = {}
+        # Basic string fields
+        for field in ['name', 'type', 'role']:
+            try:
+                val = getattr(ms_node, field, None)
+                if val is not None:
+                    node[field] = str(val)
+            except Exception:
+                pass
+        
+        # Numeric fields
+        for field in ['depth', 'confidence']:
+            try:
+                val = getattr(ms_node, field, None)
+                if val is not None:
+                    node[field] = float(val) if '.' in str(val) else int(val)
+            except Exception:
+                pass
+        
+        # Cell-array fields
+        for field in ['inputs', 'outputs']:
+            try:
+                val = getattr(ms_node, field, None)
+                if val is not None:
+                    if hasattr(val, '__iter__') and not isinstance(val, str):
+                        node[field] = [str(v) for v in val]
+                    else:
+                        node[field] = [str(val)] if val else []
+            except Exception:
+                node[field] = []
+        
+        # Child subsystems (recursive)
+        try:
+            children = getattr(ms_node, 'childSubsystems', None)
+            if children is not None and len(children) > 0:
+                node['children'] = _matlab_tree_to_python_dict(children)
+            else:
+                node['children'] = []
+        except Exception:
+            node['children'] = []
+        
+        # Status field
+        try:
+            node['status'] = str(getattr(ms_node, 'status', 'pending'))
+        except Exception:
+            node['status'] = 'pending'
+        
+        # signalFlow
+        try:
+            sf = getattr(ms_node, 'signalFlow', None)
+            if sf is not None and len(sf) > 0:
+                node['signalFlow'] = []
+                for s in sf:
+                    try:
+                        node['signalFlow'].append({
+                            'srcSubsystem': str(getattr(s, 'srcSubsystem', '')),
+                            'dstSubsystem': str(getattr(s, 'dstSubsystem', '')),
+                            'signalName': str(getattr(s, 'signalName', '')),
+                        })
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        
+        return node
+    
+    # Handle MATLAB struct array
+    try:
+        n = int(len(matlab_struct))
+        for i in range(n):
+            try:
+                ms_node = matlab_struct[i]
+                result.append(_convert_node(ms_node))
+            except Exception:
+                pass
+    except Exception:
+        # Single struct, not array
+        try:
+            result.append(_convert_node(matlab_struct))
+        except Exception:
+            pass
+    
+    return result
+
+
+def _reconstruct_tree_from_workspace(eng, model_name):
+    """从 MATLAB workspace 恢复子系统树（Engine 重启后）
+    
+    v11.8: 完整树恢复 — 使用 _matlab_tree_to_python_dict 递归转换
+    
+    Args:
+        eng: MATLAB engine instance
+        model_name: top-level model name
+    
+    Returns:
+        dict or None: reconstructed tree with full children hierarchy
+    """
+    model_safe = model_name.replace('/', '__').replace(' ', '_')
+    try:
+        tree_var = f"mHierarchyTree_{model_safe}"
+        exists = eng.eval(f"evalin('base', 'exist(''{tree_var}'', ''var'')')", nargout=1)
+        if exists == 1:
+            hier_approved_var = f"mHierarchyApproved_{model_safe}"
+            hier_approved_exists = eng.eval(
+                f"evalin('base', 'exist(''{hier_approved_var}'', ''var'')')", nargout=1
+            )
+            is_approved = False
+            if hier_approved_exists == 1:
+                is_approved = eng.eval(f"evalin('base', '{hier_approved_var}')", nargout=1)
+            
+            if is_approved:
+                # Full tree reconstruction from MATLAB struct
+                try:
+                    raw_tree = eng.eval(f"evalin('base', '{tree_var}')", nargout=1)
+                    children = _matlab_tree_to_python_dict(raw_tree)
+                    
+                    depth_var = f"mHierarchyDepth_{model_safe}"
+                    nodes_var = f"mHierarchyNodes_{model_safe}"
+                    max_depth = 0
+                    total_nodes = 0
+                    try:
+                        if eng.eval(f"evalin('base', 'exist(''{depth_var}'', ''var'')')", nargout=1) == 1:
+                            max_depth = int(eng.eval(f"evalin('base', '{depth_var}')", nargout=1))
+                        if eng.eval(f"evalin('base', 'exist(''{nodes_var}'', ''var'')')", nargout=1) == 1:
+                            total_nodes = int(eng.eval(f"evalin('base', '{nodes_var}')", nargout=1))
+                    except Exception:
+                        pass
+                    
+                    tree = {
+                        'path': model_name,
+                        'depth': 0,
+                        'status': 'root',
+                        'children': children,
+                        '_reconstructed': True,
+                        '_maxDepth': max_depth,
+                        '_totalNodes': total_nodes,
+                    }
+                    return tree
+                except Exception:
+                    pass
+                
+                # Fallback: metadata-only recovery
+                return {
+                    'path': model_name,
+                    'depth': 0,
+                    'status': 'root',
+                    'children': [],
+                    '_reconstructed': True,
+                    '_maxDepth': max_depth if 'max_depth' in dir() else 0,
+                    '_totalNodes': total_nodes if 'total_nodes' in dir() else 0,
+                }
+    except Exception:
+        pass
+    return None
+
+
+def _flatten_tree_to_queue(tree):
+    """将树扁平化为旧式 queue 列表（兼容层）"""
+    if tree is None:
+        return []
+    result = []
+    
+    def _walk(node, path):
+        full_path = f"{path}/{node['name']}" if path else node['name']
+        if node.get('depth', 0) > 0:
+            result.append(full_path)
+        for child in node.get('children', []):
+            _walk(child, full_path)
+    
+    for child in tree.get('children', []):
+        _walk(child, tree.get('path', ''))
+    
+    return result
+
+def _get_sibling_names(tree, target_path):
+    """获取目标路径的兄弟节点名称列表
+    
+    Args:
+        tree: subsystem tree dict
+        target_path: full Simulink path
+    
+    Returns:
+        list of str: sibling subsystem names (excluding self)
+    """
+    if tree is None:
+        return []
+    target_path = target_path.replace('\\', '/')
+    
+    # Find parent by removing last segment
+    parts = target_path.rsplit('/', 1)
+    if len(parts) < 2:
+        return []
+    parent_path = parts[0]
+    my_name = parts[1]
+    
+    parent_node = _find_node_in_tree(tree, parent_path)
+    if parent_node is None:
+        return []
+    
+    siblings = []
+    for child in parent_node.get('children', []):
+        if child.get('name', '') != my_name:
+            siblings.append(child.get('name', ''))
+    return siblings
+
+
+def _get_depth_aware_hint(depth):
+    """Get depth-aware design guidance hint
+    
+    Args:
+        depth: nesting depth (1-5)
+    
+    Returns:
+        str: design guidance
+    """
+    if depth <= 0:
+        return ''
+    if depth >= 5:
+        return (
+            '[RED] DEPTH 5 — MAXIMUM ALLOWED. Use ONLY basic blocks '
+            '(Integrator, Gain, Sum, Product). NO MORE child subsystems allowed. '
+            'Any subsystem_create here will be gate_blocked.'
+        )
+    if depth >= 3:
+        return (
+            f'[WARN] DEPTH {depth} — Near leaf subsystem. Use only basic blocks. '
+            'Do NOT create more subsystems.'
+        )
+    if depth == 2:
+        return (
+            f'DEPTH 2 — Mid-level. You may create child subsystems if functionally '
+            'justified, but prefer basic blocks.'
+        )
+    return 'DEPTH 1 — Top-level. You may define child subsystems if needed.'
+
+
+def _all_subsystems_completed(state):
+    """Check if all subsystems in build_order are marked as completed
+    
+    Args:
+        state: ModelWorkflowState instance
+    
+    Returns:
+        bool: True if all completed
+    """
+    if not state.build_order or state.subsystem_tree is None:
+        return True
+    for target in state.build_order:
+        node = _find_node_in_tree(state.subsystem_tree, target['path'])
+        if node is None or node.get('status') != 'completed':
+            return False
+    return True
+
+
+def _get_incomplete_subsystems(state):
+    """Get list of incomplete subsystem paths
+    
+    Args:
+        state: ModelWorkflowState instance
+    
+    Returns:
+        list of str: incomplete subsystem paths
+    """
+    incomplete = []
+    if not state.build_order or state.subsystem_tree is None:
+        return incomplete
+    for target in state.build_order:
+        node = _find_node_in_tree(state.subsystem_tree, target['path'])
+        if node is None or node.get('status') != 'completed':
+            incomplete.append(target['path'])
+    return incomplete
+
+# ===== End of v11.8 tree helpers =====
 
 
 def _check_auto_layout_needed(model_name, command, params):
@@ -4995,9 +5774,9 @@ def _check_auto_layout_needed(model_name, command, params):
     # [v11.6.2 FIX] Only add_block/add_line affect the counter.
     # Other commands (inspect, set_param) must NOT reset it.
     # add_block → increment; add_line → reset; everything else → no change
-    if command == 'sl_add_block':
+    if command in ('sl_add_block', 'sl_add_block_safe'):
         state.consecutive_adds += 1
-    elif command == 'sl_add_line':
+    elif command in ('sl_add_line', 'sl_add_line_safe'):
         state.consecutive_adds = 0  # Connecting resolves unconnected accumulation
     # [v11.6.2] REMOVED: else: state.consecutive_adds = 0
     # Was causing inspect/set_param to spuriously reset the counter
@@ -5007,7 +5786,7 @@ def _check_auto_layout_needed(model_name, command, params):
     
     # 规则1: 连续 3+ 次 add_block 操作 -> 连线阶段即将开始
     # [v11.6.2 FIX] Remove add_line from trigger (add_line now resets counter)
-    if command in ('sl_add_block', 'sl_subsystem_create', 'sl_model_sandbox') and state.consecutive_adds >= 3:
+    if command in ('sl_add_block', 'sl_subsystem_create', 'sl_model_sandbox') and state.consecutive_adds >= 5:
         need_layout = True
         reason = f'{state.consecutive_adds} consecutive add operations detected — layout before connecting'
     
@@ -5272,6 +6051,7 @@ def _generate_workflow_state(model_name, command, params, result):
                 output_schema = result.get('outputSchema', {})
                 task_guide = result.get('taskGuide', [])
                 flow_patterns = result.get('flowPatterns', [])
+                hierarchy_guidance = result.get('hierarchyGuidance', [])
                 next_action = result.get('nextExpectedAction', 'AI_AGENT_DESIGN')
                 state.phase = 'framework_design'
                 state.phase_step = 'awaiting_ai_design'
@@ -5289,13 +6069,15 @@ def _generate_workflow_state(model_name, command, params, result):
                     'taskGuide': task_guide,
                     'flowPatterns': flow_patterns,
                     'outputSchema': output_schema,
+                    'hierarchyGuidance': hierarchy_guidance,
                     'nextExpectedAction': next_action,
                     'frameworkApproved': False,
-                    'version': 'v11.2',
+                    'version': 'v11.8',
                     'instruction': (
                         'YOU are the domain expert. Based on the designPrompt above, '
                         'use your knowledge of physics and control theory to design '
                         'the macro framework. Output the result as JSON matching outputSchema. '
+                        'Include childSubsystems for nested structures (max depth 5). '
                         'Then call sl_framework_review() with your framework design.'
                     ),
                 }
@@ -5333,7 +6115,20 @@ def _generate_workflow_state(model_name, command, params, result):
                 state.framework_locked = result.get('locked', True)
                 state.phase = 'framework_construction'
                 state.phase_step = 'approved'
-                return {
+                
+                # [v11.8] Build hierarchy tree from macro framework
+                fw = result.get('frameworkSnapshot', None)
+                if fw and fw.get('subsystems'):
+                    tree = _build_subsystem_tree_from_framework(fw, model_name)
+                    state.subsystem_tree = tree
+                    state.build_order = _compute_build_order(tree)
+                    state.max_depth = max(
+                        (n['depth'] for n in state.build_order), default=0
+                    )
+                    state.hierarchy_approved = result.get('hierarchyApproved', False)
+                    state.current_build_index = -1
+                
+                _workflow = {
                     'model': model_name,
                     'phase': state.phase,
                     'phaseStep': state.phase_step,
@@ -5343,6 +6138,27 @@ def _generate_workflow_state(model_name, command, params, result):
                     'lockedAt': result.get('lockedAt', ''),
                     'nextSuggestedAction': 'Macro framework locked - now you can start building: add_block / add_line / subsystem_create',
                 }
+                
+                # [v11.8] Add hierarchy info if available
+                if state.subsystem_tree is not None:
+                    _workflow['hierarchyApproved'] = state.hierarchy_approved
+                    _workflow['maxDepth'] = state.max_depth
+                    _workflow['totalSubsystems'] = len(state.build_order)
+                    _workflow['buildOrder'] = [
+                        {'path': t['path'], 'depth': t['depth'], 'name': t['name']}
+                        for t in state.build_order
+                    ]
+                    _workflow['nextSuggestedAction'] = (
+                        f'Hierarchy approved (depth={state.max_depth}, '
+                        f'{len(state.build_order)} subsystems). '
+                        'Proceed to Phase 4: build skeleton shells for all subsystems '
+                        'using sl_subsystem_create + add_block(Inport/Outport), '
+                        'then add cross-subsystem lines. '
+                        'Start from the top level and recurse down: '
+                        'for each subsystem, create its child subsystems as shells.'
+                    )
+                
+                return _workflow
         # 如果不是 ok 状态，返回当前状态
         return {
             'model': model_name,
@@ -5356,20 +6172,70 @@ def _generate_workflow_state(model_name, command, params, result):
         if isinstance(result, dict) and result.get('status') == 'ok':
             can_proceed = result.get('canProceed', False)
             passed = result.get('passed', False)
+            is_sub_path = '/' in str(model_name)
+            
             if passed or can_proceed:
                 state.model_completed = True
                 state.pending_issues = []
                 state.last_verification_failed = False
                 state.phase = 'simulation'
                 state.phase_step = 'completed'
-                return {
+                
+                _rwf = {
                     'model': model_name,
                     'phase': state.phase,
                     'phaseStep': state.phase_step,
                     'modelCompleted': True,
                     'canProceed': True,
-                    'nextSuggestedAction': 'Model complete! Proceed to sl_sim_run for simulation.',
                 }
+                
+                # [v11.8] Recursive verify: mark node as 'completed' in tree
+                if state.hierarchy_approved and state.subsystem_tree is not None:
+                    # Check if this is a sub-path complete call
+                    if is_sub_path:
+                        _updated = _update_node_status(
+                            state.subsystem_tree, str(model_name).replace('\\', '/'), 'completed'
+                        )
+                        # Notify next build target
+                        next_target = _get_next_build_target(state)
+                        if next_target:
+                            _rwf['nextBuildTarget'] = next_target
+                            _rwf['buildProgress'] = _build_progress_str(state)
+                            _rwf['nextSuggestedAction'] = (
+                                f'Subsystem {model_name} completed! '
+                                f'Next: sl_micro_design(subsystemName="{next_target["path"]}", '
+                                f'taskDescription="...", depth={next_target["depth"]})'
+                            )
+                        else:
+                            _rwf['allSubsystemsComplete'] = True
+                            _rwf['nextSuggestedAction'] = (
+                                'All subsystems completed! '
+                                'Run sl_model_complete(modelName) for top-level Gate_4, '
+                                'then sl_sim_run for simulation.'
+                            )
+                    else:
+                        # Top-level complete: check hierarchy completeness
+                        all_done = _all_subsystems_completed(state)
+                        _rwf['hierarchyComplete'] = all_done
+                        if not all_done:
+                            missing = _get_incomplete_subsystems(state)
+                            _rwf['incompleteSubsystems'] = missing
+                            _rwf['nextSuggestedAction'] = (
+                                f'WARNING: {len(missing)} subsystem(s) not completed. '
+                                f'Complete all subsystems before final simulation: {", ".join(missing[:5])}'
+                            )
+                            _rwf['canProceed'] = False
+                            _rwf['modelCompleted'] = False
+                        else:
+                            _rwf['nextSuggestedAction'] = (
+                                'Model complete! All {n} subsystems passed. '
+                                'Proceed to sl_sim_run for simulation.'
+                            ).format(n=len(state.build_order))
+                
+                if 'nextSuggestedAction' not in _rwf:
+                    _rwf['nextSuggestedAction'] = 'Model complete! Proceed to sl_sim_run for simulation.'
+                
+                return _rwf
             else:
                 state.model_completed = False
                 state.last_verification_failed = True
@@ -5426,7 +6292,24 @@ def _generate_workflow_state(model_name, command, params, result):
                     'outputSchema': output_schema,
                     'version': result.get('version', 'v11.2'),
                 }
-                return {
+                
+                # [v11.8] Recursive hierarchy: inject depth + tree context
+                _node = None
+                _depth = 0
+                _children = []
+                _siblings = []
+                _build_pos = ''
+                if state.hierarchy_approved and state.subsystem_tree is not None:
+                    _node = _find_node_in_tree(state.subsystem_tree, subsystem_name)
+                    if _node is not None:
+                        _depth = _node.get('depth', 0)
+                        _children = [c.get('name', '') for c in _node.get('children', [])]
+                        # Mark as 'design' phase
+                        _node['status'] = 'design'
+                    _siblings = _get_sibling_names(state.subsystem_tree, subsystem_name)
+                    _build_pos = _build_progress_str(state)
+                
+                _workflow = {
                     'model': model_name,
                     'phase': state.phase,
                     'phaseStep': state.phase_step,
@@ -5438,15 +6321,30 @@ def _generate_workflow_state(model_name, command, params, result):
                     'subsystemName': subsystem_name,
                     'nextExpectedAction': next_action,
                     'frameworkApproved': state.framework_approved,
-                    'version': 'v11.2',
+                    'version': 'v11.8',
+                    # [v11.8] Recursive hierarchy fields
+                    'depth': _depth,
+                    'childSubsystems': _children,
+                    'siblingSubsystems': _siblings,
+                    'buildOrderPosition': _build_pos,
                     'instruction': (
                         f'YOU are the domain expert. Based on the designPrompt above, '
                         f'use your knowledge of physics and control theory to design '
-                        f'the internals of subsystem "{subsystem_name}". '
-                        f'Output as JSON matching outputSchema, then call '
+                        f'the internals of subsystem "{subsystem_name}"'
+                        + (f' (depth {_depth})' if _depth > 0 else '')
+                        + f'. '
+                        + (f'This subsystem has {len(_children)} child subsystem(s) that exist as shells. '
+                           f'Treat them as black-box block inputs. '
+                           if _children else '')
+                        + f'Output as JSON matching outputSchema, then call '
                         f'sl_micro_review(subsystemName="{subsystem_name}").'
                     ),
                 }
+                
+                if _depth > 0:
+                    _workflow['depthAwareGuidance'] = _get_depth_aware_hint(_depth)
+                
+                return _workflow
         elif command == 'sl_micro_review':
             # Review 完成，等待 approve
             # [Bug #2 FIX] Normalize reviewResult structure
@@ -5454,34 +6352,47 @@ def _generate_workflow_state(model_name, command, params, result):
                 review_result = _normalize_review_result(result.get('reviewResult', {}))
                 state.phase = 'subsystem_iteration'
                 state.phase_step = 'micro_reviewed'
+                
+                # [v11.8] Mark node as 'review' phase
+                if state.hierarchy_approved and state.subsystem_tree is not None:
+                    _node = _find_node_in_tree(state.subsystem_tree, subsystem_name)
+                    if _node is not None:
+                        _node['status'] = 'review'
+                
+                _rwf = {
+                    'model': model_name,
+                    'phase': state.phase,
+                    'phaseStep': state.phase_step,
+                    'microFramework': state.micro_framework,
+                    'reviewResult': review_result,
+                    'subsystemName': subsystem_name,
+                    'frameworkApproved': state.framework_approved,
+                }
                 if review_result.get('passed'):
-                    return {
-                        'model': model_name,
-                        'phase': state.phase,
-                        'phaseStep': state.phase_step,
-                        'microFramework': state.micro_framework,
-                        'reviewResult': review_result,
-                        'subsystemName': subsystem_name,
-                        'nextSuggestedAction': 'Call sl_micro_approve() to approve the micro framework and start building',
-                        'frameworkApproved': state.framework_approved,
-                    }
+                    _rwf['nextSuggestedAction'] = f'Call sl_micro_approve(subsystemName="{subsystem_name}") to approve and start building'
                 else:
-                    return {
-                        'model': model_name,
-                        'phase': state.phase,
-                        'phaseStep': state.phase_step,
-                        'microFramework': state.micro_framework,
-                        'reviewResult': review_result,
-                        'subsystemName': subsystem_name,
-                        'nextSuggestedAction': 'Micro framework review found issues - fix and call sl_micro_design again',
-                        'frameworkApproved': state.framework_approved,
-                    }
+                    _rwf['nextSuggestedAction'] = 'Micro framework review found issues - fix and call sl_micro_design again'
+                return _rwf
         elif command == 'sl_micro_approve':
+            # Gate_REVIEW_BUILD check moved to top of _handle_sl_command (v11.9)
+            
             # 审批完成，小框架锁定，可以开始构建
             if isinstance(result, dict) and result.get('status') == 'ok':
                 state.phase = 'subsystem_iteration'
                 state.phase_step = 'micro_approved'
-                return {
+                
+                # [v11.8.4] Gate_SHELL_ONLY: Register micro-approved subsystem
+                if subsystem_name:
+                    _toplevel = model_name.split('/')[0] if '/' in model_name else model_name
+                    if _toplevel not in _MICRO_APPROVED_SUBSYSTEMS:
+                        _MICRO_APPROVED_SUBSYSTEMS[_toplevel] = set()
+                    _MICRO_APPROVED_SUBSYSTEMS[_toplevel].add(subsystem_name)
+                
+                # [v11.8] Mark node as 'approved' in tree
+                if state.hierarchy_approved and state.subsystem_tree is not None:
+                    _update_node_status(state.subsystem_tree, subsystem_name, 'approved')
+                
+                _rwf = {
                     'model': model_name,
                     'phase': state.phase,
                     'phaseStep': state.phase_step,
@@ -5493,6 +6404,11 @@ def _generate_workflow_state(model_name, command, params, result):
                     'nextSuggestedAction': f'Start building subsystem {subsystem_name}: add_block / add_line',
                     'frameworkApproved': state.framework_approved,
                 }
+                
+                # [v11.8] Include hierarchy context
+                if state.hierarchy_approved:
+                    _rwf['buildProgress'] = _build_progress_str(state)
+                return _rwf
         # 如果不是 ok 状态，返回当前状态
         return {
             'model': model_name,
@@ -5771,14 +6687,44 @@ def _generate_workflow_state(model_name, command, params, result):
         'subsystemDone': list(state.subsystem_done),
         'checksRemaining': checks_remaining,
         'canProceed': not state.last_verification_failed,  # v11.3
+        # [v11.8] Recursive hierarchy build info
+        'hierarchyApproved': state.hierarchy_approved,
+        'maxDepth': getattr(state, 'max_depth', 0),
+        'totalSubsystems': len(getattr(state, 'build_order', [])),
+        'buildProgress': _build_progress_str(state),
+        'nextBuildTarget': _get_next_build_target(state) if state.hierarchy_approved else None,
+        '_version': 'v11.8',
     }
+
+
+def _build_progress_str(state):
+    """生成构建进度字符串"""
+    if not state.build_order:
+        return '0/0'
+    completed = sum(
+        1 for t in state.build_order
+        if _find_node_in_tree(state.subsystem_tree, t['path']) is not None
+        and _find_node_in_tree(state.subsystem_tree, t['path']).get('status') == 'completed'
+    ) if state.subsystem_tree else 0
+    return f'{completed}/{len(state.build_order)}'
 
 
 def _cleanup_workflow_state(model_name):
     """v9.0: 清理指定模型的工作流状态
     
     模型关闭或删除时调用，释放追踪数据。
+    v11.8: 扩展清理 — 含递归树结构
     """
+    # [v11.8] Clean up tree structure before removing state
+    state = _get_workflow_state(model_name)
+    if state is not None:
+        state.subsystem_tree = None
+        state.build_order.clear()
+        state.current_build_index = -1
+        state.hierarchy_approved = False
+        state.level_status.clear()
+        state.nesting_warnings.clear()
+    
     # [P1-1 FIX] 使用线程安全的删除函数
     _remove_workflow_state(model_name)
     # [P1-2 FIX] 同时清理对应的模型锁，防止 _model_locks 无限增长
@@ -5866,6 +6812,19 @@ def _check_goto_from_scope(model_name):
             result['message'] = f'Goto/From scope check skipped: model "{model_name}" not loaded (Scene 1 or unloaded model).'
             return result
         
+        # [v11.8 Bug#3 FIX] Check Goto block count with simple eval first
+        # to avoid multiline eval issues on empty models
+        try:
+            n_gotos = int(eng.eval(
+                f"length(find_system('{model_name}', 'BlockType', 'Goto'))", nargout=1
+            ))
+        except Exception:
+            n_gotos = 0
+        
+        if n_gotos == 0:
+            result['message'] = 'No Goto/From blocks in model - scope check passed.'
+            return result
+        
         # Get all Goto blocks with their tags and parent subsystems
         gotos_expr = (
             "gotos = find_system(v_mn, 'BlockType', 'Goto');"
@@ -5933,7 +6892,8 @@ def _check_goto_from_scope(model_name):
         err_str = str(e).lower()
         not_found_patterns = ['find_system', 'not found', 'does not exist', 
                               '未加载', '找不到', 'not loaded', 'not open',
-                              'model', 'system', 'invalid']
+                              'model', 'system', 'invalid',
+                              '运算符', 'operator', 'syntax', 'parse']
         if any(p in err_str for p in not_found_patterns):
             result['passed'] = True
             result['message'] = f'Goto/From scope check skipped: model not available (Scene 1 or unloaded model).'
@@ -5958,6 +6918,49 @@ def _check_goto_from_scope(model_name):
 # ===== goto_from_scope check end =====
 
 
+def _extract_target_subsystem(params, model_name, command):
+    """v11.8.4 Gate_SHELL_ONLY: Extract the target subsystem path from params.
+    
+    For add_block/add_line/set_param, the target is the subsystem where blocks are being modified.
+    
+    Bug#23 FIX (2026-05-14): Comprehensive parameter scan with defense-in-depth.
+    Original code only checked destPath/blockPath, missing srcBlock/dstBlock used by add_line_safe.
+    Now scans ALL known path-bearing parameters to prevent future similar regressions.
+    """
+    # Defense-in-depth: scan all known path-bearing parameter keys in priority order.
+    # Priority: explicit path specifiers first, then source/target references.
+    PATH_PARAM_KEYS = [
+        'destPath',      # add_block_safe: explicit destination full path
+        'blockPath',      # set_param_safe: explicit block full path  
+        'blockName',      # generic block reference
+        'subsystemPath',  # micro_design/micro_review: subsystem path
+        'srcBlock',       # add_line_safe: source block full path
+        'dstBlock',       # add_line_safe: destination block full path
+        'targetBlock',    # generic target reference
+    ]
+    target = ''
+    for key in PATH_PARAM_KEYS:
+        candidate = params.get(key, '')
+        if candidate and '/' in str(candidate):
+            target = candidate
+            break
+    
+    if target and '/' in str(target):
+        parts = str(target).split('/')
+        # Model/Subsys/Block → Model/Subsys; Model/Subsys/Sub/Block → Model/Subsys/Sub
+        if len(parts) >= 3:
+            # Return parent of the deepest block (all but last component)
+            return '/'.join(parts[:-1])
+        elif len(parts) == 2:
+            return target
+    
+    # Fallback: modelName may contain subsystem path
+    if '/' in str(model_name):
+        parts = str(model_name).split('/')
+        return '/'.join(parts[:2]) if len(parts) >= 2 else model_name
+    return model_name
+
+
 def _handle_sl_command(command, params):
     """统一处理 sl_* 命令
     
@@ -5978,6 +6981,51 @@ def _handle_sl_command(command, params):
     - [NEW] 更新失败统计
     """
     try:
+        # ===== [v11.9 FIX] Phase 5 强制 auto_layout — 在 Gate_REVIEW_BUILD 之前执行 =====
+        # 确保即使 model_complete 被 gate 阻断，子系统也已排版
+        if command == 'sl_model_complete':
+            _target_mn = params.get('subsystemPath', params.get('modelName', params.get('model_name', '')))
+            if _target_mn:
+                try:
+                    _auto_arrange_model(_target_mn)
+                except Exception:
+                    pass
+        
+        # ===== [v11.9 Bug#24/#25 FIX] Gate_REVIEW_BUILD: model_complete 前强制 connectionScan =====
+        # Note: This gate runs at sl_model_complete time (Gate_4), NOT at micro_approve time.
+        # Rationale: micro_approve validates the DESIGN (blockPlan/signalDimensions match physics).
+        # Build verification (actual wiring) belongs at model_complete because:
+        # 1. Blocks must be added BEFORE they can be connected (chicken-and-egg with Gate_SHELL_ONLY)
+        # 2. Micro_approve is a prerequisite for add_line via Gate_SHELL_ONLY
+        # 3. Without micro_approve, no add_line is possible — creating a deadlock
+        if command == 'sl_model_complete':
+            _subsys = params.get('subsystemPath', params.get('subsystemName', params.get('subsystem', '')))
+            _mn = params.get('modelName', params.get('model_name', ''))
+            if _subsys or _mn:
+                _target = _subsys if _subsys else _mn
+                _cs_r = _call_sl_function('sl_review_core', {
+                    '_pos_1': _target, '_pos_2': 'connectionScan'
+                })
+                if isinstance(_cs_r, dict) and not _cs_r.get('passed', True):
+                    _n = _cs_r.get('details', {}).get('unconnectedCount', 0)
+                    return {
+                        "status": "gate_blocked", "blocked": True,
+                        "gate": "Gate_REVIEW_BUILD",
+                        "reason": f"Build verification failed: {_n} unconnected ports in '{_target}'",
+                        "command": command, "requiredAction": "sl_add_line_safe",
+                        "connectionScan": _cs_r,
+                    }
+        
+        # ===== [v11.8.3 Bug#11 FIX] Command normalization: strip _safe suffix =====
+        # REST whitelist uses sl_add_block_safe, but all internal checks use sl_add_block.
+        # Normalizing at entry ensures ALL gate checks, state tracking, and verification
+        # logic see the canonical command name. Defense-in-depth: individual checks
+        # also accept both variants where practical.
+        # _SL_FUNC_MAP already maps both variants to the correct MATLAB function.
+        _command_orig = command
+        if command.endswith('_safe') and command[:-5] in _SL_FUNC_MAP:
+            command = command[:-5]  # sl_add_block_safe → sl_add_block
+        
         # ===== [v11.6] Request counter for turn separation detection =====
         global _REQUEST_COUNTER
         _REQUEST_COUNTER += 1
@@ -5987,7 +7035,10 @@ def _handle_sl_command(command, params):
         # All Simulink commands (except sl_scene_detect itself and read-only commands)
         # require Scene to be confirmed first.
         _S0_GATED_COMMANDS = [
-            'sl_add_block', 'sl_add_line', 'sl_set_param', 'sl_delete',
+            'sl_add_block', 'sl_add_block_safe',
+            'sl_add_line', 'sl_add_line_safe',
+            'sl_set_param', 'sl_set_param_safe',
+            'sl_delete',
             'sl_replace_block', 'sl_subsystem_create', 'sl_subsystem_mask',
             'sl_subsystem_expand', 'sl_config_set', 'sl_signal_config',
             'sl_signal_logging', 'sl_bus_create', 'sl_block_position',
@@ -6001,6 +7052,10 @@ def _handle_sl_command(command, params):
             'sl_model_load', 'sl_model_understand', 'sl_modify_plan',
             'sl_modify_review', 'sl_modify_approve', 'sl_model_sandbox',
             'sl_modify_verify_step',
+            # v11.8: Hierarchy management
+            'sl_hierarchy_validate', 'sl_subsystem_tree',
+            # v11.8: Recursive workflow builtins
+            'sl_build_status', 'sl_next_target',
         ]
         
         if command in _S0_GATED_COMMANDS:
@@ -6054,7 +7109,7 @@ def _handle_sl_command(command, params):
         # ===== [v10.1] 设计阶段门控检查 =====
         # 在 design 阶段，所有 _MODIFY_COMMANDS 被拦截，要求先完成 sl_model_design
         _gate_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
-        if not _gate_mn and command == 'sl_set_param':
+        if not _gate_mn and command in ('sl_set_param', 'sl_set_param_safe'):
             _gate_mn = fixed_params.get('blockPath', '')
             if '/' in _gate_mn:
                 _gate_mn = _gate_mn.split('/')[0]
@@ -6112,7 +7167,9 @@ def _handle_sl_command(command, params):
         # ===== [v11.0] 大框架三层迭代循环门控 =====
         # 大框架门控：所有构建命令必须先完成 sl_framework_design → review → approve
         _MODIFY_COMMANDS_GATED_BY_FRAMEWORK = [
-            'sl_add_block', 'sl_add_line', 'sl_delete', 'sl_replace_block',
+            'sl_add_block', 'sl_add_block_safe',
+            'sl_add_line', 'sl_add_line_safe',
+            'sl_delete', 'sl_replace_block',
             'sl_subsystem_create', 'sl_subsystem_mask',
             'sl_bus_create', 'sl_signal_config', 'sl_block_position',
             'sl_auto_layout',  # 包含排版命令
@@ -6123,11 +7180,14 @@ def _handle_sl_command(command, params):
             'sl_framework_design', 'sl_framework_review', 'sl_framework_approve',
             'sl_micro_design', 'sl_micro_review', 'sl_micro_approve',  # Phase 2
             'sl_framework_modify', 'sl_framework_modify_approve', 'sl_framework_modify_reject',  # Phase 3
+            # v11.8: Read-only query commands (no Gate_2 needed)
+            'sl_hierarchy_validate', 'sl_subsystem_tree',
+            'sl_build_status', 'sl_next_target',
         ]
 
         # [v11.0 Phase 3 FIX] 提前初始化框架状态变量，供 Gate 1 + Gate 3 + 框架 API 共用
         _fw_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
-        if not _fw_mn and command == 'sl_set_param':
+        if not _fw_mn and command in ('sl_set_param', 'sl_set_param_safe'):
             _fw_mn = fixed_params.get('blockPath', '')
             if '/' in _fw_mn:
                 _fw_mn = _fw_mn.split('/')[0]
@@ -6155,6 +7215,34 @@ def _handle_sl_command(command, params):
                     # 检查大框架是否已审批（通过 workflow state）
                     _fw_state = _get_workflow_state(_fw_mn)
                     framework_approved = getattr(_fw_state, 'framework_approved', False)
+                    hierarchy_approved = getattr(_fw_state, 'hierarchy_approved', False)
+                    
+                    # [v11.8] Hierarchy mode: verify operation target is in approved tree
+                    if hierarchy_approved and _fw_state.subsystem_tree is not None:
+                        _op_target = fixed_params.get('modelName', fixed_params.get('model_name',
+                            fixed_params.get('blockPath', '')))
+                        if _op_target and '/' in str(_op_target):
+                            _op_norm = str(_op_target).replace('\\', '/')
+                            _node = _find_node_in_tree(_fw_state.subsystem_tree, _op_norm)
+                            if _node is None:
+                                # Check if it's inside a known subsystem
+                                _parent_path = '/'.join(_op_norm.split('/')[:-1])
+                                _parent_node = _find_node_in_tree(_fw_state.subsystem_tree, _parent_path)
+                                if _parent_node is None and _op_norm.split('/')[0] != _fw_mn:
+                                    return {
+                                        "status": "gate_blocked",
+                                        "blocked": True,
+                                        "reason": f"Operation target '{_op_norm}' is not in the approved hierarchy tree.",
+                                        "command": command,
+                                        "gate": "Gate_2 (hierarchy)",
+                                        "message": (
+                                            f"HIERARCHY_VIOLATION: The operation target '{_op_norm}' "
+                                            f"is not part of the approved subsystem hierarchy. "
+                                            f"All build operations must target subsystems defined in the framework."
+                                        ),
+                                        "requiredAction": "sl_framework_modify",
+                                        "hint": "Use sl_framework_modify to add this subsystem to the framework, or operate on an existing subsystem.",
+                                    }
 
                     if not framework_approved and not _fw_locked:
                         # [v11.5] Check Scene 2 approval as alternative to framework
@@ -6247,6 +7335,33 @@ def _handle_sl_command(command, params):
                 # len(_parts) >= 3 表示子系统内部，不拦截
 
         if _fw_mn and _fw_locked and (command in _STRUCTURAL_MODIFY_COMMANDS) and (command != 'sl_delete' or _is_structural_delete):
+            # [v11.8] HARD DEPTH CHECK: block subsystem creation at depth 5+
+            if command == 'sl_subsystem_create':
+                _subsys_parent = fixed_params.get('modelName', fixed_params.get('model_name',
+                    fixed_params.get('blockPath', '')))
+                if _subsys_parent and '/' in str(_subsys_parent):
+                    _parent_norm = str(_subsys_parent).replace('\\', '/')
+                    _fw_state = _get_workflow_state(_fw_mn)
+                    if (getattr(_fw_state, 'hierarchy_approved', False) 
+                            and _fw_state.subsystem_tree is not None):
+                        _parent_node = _find_node_in_tree(_fw_state.subsystem_tree, _parent_norm)
+                        if _parent_node is not None and _parent_node.get('depth', 0) >= MAX_DEPTH:
+                            return {
+                                "status": "gate_blocked",
+                                "blocked": True,
+                                "reason": (
+                                    f"Cannot create subsystem at depth "
+                                    f"{_parent_node['depth'] + 1}: max depth {MAX_DEPTH} exceeded."
+                                ),
+                                "command": command,
+                                "gate": "Gate_3 (depth limit)",
+                                "message": (
+                                    f"DEPTH_LIMIT_EXCEEDED: Cannot create child subsystem "
+                                    f"in '{_parent_norm}' (depth={_parent_node['depth']}). "
+                                    f"Maximum nesting depth is {MAX_DEPTH}."
+                                ),
+                                "hint": "Flatten the design or use Model Reference instead.",
+                            }
             # [v11.6.8 FIX] Scene 1 exemption: subsystem_create is an expected build step
             # when the framework is approved, not a modification. Scene 2 still requires 
             # sl_framework_modify approval for structural changes.
@@ -6305,6 +7420,63 @@ def _handle_sl_command(command, params):
                 }
         # ===== Gate 3 结束 =====
 
+        # ===== [v11.8.4] Gate_SHELL_ONLY: 外壳可批量，内部必须逐子系统 Gate 审批 =====
+        # 原则：子系统空壳（sl_subsystem_create）可以批量创建——外壳只是容器。
+        # 子系统内部结构（add_block/add_line/set_param）绝对不能批量——
+        # 每个子系统的内部设计必须独立走 micro_design → micro_review → micro_approve。
+        # 
+        # 机制：
+        # - _MICRO_APPROVED_SUBSYSTEMS 字典：{model_name: set(approved_subsystem_paths)}
+        # - sl_micro_approve 成功后将目标子系统加入此集合
+        # - add_block/add_line/set_param 前检查：目标子系统必须在已审批集合中
+        # - 不在集合中 → Gate_SHELL_ONLY 拦截，提示先完成 micro_approve
+        _SHELL_ONLY_GATED = ['sl_add_block', 'sl_add_block_safe', 'sl_add_line', 
+                              'sl_add_line_safe', 'sl_set_param', 'sl_set_param_safe']
+        if command in _SHELL_ONLY_GATED and _fw_mn:
+            _target_subsys = _extract_target_subsystem(fixed_params, _fw_mn, command)
+            if _target_subsys:
+                _toplevel = _fw_mn.split('/')[0]
+                if _toplevel not in _MICRO_APPROVED_SUBSYSTEMS:
+                    _MICRO_APPROVED_SUBSYSTEMS[_toplevel] = set()
+                if _target_subsys not in _MICRO_APPROVED_SUBSYSTEMS[_toplevel]:
+                    return {
+                        "status": "gate_blocked",
+                        "blocked": True,
+                        "reason": (
+                            f"Subsystem '{_target_subsys}' has NOT been micro_approved. "
+                            f"Internal blocks CANNOT be added in batch — each subsystem must "
+                            f"go through micro_design → micro_review → micro_approve first."
+                        ),
+                        "command": command,
+                        "gate": "Gate_SHELL_ONLY",
+                        "message": (
+                            f"SHELL_ONLY_VIOLATION: 子系统 '{_target_subsys}' 的内部结构尚未审批！\n"
+                            f"🔴 外壳/内部原则: 子系统空壳可批量创建，内部结构必须逐个走 Gate 流程。\n"
+                            f"在添加内部块/连线/参数之前，必须先完成:\n"
+                            f"  1. sl_micro_design(subsystemName='{_target_subsys}', taskDescription='...')\n"
+                            f"  2. sl_micro_review(subsystemName='{_target_subsys}', microFramework=...)\n"
+                            f"  3. sl_micro_approve(subsystemName='{_target_subsys}', ...)\n"
+                            f"  4. 然后才能调用 {command}"
+                        ),
+                        "requiredAction": "sl_micro_design",
+                        "workflowPhase": "subsystem_iteration",
+                        "targetSubsystem": _target_subsys,
+                        "hint": (
+                            f"1. 调用 sl_micro_design(subsystemName='{_target_subsys}', "
+                            f"taskDescription='...', modelName='{_toplevel}')\n"
+                            f"2. 根据返回的 designPrompt 设计子系统内部结构\n"
+                            f"3. 调用 sl_micro_review 审查设计\n"
+                            f"4. 调用 sl_micro_approve 审批锁定\n"
+                            f"5. 然后才能调用 {command} 添加块/连线"
+                        ),
+                        "nextSteps": [
+                            f"sl_micro_design(subsystemName='{_target_subsys}', taskDescription='...', modelName='{_toplevel}')",
+                            f"sl_micro_review(subsystemName='{_target_subsys}', microFramework={{...}}, modelName='{_toplevel}')",
+                            f"sl_micro_approve(subsystemName='{_target_subsys}', modelName='{_toplevel}')",
+                        ],
+                    }
+        # ===== Gate_SHELL_ONLY end =====
+
         # ===== 大框架门控结束 =====
 
         # ===== [v11.6.2] Gate_CONNECTIVITY: 强制连线门控 =====
@@ -6327,7 +7499,7 @@ def _handle_sl_command(command, params):
             _conn_toplevel = _conn_mn.split('/')[0] if '/' in _conn_mn else _conn_mn
             if _conn_toplevel:
                 _conn_state = _get_workflow_state(_conn_toplevel)
-                if _conn_state.consecutive_adds >= 3:
+                if _conn_state.consecutive_adds >= 12:
                     return {
                         "status": "gate_blocked",
                         "blocked": True,
@@ -6571,6 +7743,37 @@ def _handle_sl_command(command, params):
                                 _comp_ok = True
                         except Exception:
                             pass
+                    
+                    # [v11.8] Hierarchy completeness check for Gate_4
+                    if _comp_ok:
+                        try:
+                            _comp_state = _get_workflow_state(_comp_mn)
+                            if (getattr(_comp_state, 'hierarchy_approved', False) 
+                                    and _comp_state.subsystem_tree is not None
+                                    and not _all_subsystems_completed(_comp_state)):
+                                _comp_ok = False
+                                _missing = _get_incomplete_subsystems(_comp_state)
+                                return {
+                                    "status": "gate_blocked",
+                                    "blocked": True,
+                                    "reason": (
+                                        f"Hierarchy incomplete: {len(_missing)} subsystem(s) "
+                                        f"not yet completed."
+                                    ),
+                                    "command": command,
+                                    "gate": "Gate_4 (hierarchy)",
+                                    "message": (
+                                        f"HIERARCHY_INCOMPLETE: {len(_missing)} subsystem(s) "
+                                        f"are not yet completed. "
+                                        f"Complete all subsystems before simulation:\n"
+                                        + "\n".join(f"  - {m}" for m in _missing[:10])
+                                    ),
+                                    "requiredAction": "sl_model_complete",
+                                    "incompleteSubsystems": _missing,
+                                    "hint": f"Call sl_model_complete('{_missing[0]}') to complete the first missing subsystem."
+                                }
+                        except Exception:
+                            pass
 
                     if not _comp_ok:
                         return {
@@ -6688,13 +7891,31 @@ def _handle_sl_command(command, params):
         if command == 'sl_scene_confirm':
             scene = fixed_params.get('scene', 1)
             model_name = fixed_params.get('modelName', '')
-            confirm_token = fixed_params.get('confirmationToken', '')
+            confirm_token = fixed_params.get('confirmationToken', fixed_params.get('detectionToken', ''))
             
             # ===== [v11.6] CHALLENGE-RESPONSE + TURN SEPARATION VERIFICATION =====
+            # [v11.8.3 Bug#8 FIX] Dual-read: Python _SCENE_STATE (primary) + MATLAB workspace (fallback)
+            # Python state is fast but lost on Bridge restart; MATLAB workspace persists with Engine.
             stored_dt = _SCENE_STATE.get('detection_token', '')
             stored_challenge = _SCENE_STATE.get('challenge_phrase', '')
             detect_ts = _SCENE_STATE.get('detection_timestamp', 0)
             detect_req = _SCENE_STATE.get('detection_request_id', 0)
+            
+            # Fallback: read from MATLAB workspace if Python state is empty
+            if not stored_dt:
+                try:
+                    if _connection_mode == 'engine' and _matlab_engine is not None:
+                        _ws_flag = _matlab_engine.eval("evalin('base', 'exist(''mS0DetectToken_'', ''var'')')", nargout=1)
+                        if _ws_flag == 1:
+                            stored_dt = _matlab_engine.eval("evalin('base', 'mS0DetectToken_')", nargout=1)
+                            stored_challenge = _matlab_engine.eval("evalin('base', 'mS0Challenge_')", nargout=1)
+                            detect_ts = _matlab_engine.eval("evalin('base', 'mS0DetectTS_')", nargout=1)
+                            # Restore to Python state for consistency
+                            _SCENE_STATE['detection_token'] = stored_dt
+                            _SCENE_STATE['challenge_phrase'] = stored_challenge
+                            _SCENE_STATE['detection_timestamp'] = detect_ts
+                except Exception:
+                    pass  # Both sources empty → NO_DETECTION below
             current_req = _current_request_id
             
             if not stored_dt:
@@ -6810,7 +8031,14 @@ def _handle_sl_command(command, params):
                     _matlab_engine.eval(f"assignin('base', 'mS0Scene_', {int(scene)});", nargout=0)
                     if model_name:
                         _matlab_engine.eval(f"assignin('base', 'mS0Model_', '{model_name}');", nargout=0)
+                    # [v11.8.3 Bug#8 FIX] Clean up detection state from MATLAB workspace
+                    _matlab_engine.eval("evalin('base', 'clear mS0DetectToken_ mS0DetectTS_ mS0Challenge_');", nargout=0)
                 # [v11.6.8 FIX] Always set Python-side state for Gate_3 access
+                # [v11.8.3 Bug#8 FIX] Clean up Python detection state (token consumed)
+                _SCENE_STATE.pop('detection_token', None)
+                _SCENE_STATE.pop('challenge_phrase', None)
+                _SCENE_STATE.pop('detection_timestamp', None)
+                _SCENE_STATE.pop('detection_request_id', None)
                 _SCENE_STATE['scene_confirmed'] = True
                 _SCENE_STATE['scene'] = int(scene)
                 _SCENE_STATE['scene_model'] = str(model_name) if model_name else ''
@@ -6881,6 +8109,36 @@ def _handle_sl_command(command, params):
         if func_name == '_builtin_self_improve':
             improve_action = fixed_params.get('action', 'stats')
             return _handle_self_improve(improve_action, fixed_params)
+        
+        # [v11.8] Builtin recursive workflow commands (no .m function needed)
+        if func_name == '_builtin_build_status':
+            mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            if '/' in str(mn):
+                mn = str(mn).split('/')[0]
+            state = _get_workflow_state(mn)
+            return {
+                "status": "ok",
+                "buildProgress": _build_progress_str(state),
+                "totalSubsystems": len(state.build_order),
+                "buildOrder": state.build_order,
+                "nextBuildTarget": _get_next_build_target(state),
+                "allComplete": _all_subsystems_completed(state),
+                "incompleteSubsystems": _get_incomplete_subsystems(state),
+                "maxDepth": getattr(state, 'max_depth', 0),
+            }
+        
+        if func_name == '_builtin_next_target':
+            mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            if '/' in str(mn):
+                mn = str(mn).split('/')[0]
+            state = _get_workflow_state(mn)
+            next_target = _get_next_build_target(state)
+            return {
+                "status": "ok",
+                "nextBuildTarget": next_target,
+                "buildProgress": _build_progress_str(state),
+                "allComplete": _all_subsystems_completed(state) if not next_target else False,
+            }
         
         # [P0-4 FIX] 提前获取 model_name，后续逻辑（工作流清理、锁获取、验证）都需要
         model_name = fixed_params.get('modelName', fixed_params.get('model_name', ''))
@@ -7022,6 +8280,19 @@ def _handle_sl_command(command, params):
                     _fw_state.framework_locked = fixed_params.get('locked', True)
                     _fw_state.phase = 'framework_construction'
                     _fw_state.phase_step = 'approved'
+                    # [v11.8 Bug#4 FIX] Build hierarchy tree from approved framework
+                    _approve_fw = fixed_params.get('macroFramework', {})
+                    if _approve_fw and isinstance(_approve_fw, dict) and _approve_fw.get('subsystems'):
+                        # Store the approved framework (with childSubsystems) in state
+                        _fw_state.macro_framework = _approve_fw
+                        tree = _build_subsystem_tree_from_framework(_approve_fw, _fw_mn)
+                        _fw_state.subsystem_tree = tree
+                        _fw_state.build_order = _compute_build_order(tree)
+                        _fw_state.max_depth = max(
+                            (n['depth'] for n in _fw_state.build_order), default=0
+                        )
+                        _fw_state.hierarchy_approved = True
+                        _fw_state.current_build_index = -1
                     # 在 MATLAB workspace 设置标记
                     _fw_safe = _fw_mn.replace('/', '__')  # [v11.5] 子系统路径安全化
                     try:
@@ -7034,6 +8305,13 @@ def _handle_sl_command(command, params):
                             if _fw_state.macro_framework:
                                 fw_var = f'mFW_{_fw_safe}'
                                 eng.workspace[fw_var] = _fw_state.macro_framework
+                            # [v11.8] Set hierarchy workspace variables for Bridge persistence
+                            _subs = _approve_fw.get('subsystems', []) if isinstance(_approve_fw, dict) else []
+                            if _subs:
+                                _hier_tree_var = f'mHierarchyTree_{_fw_safe}'
+                                eng.workspace[_hier_tree_var] = _subs
+                                _hier_approved_var = f'mHierarchyApproved_{_fw_safe}'
+                                eng.eval(f"assignin('base', '{_hier_approved_var}', true)", nargout=0)
                     except Exception:
                         pass  # MATLAB workspace 同步失败不影响主流程
                     result = {
@@ -7044,6 +8322,15 @@ def _handle_sl_command(command, params):
                         "nextPhase": "framework_construction",
                         "nextSuggestedAction": "Start adding subsystems and blocks according to the approved macro framework",
                     }
+                    # [v11.8 Bug#4 FIX] Include hierarchy info in response
+                    if _fw_state.subsystem_tree is not None:
+                        result['hierarchyApproved'] = _fw_state.hierarchy_approved
+                        result['maxDepth'] = _fw_state.max_depth
+                        result['totalSubsystems'] = len(_fw_state.build_order)
+                        result['buildOrder'] = [
+                            {'path': t['path'], 'depth': t['depth'], 'name': t['name']}
+                            for t in _fw_state.build_order
+                        ]
                 elif special_action == '__fw_review__':
                     # Review 需要先调用 MATLAB 的 sl_framework_review，这里返回提示让用户先执行
                     result = {
@@ -7150,14 +8437,18 @@ def _handle_sl_command(command, params):
         # This leverages WorkBuddy's conversation model for user interaction proof.
         if command == 'sl_scene_detect':
             # [P0-14 FIX] Unconditionally purge ALL stale detection state before a fresh detect.
-            # Previous timeout/error handlers may have left stale tokens or timestamps
-            # in _SCENE_STATE. Without this, sl_scene_confirm can see an old timestamp
-            # even after a fresh sl_scene_detect, causing infinite DETECTION_EXPIRED loops.
+            # [v11.8.3 Bug#8 FIX] Also clear MATLAB workspace stale token
             for _stale_key in ('detection_token', 'challenge_phrase',
                                 'detection_timestamp', 'detection_request_id',
                                 'detected_scene', 'detected_models'):
                 _SCENE_STATE.pop(_stale_key, None)
             _S2_MOD_PERMISSIONS.clear()
+            # Clear MATLAB workspace stale detection token (survives Bridge restarts)
+            try:
+                if _connection_mode == 'engine' and _matlab_engine is not None:
+                    _matlab_engine.eval("evalin('base', 'clear mS0DetectToken_ mS0DetectTS_ mS0Challenge_');", nargout=0)
+            except Exception:
+                pass
 
         if command == 'sl_scene_detect' and isinstance(result, dict) and result.get('status') == 'ok':
             import uuid, time, random, string
@@ -7169,6 +8460,17 @@ def _handle_sl_command(command, params):
             _SCENE_STATE['challenge_phrase'] = _challenge
             _SCENE_STATE['detected_scene'] = result.get('scene', 1)
             _SCENE_STATE['detected_models'] = result.get('models', [])
+            # [v11.8.3 Bug#8 FIX] Double-write token to MATLAB workspace for persistence
+            # Python _SCENE_STATE is lost on Bridge restart; MATLAB workspace survives
+            # as long as the Engine is alive. This ensures sl_scene_confirm works even
+            # after Bridge restarts (e.g. for .m file reload).
+            try:
+                if _connection_mode == 'engine' and _matlab_engine is not None:
+                    _matlab_engine.eval(f"assignin('base', 'mS0DetectToken_', '{_dt_token}');", nargout=0)
+                    _matlab_engine.eval(f"assignin('base', 'mS0DetectTS_', {time.time()});", nargout=0)
+                    _matlab_engine.eval(f"assignin('base', 'mS0Challenge_', '{_challenge}');", nargout=0)
+            except Exception:
+                pass  # Non-blocking: Python _SCENE_STATE is the primary store
             # Return detectionToken + challengePhrase to AI
             # AI MUST display challengePhrase in AskUserQuestion
             result['detectionToken'] = _dt_token
@@ -8450,7 +9752,10 @@ def handle_command(cmd_data):
     params = cmd_data.get('params', {})
     
     # --- 基础操作 ---
-    if action == 'start':
+    if action == 'ping':
+        # v11.9: TCP mode health check
+        return {"status": "ok", "message": "pong", "mode": _connection_mode or "unknown", "pid": os.getpid()}
+    elif action == 'start':
         try:
             # [v11.4.2] Detect mode first (runs compatibility test in thread),
             # then wait for test engine to fully quit before starting persistent engine.
@@ -8501,7 +9806,13 @@ def handle_command(cmd_data):
     elif action == 'execute_script':
         return execute_script(params.get('path', ''), params.get('outputDir'))
     elif action == 'run_code':
+        # [v11.8.3] Gate_RAW_CMD check is INSIDE run_code() itself
         return run_code(params.get('code', ''), params.get('showOutput', True))
+    elif action == 'cmd_request':
+        # [v11.8.3] Gate_RAW_CMD: Request user permission for raw MATLAB command
+        # AI must call this first, present challengePhrase to user via AskUserQuestion,
+        # then call run_code with the token.
+        return _handle_cmd_request(params.get('command', ''))
     elif action == 'set_matlab_root':
         return set_matlab_root(params.get('matlabRoot', ''))
     
@@ -8530,10 +9841,16 @@ def handle_command(cmd_data):
             eng = get_engine()
             if eng is None:
                 return {"status": "error", "message": "MATLAB Engine not available"}
-            eng.eval(f"new_system('{model_name}'); open_system('{model_name}');", nargout=0)
+            # [v11.8.2 Bug#5 FIX] Use sanitization for Chinese path encoding
+            create_code = f"new_system('{model_name}'); open_system('{model_name}');"
+            sanitized_create, _ = _sanitize_non_ascii_strings(eng, create_code)
+            eng.eval(sanitized_create, nargout=0)
             # v11.4.4: 保存模型到项目目录
             save_path = model_path or os.path.join(_project_dir, f"{model_name}.slx").replace('\\', '/')
-            eng.save_system(model_name, save_path, nargout=0)
+            # [v11.8.2 Bug#5 FIX] Use workspace variable for save_system path to avoid encoding issues
+            _safe_eval_with_paths(eng,
+                "save_system('{model}', '{save_path}')",
+                {'model': model_name, 'save_path': save_path})
             return {"status": "ok", "message": f"Model '{model_name}' created", "modelName": model_name, "modelPath": save_path}
         except Exception as e:
             return {"status": "error", "message": f"Failed to create model: {str(e)}"}
@@ -8589,31 +9906,33 @@ def handle_command(cmd_data):
 # ============= 主入口 =============
 def main():
     """主函数 - 两种模式:
-    1. --server: 常驻模式，通过 stdin/stdout 行协议通信
+    1. --tcp-server: TCP 服务器模式，监听端口，JSON line protocol 通信 (v11.9+, 唯一常驻模式)
     2. 默认: 单次执行模式，读取文件或 stdin，输出结果后退出
+    
+    🔴 --server (stdin/stdout) 模式已在 v6.0 中移除！
+    根因: Node.js spawn() 导致 MATLAB Engine Exit status: 3。
+    TCP 是唯一常驻通信方式，AI 不可绕过。
     """
-    if '--server' in sys.argv:
-        server_mode()
+    if '--tcp-server' in sys.argv:
+        tcp_server_mode()
+    elif '--server' in sys.argv:
+        sys.stderr.write("[MATLAB Bridge] ❌ --server 模式已移除 (v6.0)。请使用 --tcp-server 模式。\n")
+        sys.stderr.write("[MATLAB Bridge] 启动方式: python matlab_bridge.py --tcp-server\n")
+        sys.stderr.write("[MATLAB Bridge] 或通过: bash ensure-running.sh (自动使用 --tcp-server)\n")
+        sys.exit(1)
     else:
         oneshot_mode()
 
 
 def server_mode():
-    """常驻服务模式 - 通过 stdin/stdout JSON 行协议通信
+    """[DEPRECATED] 常驻服务模式 - 通过 stdin/stdout JSON 行协议通信
     
-    每行输入一个 JSON 命令，每行输出一个 JSON 结果。
-    Engine 在进程生命周期内持久化，变量跨命令保持。
-    
-    v5.0: 使用 sys.stdout.buffer.write + UTF-8 编码输出，
-    解决 Windows 下 GBK 编码导致中文 JSON 响应乱码的问题。
+    🔴 此模式已在 v6.0 中移除！
+    根因: Node.js spawn() 导致 MATLAB Engine Exit status: 3。
+    TCP (--tcp-server) 是唯一常驻通信方式。
+    保留代码仅供参考，main() 已不再调用此函数。
     """
-    sys.stderr.write(f"[MATLAB Bridge] Server mode started.\n")
-    sys.stderr.write(f"[MATLAB Bridge] MATLAB_ROOT: {MATLAB_ROOT}\n")
-    sys.stderr.write(f"[MATLAB Bridge] MATLAB_EXE: {_get_matlab_exe()}\n")
     version_hint = _get_matlab_version_from_path()
-    if version_hint:
-        sys.stderr.write(f"[MATLAB Bridge] MATLAB Version Hint: {version_hint}\n")
-    sys.stderr.write(f"[MATLAB Bridge] Connection mode will be auto-detected on first command.\n")
     
     # [P0-3 FIX] 启动时检测未回滚的补丁
     try:
@@ -8668,7 +9987,7 @@ def server_mode():
 
 def _write_json_response(data: dict):
     """以 UTF-8 编码写入 JSON 响应到 stdout
-    
+
     Windows 下 sys.stdout.write() 使用 GBK 编码，
     导致中文 JSON 响应乱码（如 "整理" → "鏁寸悊"）。
     改用 sys.stdout.buffer.write() + UTF-8 编码解决。
@@ -8676,6 +9995,295 @@ def _write_json_response(data: dict):
     json_str = json.dumps(data, ensure_ascii=False) + '\n'
     sys.stdout.buffer.write(json_str.encode('utf-8'))
     sys.stdout.buffer.flush()
+
+
+# ============= TCP Server 模式 (v11.9) =============
+# 解决 Node.js spawn() 导致 MATLAB Engine Exit status: 3 的根本问题。
+# Python Bridge 由 bash 独立启动，Node.js 通过 TCP 连接通信。
+# 协议与 --server 模式完全一致（JSON line protocol）。
+
+import socketserver
+import socket
+import signal
+
+# TCP 模式状态
+_tcp_client_connected = False
+_tcp_server_instance = None
+_tcp_shutting_down = False
+
+
+def _get_skill_data_dir():
+    """获取 skill data 目录（存放端口文件和 PID 文件）"""
+    skill_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    data_dir = os.path.join(skill_root, 'data')
+    os.makedirs(data_dir, exist_ok=True)
+    return data_dir
+
+
+def _find_free_port(base_port=27042, max_tries=10):
+    """在 base_port..base_port+max_tries-1 范围内找到可用端口"""
+    for port in range(base_port, base_port + max_tries):
+        try:
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            test_sock.bind(('127.0.0.1', port))
+            test_sock.close()
+            return port
+        except OSError:
+            continue
+    return None
+
+
+def _write_port_file(port):
+    """写入端口文件"""
+    data_dir = _get_skill_data_dir()
+    port_file = os.path.join(data_dir, 'matlab-bridge.port')
+    with open(port_file, 'w', encoding='utf-8') as f:
+        f.write(str(port))
+
+
+def _delete_port_file():
+    """删除端口文件"""
+    data_dir = _get_skill_data_dir()
+    port_file = os.path.join(data_dir, 'matlab-bridge.port')
+    try:
+        if os.path.exists(port_file):
+            os.remove(port_file)
+    except Exception:
+        pass
+
+
+def _write_pid_file():
+    """写入 PID 文件"""
+    data_dir = _get_skill_data_dir()
+    pid_file = os.path.join(data_dir, 'matlab-bridge.pid')
+    # 检查是否有旧的 bridge 进程仍在运行
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, 'r') as f:
+                old_pid = int(f.read().strip())
+            # Windows 下检查进程是否存活
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, old_pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                # 旧进程仍在运行 — 如果是自己则忽略，否则报错
+                if old_pid != os.getpid():
+                    sys.stderr.write(f"[TCP Bridge] ERROR: Another bridge process (PID {old_pid}) is still running.\n")
+                    sys.stderr.write(f"[TCP Bridge] Kill it first: taskkill /F /PID {old_pid}\n")
+                    sys.exit(1)
+        except (ValueError, OSError):
+            pass  # 文件损坏，覆盖即可
+
+    with open(pid_file, 'w', encoding='utf-8') as f:
+        f.write(str(os.getpid()))
+
+
+def _delete_pid_file():
+    """删除 PID 文件"""
+    data_dir = _get_skill_data_dir()
+    pid_file = os.path.join(data_dir, 'matlab-bridge.pid')
+    try:
+        if os.path.exists(pid_file):
+            os.remove(pid_file)
+    except Exception:
+        pass
+
+
+class _TCPBridgeHandler(socketserver.StreamRequestHandler):
+    """TCP 请求处理器 — JSON line protocol，与 --server 模式完全一致"""
+
+    def handle(self):
+        global _tcp_client_connected
+
+        # 单客户端保护
+        if _tcp_client_connected:
+            try:
+                err = json.dumps({"status": "error", "message": "Bridge already has a connected client"}) + '\n'
+                self.wfile.write(err.encode('utf-8'))
+                self.wfile.flush()
+            except Exception:
+                pass
+            return
+
+        _tcp_client_connected = True
+        peer = self.client_address
+        sys.stderr.write(f"[TCP Bridge] Client connected from {peer[0]}:{peer[1]}\n")
+        sys.stderr.flush()
+
+        try:
+            # 逐行读取 JSON 命令
+            for raw_line in self.rfile:
+                if _tcp_shutting_down:
+                    break
+
+                try:
+                    line = raw_line.decode('utf-8').strip()
+                except UnicodeDecodeError:
+                    line = raw_line.decode('gbk', errors='replace').strip()
+
+                if not line:
+                    continue
+
+                # 解析 JSON
+                try:
+                    cmd_data = json.loads(line)
+                except json.JSONDecodeError as e:
+                    err_result = {"status": "error", "message": f"JSON 解析失败: {str(e)}"}
+                    self._write_response(err_result)
+                    continue
+
+                # 处理命令
+                try:
+                    result = handle_command(cmd_data)
+                    self._write_response(result)
+                except Exception as e:
+                    err_result = {"status": "error", "message": f"Command handler error: {str(e)}"}
+                    self._write_response(err_result)
+
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+            sys.stderr.write(f"[TCP Bridge] Client connection lost\n")
+        except Exception as e:
+            sys.stderr.write(f"[TCP Bridge] Client handler error: {e}\n")
+        finally:
+            _tcp_client_connected = False
+            sys.stderr.write(f"[TCP Bridge] Client disconnected. Waiting for new connection...\n")
+            sys.stderr.flush()
+
+    def _write_response(self, data: dict):
+        """写入 JSON 响应到 TCP 连接"""
+        json_str = json.dumps(data, ensure_ascii=False) + '\n'
+        self.wfile.write(json_str.encode('utf-8'))
+        self.wfile.flush()
+
+
+class _SingleThreadTCPServer(socketserver.TCPServer):
+    """单线程 TCP 服务器 — 一次只处理一个连接"""
+    allow_reuse_address = True
+    daemon_threads = False
+
+    def server_close(self):
+        """安全关闭"""
+        super().server_close()
+
+
+def _tcp_signal_handler(signum, frame):
+    """信号处理器 — 优雅关闭"""
+    global _tcp_shutting_down
+    _tcp_shutting_down = True
+    sig_name = signal.Signals(signum).name if hasattr(signal, 'Signals') else str(signum)
+    sys.stderr.write(f"\n[TCP Bridge] Received {sig_name}, shutting down gracefully...\n")
+    sys.stderr.flush()
+
+    # 退出 MATLAB Engine
+    if _matlab_engine:
+        try:
+            _matlab_engine.quit()
+            sys.stderr.write("[TCP Bridge] MATLAB Engine quit successfully.\n")
+        except Exception as e:
+            sys.stderr.write(f"[TCP Bridge] Engine quit error: {e}\n")
+
+    # 清理文件
+    _delete_pid_file()
+    _delete_port_file()
+
+    # 关闭服务器
+    if _tcp_server_instance:
+        try:
+            _tcp_server_instance.server_close()
+        except Exception:
+            pass
+
+    sys.stderr.write("[TCP Bridge] Shutdown complete.\n")
+    sys.stderr.flush()
+    sys.exit(0)
+
+
+def tcp_server_mode(base_port=27042):
+    """TCP 服务器模式 — 监听端口，接受客户端连接，JSON line protocol 通信
+
+    与 --server 模式的区别:
+    - 通过 TCP socket 通信（而非 stdin/stdout）
+    - 客户端断开后 bridge 不退出，等待重连
+    - MATLAB Engine 跨客户端连接持久化
+
+    启动:
+      python matlab_bridge.py --tcp-server [PORT]
+
+    端口文件: {SKILL_ROOT}/data/matlab-bridge.port
+    PID 文件:  {SKILL_ROOT}/data/matlab-bridge.pid
+    """
+    # 解析可选端口参数
+    port_arg = None
+    for i, arg in enumerate(sys.argv):
+        if arg == '--tcp-server' and i + 1 < len(sys.argv):
+            try:
+                port_arg = int(sys.argv[i + 1])
+            except ValueError:
+                pass
+
+    effective_base = port_arg if port_arg else base_port
+
+    # 1. 寻找可用端口
+    port = _find_free_port(effective_base)
+    if port is None:
+        sys.stderr.write(f"[TCP Bridge] FATAL: No available port in range {effective_base}-{effective_base+9}\n")
+        sys.stderr.flush()
+        sys.exit(1)
+
+    # 2. 写端口和 PID 文件
+    _write_port_file(port)
+    _write_pid_file()
+    sys.stderr.write(f"[TCP Bridge] Listening on 127.0.0.1:{port} (PID {os.getpid()})\n")
+    sys.stderr.write(f"[TCP Bridge] Port file: {_get_skill_data_dir()}/matlab-bridge.port\n")
+    sys.stderr.flush()
+
+    # 3. 注册信号处理
+    signal.signal(signal.SIGINT, _tcp_signal_handler)
+    signal.signal(signal.SIGTERM, _tcp_signal_handler)
+
+    # 4. 启动时补丁检测（与 server_mode 一致）
+    try:
+        patches_file = os.path.join(_LEARNINGS_DIR, 'PATCHES.json')
+        if os.path.exists(patches_file):
+            with open(patches_file, 'r', encoding='utf-8') as f:
+                patches_list = json.load(f)
+            pending = [p for p in patches_list if p.get('applied', True)]
+            if pending:
+                sys.stderr.write(f"[MATLAB Bridge] WARNING: {len(pending)} pending patch(es) detected!\n")
+                for p in pending:
+                    sys.stderr.write(f"  - {p.get('file', '?')} ({p.get('description', 'no desc')})\n")
+                sys.stderr.write(f"[MATLAB Bridge] Use 'sl_self_improve patch_rollback' to revert if needed.\n")
+    except Exception:
+        pass
+
+    # 5. 创建并启动 TCP 服务器
+    global _tcp_server_instance
+    try:
+        _tcp_server_instance = _SingleThreadTCPServer(('127.0.0.1', port), _TCPBridgeHandler)
+    except Exception as e:
+        sys.stderr.write(f"[TCP Bridge] FATAL: Cannot bind to port {port}: {e}\n")
+        _delete_pid_file()
+        _delete_port_file()
+        sys.exit(1)
+
+    sys.stderr.write(f"[TCP Bridge] Ready. Waiting for client connection...\n")
+    sys.stderr.flush()
+
+    # 6. 循环接受连接 — 客户端断开后继续等待
+    try:
+        while not _tcp_shutting_down:
+            # handle_request() 每次处理一个连接
+            # 超时 1 秒，以便检查 _tcp_shutting_down 标志
+            _tcp_server_instance.timeout = 1.0
+            _tcp_server_instance.handle_request()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        # 清理
+        _tcp_signal_handler(signal.SIGTERM, None)
 
 
 def oneshot_mode():

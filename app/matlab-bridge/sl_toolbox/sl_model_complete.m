@@ -290,6 +290,23 @@ function result = sl_model_complete(modelName, varargin)
     end
     adjustedUnconnected = max(0, issuesResult.unconnectedCount - templateUnconnected);
 
+    % ===== [v11.8] Additional audits via sl_review_core =====
+    % paramAudit: check block parameters for empty/default values
+    paramAuditResult = struct('passed', true, 'issue', '', 'details', struct());
+    layoutAuditResult = struct('passed', true, 'issue', '', 'details', struct());
+    try
+        paramAuditResult = sl_review_core(modelName, 'paramAudit');
+        layoutAuditResult = sl_review_core(modelName, 'layoutAudit');
+    catch
+        % Non-critical: audit failure should not block completion
+    end
+    if ~paramAuditResult.passed
+        failReasons{end+1} = sprintf('[param_audit] %s', paramAuditResult.issue);
+    end
+    if ~layoutAuditResult.passed
+        failReasons{end+1} = sprintf('[layout_audit] %s', layoutAuditResult.issue);
+    end
+
     % ===== Build result =====
     result = struct();
     result.status = 'ok';
@@ -304,6 +321,9 @@ function result = sl_model_complete(modelName, varargin)
     end
     result.gotoFromIssues = issuesResult.gotoFromIssues;
     result.orphanedBlocks = issuesResult.orphanedBlocks;
+    % [v11.8] sl_review_core audits
+    result.paramAudit = paramAuditResult;
+    result.layoutAudit = layoutAuditResult;
 
     if mustPassPassed
         result.canProceed = true;

@@ -7,7 +7,7 @@ function r = sl_check_signal_closure(fw)
         r.confidence = 0.8; return;
     end
     names = cell(1, length(fw.subsystems));
-    for i = 1:length(fw.subsystems), names{i} = fw.subsystems(i).name; end
+    for i = 1:length(fw.subsystems), names{i} = sl_safe_index(fw.subsystems, i).name; end
     issues = {};
     for i = 1:length(fw.signalFlow)
         if iscell(fw.signalFlow), sf = fw.signalFlow{i}; else sf = fw.signalFlow(i); end

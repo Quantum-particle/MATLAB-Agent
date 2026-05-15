@@ -22,7 +22,8 @@ function result = sl_micro_approve(subsystemName, varargin)
 
     % get microFramework (from param or workspace)
     if isempty(fieldnames(p.microFramework))
-        fw_var = ['uFW_' subsystemName];
+        ss_safe = strrep(strrep(subsystemName, '/', '__'), ' ', '_');
+        fw_var = ['uFW_' ss_safe];
         try
             mf = evalin('base', fw_var);
         catch
@@ -35,14 +36,15 @@ function result = sl_micro_approve(subsystemName, varargin)
     end
 
     % [P1-4 FIX] 统一命名: mfSnap_ → uFWSnap_, mfLock_ → uFWLock_, mfApprove_ → uFWApprovedAt_, mfModel_ → uFWModel_
-    assignin('base', ['uFWSnap_' subsystemName], mf);
+    % [Bug #20 FIX] Sanitize subsystemName: replace / and spaces with __ and _
+    ss_safe = strrep(strrep(subsystemName, '/', '__'), ' ', '_');
+    assignin('base', ['uFWSnap_' ss_safe], mf);
     if p.locked
-        assignin('base', ['uFWLock_' subsystemName], p.locked);
+        assignin('base', ['uFWLock_' ss_safe], p.locked);
     end
-    assignin('base', ['uFWApprovedAt_' subsystemName], sl_framework_utils('format_timestamp'));
+    assignin('base', ['uFWApprovedAt_' ss_safe], sl_framework_utils('format_timestamp'));
     if ~isempty(p.modelName)
-        model_safe = strrep(modelName, '/', '__');
-        assignin('base', ['uFWModel_' subsystemName], p.modelName);
+        assignin('base', ['uFWModel_' ss_safe], p.modelName);
     end
 
     result = struct('status', 'ok', 'subsystemName', subsystemName, ...

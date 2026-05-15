@@ -53,7 +53,8 @@ function result = sl_validate_model(modelName, varargin)
     allChecks = {'unconnected', 'dimensions', 'variables', 'compilation', ...
                  'algebraic_loop', 'sample_time', 'bus_mismatch', ...
                  'data_type_conflict', 'masked_blocks', 'model_ref', ...
-                 'config_issue', 'callback_issue'};
+                 'config_issue', 'callback_issue', ...
+                 'portPairing', 'paramAudit', 'connectionScan', 'layoutAudit'};  % [v11.8] via sl_review_core
     
     if ischar(checksRequested) && strcmpi(checksRequested, 'all')
         checksToRun = allChecks;
@@ -99,6 +100,15 @@ function result = sl_validate_model(modelName, varargin)
                 [status, msg, details] = check_config_issue(modelName);
             case 'callback_issue'
                 [status, msg, details] = check_callback_issue(modelName);
+            % [v11.8] Delegated to sl_review_core
+            case {'portpairing', 'portpairing_'}
+                [status, msg, details] = review_core_wrapper(modelName, 'portPairing');
+            case {'paramaudit', 'paramaudit_'}
+                [status, msg, details] = review_core_wrapper(modelName, 'paramAudit');
+            case {'connectionscan', 'connectionscan_'}
+                [status, msg, details] = review_core_wrapper(modelName, 'connectionScan');
+            case {'layoutaudit', 'layoutaudit_'}
+                [status, msg, details] = review_core_wrapper(modelName, 'layoutAudit');
             otherwise
                 status = 'warning';
                 msg = ['Unknown check: ' checkName];
@@ -106,12 +116,15 @@ function result = sl_validate_model(modelName, varargin)
         end
         
         % 将 details cell 转为 struct 数组（对 sl_jsonencode 更友好）
+        % [v11.8.3 Bug#10 FIX] Guard against non-cell details
         if isempty(details)
             detailStruct = struct();
-        elseif length(details) == 1
+        elseif iscell(details) && length(details) == 1
             detailStruct = details{1};
-        else
+        elseif iscell(details)
             detailStruct = details;
+        else
+            detailStruct = details;  % Already a non-cell type
         end
         
         checks(i).name = checkName;
@@ -254,6 +267,21 @@ end
 % ===== 检查4: 编译检查 =====
 function [status, msg, details] = check_compilation(modelName)
     details = {};
+    % [v11.8.3 Bug#15 FIX] Pre-check: if model has unconnected ports, skip compilation
+    % and return actionable diagnostic instead of cryptic MATLAB internal error.
+    try
+        issues = sl_get_model_issues(modelName);
+        if isfield(issues, 'unconnectedCount') && issues.unconnectedCount > 0
+            status = 'warning';
+            msg = sprintf(['Compilation skipped: %d unconnected port(s) must be ' ...
+                'resolved first. Run sl_get_model_issues(''%s'') for details.'], ...
+                issues.unconnectedCount, modelName);
+            return;
+        end
+    catch
+        % Pre-check failed gracefully -> fall through to compilation attempt
+    end
+    
     try
         % R2022b+ 使用 model 命令编译，R2016a 回退到 set_param
         try
@@ -269,13 +297,14 @@ function [status, msg, details] = check_compilation(modelName)
                 status = 'pass'; msg = 'Model compiles successfully';
             catch ME2
                 try set_param(modelName, 'SimulationCommand', 'term'); catch, end
-                details{end+1} = struct('error', ME2.message); %#ok<AGROW>
-                status = 'fail'; msg = 'Model compilation failed';
+                % [v11.8.3 Bug#15 FIX] Include actionable context in error
+                details{end+1} = struct('error', ['Model compilation failed: ' ME2.message]); %#ok<AGROW>
+                status = 'fail'; msg = ['Model compilation failed: ' ME2.message];
             end
         end
     catch ME
-        details{end+1} = struct('error', ME.message); %#ok<AGROW>
-        status = 'fail'; msg = 'Model compilation failed';
+        details{end+1} = struct('error', ['Model compilation failed: ' ME.message]); %#ok<AGROW>
+        status = 'fail'; msg = ['Model compilation failed: ' ME.message];
     end
 end
 
@@ -542,5 +571,30 @@ function errMsg = check_callback_syntax_safe(code)
     if mod(singleQuotes, 2) ~= 0
         errMsg = ['Odd number of single quotes: ' num2str(singleQuotes)];
         return;
+    end
+end
+
+% ===== [v11.8] sl_review_core 委托包装 =====
+function [status, msg, details] = review_core_wrapper(modelPath, action)
+    try
+        r = sl_review_core(modelPath, action);
+        if r.passed
+            status = 'pass';
+        else
+            status = 'fail';
+        end
+        msg = r.issue;
+        if isempty(msg)
+            msg = [action ' passed'];
+        end
+        if isfield(r, 'details')
+            details = r.details;
+        else
+            details = {};
+        end
+    catch ME
+        status = 'warning';
+        msg = ['Cannot run ' action ': ' ME.message];
+        details = {};
     end
 end

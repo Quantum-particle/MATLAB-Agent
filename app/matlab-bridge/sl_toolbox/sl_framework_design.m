@@ -73,6 +73,7 @@ function result = sl_framework_design(taskDescription, varargin)
     taskGuide = sl_framework_prompts('task_analysis_guide');
     flowPatterns = sl_framework_prompts('signal_flow_patterns');
     outputSchema = sl_framework_prompts('output_schema');
+    hierarchyGuidance = sl_framework_prompts('hierarchy_guidance');  % [v11.8]
 
     % ===== Step 2: Assemble context (existing framework if any) =====
     context = struct();
@@ -92,7 +93,8 @@ function result = sl_framework_design(taskDescription, varargin)
     result.outputSchema = outputSchema;
     result.context = context;
     result.nextExpectedAction = 'AI_AGENT_DESIGN';
-    result.version = 'v11.2';
+    result.version = 'v11.8';
+    result.hierarchyGuidance = {hierarchyGuidance};  % [v11.8] depth-aware hierarchy guidance
 
     % Write to workspace for review/approve chain compatibility
     try

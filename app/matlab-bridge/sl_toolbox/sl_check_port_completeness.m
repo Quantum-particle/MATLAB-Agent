@@ -23,7 +23,7 @@ function r = sl_check_port_completeness(fw)
     end
     issues = {};
     for i = 1:length(fw.subsystems)
-        subsys = fw.subsystems(i); fname = regexprep(subsys.name, '[^a-zA-Z0-9]', '_');
+        subsys = sl_safe_index(fw.subsystems, i); fname = regexprep(subsys.name, '[^a-zA-Z0-9]', '_');
         if isfield(subsys, 'outputs') && ~isempty(subsys.outputs) && ~isfield(usedOut, fname)
             issues{end+1} = sprintf('%s: outputs unused', subsys.name);
         end

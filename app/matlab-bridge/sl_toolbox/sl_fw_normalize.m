@@ -40,11 +40,57 @@ function fw = sl_fw_normalize(fw)
         
         if all(structMask(:))
             try
-                % Convert cell-of-struct → struct array
+                % [v11.8.3 Bug#16 FIX] Handle heterogeneous struct fields
+                % Collect ALL field names across all structs, fill missing with []
+                allFields = {};
+                for vi = 1:numel(val)
+                    allFields = union(allFields, fieldnames(val{vi}));
+                end
+                for vi = 1:numel(val)
+                    missing = setdiff(allFields, fieldnames(val{vi}));
+                    for mi = 1:length(missing)
+                        val{vi}.(missing{mi}) = [];
+                    end
+                end
+                % Convert cell-of-struct -> struct array
                 fw.(fn) = [val{:}];
-            catch
-                % Keep as cell if conversion fails (e.g., incompatible fields)
+                % [v11.8.2 Bug#3 FIX] Recursively normalize childSubsystems
+                for vi = 1:numel(fw.(fn))
+                    if isfield(fw.(fn)(vi), 'childSubsystems') && ~isempty(fw.(fn)(vi).childSubsystems)
+                        fw.(fn)(vi).childSubsystems = sl_fw_normalize_sub(fw.(fn)(vi).childSubsystems);
+                    end
+                end
+            catch ME
+                % [v11.8.2 Bug#3 FIX] 不再静默! 记录诊断信息
+                warning('sl_fw_normalize: 转换 %s 失败: %s。保留为 cell array。', fn, ME.message);
             end
         end
+    end
+end
+
+function arr = sl_fw_normalize_sub(val)
+    % Recursively normalize cell-of-struct to struct array for childSubsystems
+    if ~iscell(val) || isempty(val)
+        arr = val;
+        return;
+    end
+    structMask = false(size(val));
+    for vi = 1:numel(val)
+        structMask(vi) = isstruct(val{vi});
+    end
+    if all(structMask(:))
+        try
+            arr = [val{:}];
+            for vi = 1:numel(arr)
+                if isfield(arr(vi), 'childSubsystems') && ~isempty(arr(vi).childSubsystems)
+                    arr(vi).childSubsystems = sl_fw_normalize_sub(arr(vi).childSubsystems);
+                end
+            end
+        catch ME
+            warning('sl_fw_normalize_sub: 递归转换失败: %s。保留为 cell array。', ME.message);
+            arr = val;
+        end
+    else
+        arr = val;
     end
 end

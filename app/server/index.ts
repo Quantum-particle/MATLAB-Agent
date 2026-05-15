@@ -44,7 +44,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '5mb' }));
 
 // ============= [P0-5 FIX] CORS + API Key 认证 =============
 
@@ -218,16 +218,34 @@ app.post("/api/matlab/execute", async (req, res) => {
   }
 });
 
-// 运行 MATLAB 命令
-app.post("/api/matlab/command", async (req, res) => {
+// [v11.8.3] 请求用户授权执行原始 MATLAB 命令 (Gate_RAW_CMD)
+// AI 必须先调用此端点获取 cmdToken+challengePhrase，
+// 通过 AskUserQuestion 展示给用户，用户确认后才能调用 /api/matlab/command
+app.post("/api/matlab/command/request", async (req, res) => {
   const { command } = req.body;
+  
+  if (!command) {
+    return res.status(400).json({ error: "请提供命令预览 (command preview)" });
+  }
+  
+  try {
+    const result = await matlab.requestRawCommand(command);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// 运行 MATLAB 命令 — [v11.8.3] 需要 cmdToken (来自 /api/matlab/command/request)
+app.post("/api/matlab/command", async (req, res) => {
+  const { command, cmdToken } = req.body;
   
   if (!command) {
     return res.status(400).json({ error: "请提供 MATLAB 命令" });
   }
   
   try {
-    const result = await matlab.runMATLABCommand(command);
+    const result = await matlab.runMATLABCommand(command, cmdToken || '');
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });
@@ -605,6 +623,83 @@ app.post("/api/matlab/workspace/isolation/cleanup", async (req, res) => {
   try {
     const result = await matlab.cleanupAgentWorkspace(keepResults !== false, deepClean === true);
     res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: "error", message: error.message });
+  }
+});
+
+// ============= v11.8.2 (Bug#1): sl_toolbox 门控命令 — 通过 Bridge _handle_sl_command 触发 6 层 Gate =============
+// 🔴 ALL sl_* 命令必须通过此端点，以确保 Gate_S0 令牌机制 / Gate_2~5 门控生效
+// 与 /api/matlab/command 不同：/api/matlab/command 是裸执行（绕过门控），此端点是门控执行
+app.post("/api/matlab/sl/:command", async (req, res) => {
+  // Bug#21 FIX (2026-05-14): URL 参数无 sl_ 前缀 (e.g., /sl/scene_detect → 'scene_detect')
+  // 使用幂等前缀补全，兼容有无 sl_ 前缀两种 URL 格式
+  let command = req.params.command;
+  if (!command.startsWith('sl_')) {
+    command = 'sl_' + command;
+  }
+  const params = req.body || {};
+
+  // 命令白名单 (防御: 仅允许已知 sl_ 命令)
+  const ALLOWED_COMMANDS = [
+    // Gate & Scene
+    'sl_scene_detect', 'sl_scene_confirm',
+    // Framework (macro + micro)
+    'sl_framework_design', 'sl_framework_review', 'sl_framework_approve',
+    'sl_framework_modify', 'sl_framework_modify_approve', 'sl_framework_modify_reject',
+    'sl_framework_verify_built',
+    'sl_micro_design', 'sl_micro_review', 'sl_micro_approve',
+    'sl_model_design', 'sl_model_complete',
+    // Model lifecycle
+    'sl_model_create', 'sl_model_load', 'sl_model_understand',
+    // Building (safe + aliases)
+    'sl_add_block_safe', 'sl_add_block', 'sl_add_line_safe', 'sl_add_line',
+    'sl_set_param_safe', 'sl_set_param',
+    'sl_delete',
+    'sl_block_position', 'sl_auto_layout',
+    // Subsystem
+    'sl_subsystem_create', 'sl_subsystem_mask', 'sl_subsystem_expand',
+    // Bus & Signal
+    'sl_bus_create', 'sl_bus_inspect', 'sl_signal_config', 'sl_signal_logging',
+    // Config
+    'sl_config_get', 'sl_config_set', 'sl_callback_set',
+    // Validation
+    'sl_validate_model', 'sl_validate', 'sl_get_model_issues', 'sl_inspect',
+    'sl_check_port_completeness', 'sl_check_signal_closure',
+    'sl_review_core',
+    // Simulation
+    'sl_sim_run', 'sl_sim_batch', 'sl_sim_results', 'sl_baseline_test',
+    // Hierarchy & Build management
+    'sl_hierarchy_validate', 'sl_subsystem_tree',
+    'sl_build_status', 'sl_next_target',
+    // Utilities
+    'sl_find_blocks', 'sl_replace_block', 'sl_clear_top_lines',
+    'sl_snapshot', 'sl_snapshot_model', 'sl_model_status', 'sl_model_status_snapshot',
+    'sl_parse_error', 'sl_best_practices',
+    // Scene 2
+    'sl_model_load', 'sl_model_understand', 'sl_modify_plan',
+    'sl_modify_review', 'sl_modify_approve', 'sl_model_sandbox',
+    'sl_modify_verify_step', 'sl_s2mod_confirm',
+  ];
+
+  if (!ALLOWED_COMMANDS.includes(command)) {
+    return res.status(400).json({
+      status: 'error',
+      message: `未知的 sl_ 命令: ${command}`
+    });
+  }
+
+  try {
+    const result = await matlab.executeSlCommand(command, params);
+
+    if (result.status === 'gate_blocked') {
+      res.json(result);
+    } else if (result.status === 'error') {
+      const parsed = matlab.parseMATLABError(result.stdout || result.message || '');
+      res.json({ ...result, parsedError: parsed });
+    } else {
+      res.json(result);
+    }
   } catch (error: any) {
     res.status(500).json({ status: "error", message: error.message });
   }
@@ -1218,6 +1313,54 @@ app.post("/api/matlab/simulink/modify_verify_step", async (req, res) => {
   try {
     const { modelName, stepIndex, modifyPlan } = req.body;
     const result = await matlab.modifyVerifyStep(modelName, stepIndex, modifyPlan);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// v11.8: ===== Recursive Hierarchy Management APIs =====
+
+// POST /api/matlab/simulink/hierarchy_validate — 验证完整子系统层级树
+app.post("/api/matlab/simulink/hierarchy_validate", async (req, res) => {
+  try {
+    const { modelName } = req.body;
+    const result = await matlab.hierarchyValidate(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/subsystem_tree — 查询当前子树结构
+app.post("/api/matlab/simulink/subsystem_tree", async (req, res) => {
+  try {
+    const { modelName } = req.body;
+    const result = await matlab.subsystemTree(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// v11.8: ===== Recursive Workflow Builtin APIs =====
+
+// POST /api/matlab/simulink/build_status — 查询递归构建进度
+app.post("/api/matlab/simulink/build_status", async (req, res) => {
+  try {
+    const { modelName } = req.body;
+    const result = await matlab.buildStatus(modelName);
+    res.json(result);
+  } catch (error: any) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// POST /api/matlab/simulink/next_target — 获取下一个构建目标
+app.post("/api/matlab/simulink/next_target", async (req, res) => {
+  try {
+    const { modelName } = req.body;
+    const result = await matlab.nextTarget(modelName);
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ status: 'error', message: error.message });

@@ -22,9 +22,11 @@ function result = sl_micro_prompts(action, varargin)
             result = get_review_checklist();
         case 'block_mapping_guide'
             result = get_block_mapping_guide();
+        case 'depth_aware_prompt'
+            result = get_depth_aware_prompt(varargin{:});
         otherwise
             result = struct('status', 'error', ...
-                'message', sprintf('Unknown action: %s. Use: system_prompt, output_schema, review_checklist, block_mapping_guide', action));
+                'message', sprintf('Unknown action: %s. Use: system_prompt, output_schema, review_checklist, block_mapping_guide, depth_aware_prompt', action));
     end
 end
 
@@ -38,6 +40,18 @@ function prompt = get_system_prompt(subsystemName, taskDescription, parentContex
     end
     if nargin < 3
         parentContext = '';
+    end
+    
+    % [v11.8] Extract depth from parentContext if present
+    depth = 0;
+    depthInfo = '';
+    roleInfo = '';
+    blockInfo = '';
+    if isstruct(parentContext) && isfield(parentContext, 'depth')
+        depth = parentContext.depth;
+        depthInfo = sprintf('CURRENT NESTING LEVEL: %d', depth);
+        roleInfo = get_depth_role(depth);
+        blockInfo = get_depth_block_guidance(depth);
     end
 
     % Build parent context description
@@ -65,6 +79,13 @@ function prompt = get_system_prompt(subsystemName, taskDescription, parentContex
         'Task: ', taskDescription, ...
         '', ...
         parentInfo, ...
+        '', ...
+        depthInfo, ...
+        '', ...
+        'DEPTH-AWARE DESIGN GUIDANCE:', ...
+        roleInfo, ...
+        blockInfo, ...
+        '- Design with this level of abstraction in mind.', ...
         '', ...
         'CRITICAL INSTRUCTION:', ...
         'You have COMPLETE FREEDOM to design this subsystem. ', ...
@@ -145,4 +166,69 @@ function guide = get_block_mapping_guide()
     guide{14} = 'signal generation => Step, Sine Wave, Signal Generator, Constant';
     guide{15} = 'data export => To Workspace, Outport, or Signal Logging';
     guide{16} = 'IMPORTANT: You decide blocks based on YOUR derived equations. This guide is reference only.';
+end
+
+% ===== [v11.8 NEW] Depth-Aware Prompt =====
+function prompt = get_depth_aware_prompt(subsystemName, taskDescription, depth, parentContext)
+    if nargin < 1 || isempty(subsystemName)
+        subsystemName = '%SUBSYSTEM_NAME%';
+    end
+    if nargin < 2 || isempty(taskDescription)
+        taskDescription = '%TASK_DESCRIPTION%';
+    end
+    if nargin < 3
+        depth = 0;
+    end
+    if nargin < 4
+        parentContext = '';
+    end
+    
+    % Augment parentContext with depth info for get_system_prompt
+    ctx = parentContext;
+    if isstruct(ctx)
+        ctx.depth = depth;
+    elseif ischar(ctx) || isempty(ctx)
+        ctx = struct('depth', depth);
+    end
+    
+    prompt = get_system_prompt(subsystemName, taskDescription, ctx);
+end
+
+% ===== Depth Role Descriptions =====
+function role = get_depth_role(depth)
+    if depth == 0
+        role = '';
+        return;
+    end
+    switch depth
+        case 1
+            role = '- This subsystem is a TOP-LEVEL subsystem. Design its internal architecture with clear sub-component boundaries.';
+        case 2
+            role = '- This subsystem is a MID-LEVEL subsystem. Focus on the specific algorithm or physical process.';
+        case 3
+            role = '- This subsystem is a LEAF or near-leaf subsystem. Build it with basic Simulink blocks. No more nesting needed.';
+        case 4
+            role = '- This subsystem is a DEEP leaf subsystem. Near the absolute nesting limit.';
+        case 5
+            role = '- [RED] You are at the MAXIMUM ALLOWED DEPTH (5). This is an ABSOLUTE leaf subsystem.';
+        otherwise
+            role = sprintf('- This subsystem is at depth %d. Consider: can this be simplified?', depth);
+    end
+end
+
+% ===== Depth Block Guidance =====
+function guidance = get_depth_block_guidance(depth)
+    if depth == 0
+        guidance = '';
+        return;
+    end
+    if depth >= 5
+        guidance = '- [RED] Use ONLY basic Simulink blocks (Integrator, Gain, Sum, Product, etc.). Creating child subsystems here will be BLOCKED by Bridge. NO MORE NESTING IS POSSIBLE.';
+    elseif depth >= 3
+        guidance = '- Use only basic blocks (Integrator, Gain, Sum, Product, etc.). Do NOT create more subsystems.';
+    elseif depth == 2
+        guidance = '- You may create child subsystems if functionally justified, but prefer basic blocks.';
+    else
+        guidance = '- You may define child subsystems if needed for functional decomposition.';
+    end
 end

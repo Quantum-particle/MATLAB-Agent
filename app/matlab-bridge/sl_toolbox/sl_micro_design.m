@@ -60,6 +60,7 @@ function result = sl_micro_design(subsystemName, taskDescription, varargin)
     p.parentContext = struct();
     p.detailLevel = 'standard';
     p.modelName = '';
+    p.depth = 0;  % [v11.8] depth in subsystem hierarchy
 
     idx = 1;
     while idx <= length(varargin)
@@ -72,6 +73,8 @@ function result = sl_micro_design(subsystemName, taskDescription, varargin)
                 p.detailLevel = char(val);
             elseif strcmp(key, 'modelName') && (ischar(val) || isstring(val))
                 p.modelName = char(val);
+            elseif strcmp(key, 'depth') && isnumeric(val)
+                p.depth = val;  % [v11.8] depth-aware micro design
             end
             idx = idx + 2;
         else
@@ -80,6 +83,13 @@ function result = sl_micro_design(subsystemName, taskDescription, varargin)
     end
 
     % ===== Step 1: Load prompt templates from sl_micro_prompts =====
+    % [v11.8] Use depth-aware prompt when depth > 0
+    if p.depth > 0 && ~isempty(fieldnames(p.parentContext))
+        p.parentContext.depth = p.depth;
+    elseif p.depth > 0
+        p.parentContext = struct('depth', p.depth);
+    end
+    
     designPrompt = sl_micro_prompts('system_prompt', subsystemName, taskDescription, p.parentContext);
     blockMappingGuide = sl_micro_prompts('block_mapping_guide');
     outputSchema = sl_micro_prompts('output_schema');
@@ -110,7 +120,10 @@ function result = sl_micro_design(subsystemName, taskDescription, varargin)
     result.parentContext = p.parentContext;
     result.parentSummary = parentSummary;
     result.nextExpectedAction = 'AI_AGENT_DESIGN_MICRO';
-    result.version = 'v11.2';
+    result.version = 'v11.8';
+    % [v11.8] Depth-aware fields
+    result.depth = p.depth;
+    result.hierarchyGuidance = sl_framework_prompts('hierarchy_guidance');
 
     % Write to workspace for review/approve chain compatibility
     try

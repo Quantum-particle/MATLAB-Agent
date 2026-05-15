@@ -7624,3 +7624,34 @@ name 'ci' is not defined
 - Related Files: matlab_bridge.py
 
 ---
+
+## [ERR-20260514-sl_subsy] sl_subsystem_tree
+
+**Logged**: 2026-05-14T08:59:27.754062
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_subsystem_tree
+
+### Error
+```
+list indices must be integers or slices, not str
+```
+
+### Context
+- Command: sl_subsystem_tree
+- Params: {'modelName': 'Quadrotor_ADRC'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---

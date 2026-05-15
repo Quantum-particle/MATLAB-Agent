@@ -1,7 +1,7 @@
 # sl_toolbox API 使用说明书
 
-> **版本**: v19.0 (v11.5 Scene 2 已有模型修改工作流)  
-> **更新日期**: 2026-04-29  
+> **版本**: v20.1 (v11.8.1 Bug Fix)  
+> **更新日期**: 2026-05-10  
 > **适用范围**: 大模型通过 @skill://matlab-agent 调用 Simulink 建模函数时，**必须先阅读本手册**，防止语法错误  
 > **同步规则**: 任何 .m 函数的 API 签名或返回结构变更后，**必须同步更新本手册对应条目**
 
@@ -16,12 +16,13 @@ v11.2+ sl_framework_design/sl_micro_design 是纯 Prompt 组装器，AI 拥有�
 
 | 步骤 | 核心 API | 强制门控 |
 |------|---------|----------|
-| 0.5 框架 | sl_framework_design/review/approve | Gate_5: port/signal 检查 |
+| 0.5 框架 | sl_framework_design/review/approve | Gate_5: port/signal/depth 检查 |
+| 0.6 层级 | sl_hierarchy_validate/subsystem_tree/build_status/next_target | 🔴 depth≤5 硬限制 |
 | 1 准备 | sl_init, inspect, best_practices, create | — |
-| 2 构建 | add_block, add_line, set_param, bus_create... | Gate_2: 框架审批后 |
+| 2 构建 | add_block, add_line, set_param, bus_create... | Gate_2: 框架审批 + 层级感知 |
 | 3 配置 | config_get, config_set | — |
-| 4 验证 | validate, auto_layout, snapshot, model_status | Gate_4 check |
-| 5 仿真 | sl_sim_run, sl_sim_batch | Gate_4: sl_model_complete |
+| 4 验证 | validate, auto_layout, snapshot, model_status | Gate_4 check + 🔴 hierarchy 完整性 |
+| 5 仿真 | sl_sim_run, sl_sim_batch | Gate_4: sl_model_complete + hierarchy |
 
 ## API 弃用标注
 
@@ -387,6 +388,8 @@ result = sl_subsystem_create('MyModel', 'Controller', 'empty', 'inputPorts', 2, 
 - empty 模式下，先添加默认 Subsystem，删除默认连线，再添加指定数量端口
 - 反模式#6: 手动创建子系统时返回 warning，建议使用 createSubsystem
 
+> **🔴 外壳/内部原则 (v11.8.4)**: `sl_subsystem_create` 创建的子系统**必须是空壳**（仅 SubSystem 容器，不含内部块）。创建空壳可以批量执行。子系统内部结构（Inport/Outport、基础块、连线）**绝不通过批量方式创建**，必须独立走 `micro_design → micro_review → micro_approve → build` 完整 Gate 流程。此规则在 Python Bridge 中硬编码，AI 不可绕过。
+
 ---
 
 ## 9. 子系统 Mask
@@ -504,6 +507,8 @@ result = sl_add_block_safe('MyModel', 'simulink/Math Operations/Gain', 'destPath
 - **`params` 必须是 struct，不是 name-value pairs！**
   - ✅ `'params', struct('Gain', '2.5', 'Multiplication', 'Element-wise(K*u)')`
   - ❌ `'params', 'Gain', '2.5'`（错误！会被当成另一个 name-value 参数）
+
+> **🔴 外壳/内部原则 (v11.8.4)**: `sl_add_block_safe` 用于子系统**内部**块的逐个创建。**禁止**将 `sl_add_block_safe` 用于批量添加多个子系统的内部块——每个子系统必须独立完成 `micro_design → micro_review → micro_approve` 后才能调用 `sl_add_block_safe` 为其添加块。批量绕过审查流程将被 `Gate_SHELL_ONLY` 拦截。
 - `sourceBlock` 不含 `/` 时自动查 `sl_block_registry`，如 `'Gain'` → `'simulink/Math Operations/Gain'`
 - `destPath` 为空时自动生成为 `modelName/类型名`，如 `'MyModel/Gain'`
 - 反模式 #1: Sum 块会触发 warning，建议用 Add/Subtract
@@ -2427,18 +2432,24 @@ result = sl_framework_design(taskDescription, varargin)
 
 ---
 
-## 45. sl_framework_review — 大框架自检 (v11.0)
+## 45. sl_framework_review — 大框架自检 (v11.8.1)
 
-> **v11.0 新增** — AI 自检大框架，输出检查结果和建议
+> **v11.0 新增, v11.8.1 更新** — AI 自检大框架，输出检查结果和建议
 
 ### 功能
 
-对大框架设计进行 5 项自检：
+对大框架设计进行 11 项自检（v11.8.1: 5项原始 + 6项层级检查）：
 - **physics**: 物理方程是否正确
 - **signalFlow**: 信号流拓扑是否完备
 - **subsystem**: 子系统划分是否合理
 - **gotoFrom**: Goto/From 标签计划
-- **dimensionality**: 量纲一致性
+- **dimensionality**: 量纲一致性 (v11.8.1: 支持多源聚合)
+- **nestingDepth**: 🔴 嵌套深度 (≤5 硬限制)
+- **singleBlock**: 单模块子系统检测
+- **cohesion**: 功能内聚性
+- **crossLevelInterface**: 跨层级接口一致性
+- **treeCompleteness**: 树完整性
+- **leafSubsystems**: 叶子子系统非空
 
 ### 签名
 
@@ -2451,7 +2462,7 @@ result = sl_framework_review(macroFramework, varargin)
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | macroFramework | struct | 必填 | 大框架结构体（从 sl_framework_design 获取） |
-| checkItems | cell | 全部5项 | 要执行的检查项 |
+| checkItems | cell | 全部11项 | 要执行的检查项 |
 
 ### 返回结构
 
@@ -2461,11 +2472,17 @@ result = sl_framework_review(macroFramework, varargin)
   "reviewResult": {
     "passed": true,
     "checks": [
-      {"item": "physics", "passed": true, "confidence": 0.9, "issue": "", "suggestion": ""},
-      {"item": "signalFlow", "passed": true, "confidence": 0.95, "issue": "", "suggestion": ""},
-      {"item": "subsystem", "passed": true, "confidence": 0.8, "issue": "", "suggestion": ""},
-      {"item": "gotoFrom", "passed": true, "confidence": 1.0, "issue": "", "suggestion": ""},
-      {"item": "dimensionality", "passed": true, "confidence": 0.85, "issue": "", "suggestion": ""}
+      {"item": "physics", "passed": true, "confidence": 0.9},
+      {"item": "signalFlow", "passed": true, "confidence": 0.95},
+      {"item": "subsystem", "passed": true, "confidence": 0.8},
+      {"item": "gotoFrom", "passed": true, "confidence": 1.0},
+      {"item": "dimensionality", "passed": true, "confidence": 0.85},
+      {"item": "nestingDepth", "passed": true, "confidence": 0.95},
+      {"item": "singleBlockSubsystems", "passed": true, "confidence": 0.85},
+      {"item": "subsystemCohesion", "passed": true, "confidence": 0.8},
+      {"item": "crossLevelInterface", "passed": true, "confidence": 0.85},
+      {"item": "treeCompleteness", "passed": true, "confidence": 0.9},
+      {"item": "leafSubsystems", "passed": true, "confidence": 0.85}
     ],
     "overallConfidence": 0.88,
     "issues": [],
@@ -3366,3 +3383,104 @@ Scene 2 修改意图 Prompt 组装器。返回 AI 设计引导和输出规范。
 ---
 
 > **维护提醒**: 每次 .m 函数的 API 签名或返回结构变更后，**必须同步更新本手册对应条目**。这是大模型正确使用 sl_toolbox 的唯一参考依据！
+
+---
+
+## v11.8 新增: 全递归工作流 API
+
+### sl_hierarchy_validate
+
+**签名**: `sl_hierarchy_validate(modelName)`
+
+**用途**: 递归验证全部子系统层级树（端口匹配 + 设计完成 + 深度不超限）
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 顶层模型名 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| status | char | 'ok' / 'error' |
+| passed | logical | 全部通过 |
+| treeStatus | cell of struct | `[{path, depth, exists, portsMatch, designComplete}]` |
+| maxDepth | double | 实际最大深度 |
+| nodeCount | double | 节点总数 |
+| issues | cell of struct | `[{path, issue}]` |
+
+**门控**: 无需 (只读)
+
+---
+
+### sl_subsystem_tree
+
+**签名**: `sl_subsystem_tree(modelName)`
+
+**用途**: 从 MATLAB workspace 查询当前子系统树结构
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 顶层模型名 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| status | char | 'ok' / 'error' |
+| tree | struct | 嵌套子系统树 (children 递归) |
+| flatList | cell of struct | `[{path, depth, parent, status, inputs, outputs}]` |
+| maxDepth | double | 最大深度 |
+| nodeCount | double | 节点总数 |
+
+**门控**: 无需 (只读)
+
+---
+
+### sl_build_status
+
+**签名**: `sl_build_status(modelName)` — Bridge 内置命令
+
+**用途**: 查询当前递归构建进度
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| modelName | char | 顶层模型名 |
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| status | char | 'ok' |
+| buildProgress | char | '3/14' 格式 |
+| totalSubsystems | double | 总子系统数 |
+| buildOrder | cell | 构建顺序列表 |
+| nextBuildTarget | struct | 下一个目标 {path, depth, name} |
+| allComplete | logical | 全部完成？ |
+| incompleteSubsystems | cell | 未完成的路径列表 |
+
+**REST**: `POST /api/matlab/simulink/build_status`
+
+---
+
+### sl_next_target
+
+**签名**: `sl_next_target(modelName)` — Bridge 内置命令
+
+**用途**: 获取下一个应构建的子系统
+
+| 返回字段 | 类型 | 说明 |
+|---------|------|------|
+| nextBuildTarget | struct | `{path, depth, name, status}` |
+| buildProgress | char | 进度字符串 |
+| allComplete | logical | 全部完成？ |
+| failedSubsystems | cell | (如有) 失败的子系统列表 |
+
+**REST**: `POST /api/matlab/simulink/next_target`
+
+---
+
+## v11.8 深度限制规则
+
+| 深度 | 角色 | 说明 |
+|------|------|------|
+| 1 | 顶层子系统 | 可含子子系统 |
+| 2 | 中间层 | 偏好基础模块 |
+| 3 | 近叶层 | 仅基础模块 |
+| 4 | 深叶层 | 谨慎嵌套 |
+| 5 | 🔴 绝对限制 | 仅基础模块，禁止创建子子系统 |
+| >5 | 🔴 禁止 | Gate_3 硬拦截 |

@@ -92,7 +92,7 @@ function result = sl_framework_modify(modelName, action, varargin)
                     result = struct('status', 'error', 'message', sprintf('renameSubsystem: subsystem "%s" not found', oldNameVal));
                     return;
                 end
-                fw.subsystems(idx).name = newNameVal;
+                subSys = sl_safe_index(fw.subsystems, idx); subSys.name = newNameVal; if iscell(fw.subsystems); fw.subsystems{idx} = subSys; else; fw.subsystems(idx) = subSys; end
                 assignin('base', fw_var, fw);
                 result = struct('status', 'ok', 'action', action, 'modelName', modelName, 'skipDesign', true);
             otherwise
@@ -308,7 +308,7 @@ function modResult = do_remove_subsystem(fw, p)
     end
 
     % Remove the subsystem
-    removedSub = fw.subsystems(idx);
+    removedSub = sl_safe_index(fw.subsystems, idx);
     fw.subsystems(idx) = [];
 
     % [P1-1 FIX] Remove signalFlow entries referencing this subsystem
@@ -474,7 +474,7 @@ function modResult = do_rename_subsystem(fw, p)
         return;
     end
 
-    fw.subsystems(idx).name = newName;
+    subSys = sl_safe_index(fw.subsystems, idx); subSys.name = newName; if iscell(fw.subsystems); fw.subsystems{idx} = subSys; else; fw.subsystems(idx) = subSys; end
 
     % [P1-2 FIX] Update signalFlow references - after normalize, only use struct array path
     if isfield(fw, 'signalFlow') && ~isempty(fw.signalFlow)
