@@ -1,8 +1,8 @@
-# MATLAB-Agent v11.8.1
+# MATLAB-Agent v11.9
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
-  跨平台 · 跨 Agent 框架 · 6 层硬编码门控 · 71 个 MATLAB 函数 · 50+ REST API<br>
+  跨平台 · 跨 Agent 框架 · 8 层硬编码门控 · 72 个 MATLAB 函数 · 50+ REST API<br>
   支持 WorkBuddy / Claude Code / Codex / Cursor / Cline / Augment 及所有兼容 MCP/REST 的 AI 工具
 </p>
 
@@ -58,9 +58,9 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 │  │  │ 核心层    │ │ 场景层   │ │ 参考层   │                       ││
 │  │  │ (始终加载)│ │ (按需加载)│ │ (查询加载)│                       ││
 │  │  │ API索引  │ │ 建模场景 │ │ 完整注册表│                       ││
-│  │  │ 反模式10条│ │ 仿真场景 │ │ 详细API  │                       ││
-│  │  │ 工作流6步 │ │ 测试场景 │ │ 踩坑经验 │                       ││
-│  │  │ 6层Gate  │ │ 修改场景 │ │ 版本兼容 │                       ││
+│  │  │ 反模式12条│ │ 仿真场景 │ │ 详细API  │                       ││
+│  │  │ 工作流10步│ │ 测试场景 │ │ 踩坑经验 │                       ││
+│  │  │ 8层Gate  │ │ 修改场景 │ │ 版本兼容 │                       ││
 │  │  └──────────┘ └──────────┘ └──────────┘                       ││
 │  ├─────────────────────────────────────────────────────────────────┤│
 │  │ 优先: 调用 Simulink 中间件 API（结构化参数+结构化反馈）         ││
@@ -84,10 +84,11 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 └────────────────────────────────┬────────────────────────────────────┘
                                  │ JSON 行协议 (stdin/stdout)
 ┌────────────────────────────────▼────────────────────────────────────┐
-│              Python Bridge (matlab_bridge.py, ~8700 行)              │
+│              Python Bridge (matlab_bridge.py, ~10,300 行)              │
 │  ┌─────────────────────────────────────────────────────────────────┐│
-│  │  50+ 命令处理器 + 6 层硬编码 Gate + 反模式防护 + 版本检测       ││
+│  │  50+ 命令处理器 + 8 层硬编码 Gate + 反模式防护 + 版本检测       ││
 │  │  Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR      ││
+│  │  Gate_SHELL_ONLY / Gate_CONNECTIVITY / Gate_REVIEW_BUILD         ││
 │  │  每个命令 → 调用对应 sl_*.m 工具函数 → 返回结构化 JSON          ││
 │  └─────────────────────────────────────────────────────────────────┘│
 └────────────────────────────────┬────────────────────────────────────┘
@@ -95,7 +96,7 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 ┌────────────────────────────────▼────────────────────────────────────┐
 │                   MATLAB Engine / CLI 回退                           │
 │  ┌─────────────────────────────────────────────────────────────────┐│
-│  │  sl_toolbox/ (68 个 .m 函数)                                   ││
+│  │  sl_toolbox/ (72 个 .m 函数)                                   ││
 │  │  ┌──────────────┬──────────────┬──────────────┐                ││
 │  │  │ 框架设计 (10) │ 子系统 (5)   │ 门控验证 (5) │                ││
 │  │  │ 模型编辑 (8)  │ 信号总线 (4) │ 仿真控制 (4) │                ││
@@ -119,7 +120,7 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 
 ---
 
-## 🔒 6 层硬编码 Gate 门控系统
+## 🔒 8 层硬编码 Gate 门控系统
 
 门控系统是 MATLAB-Agent 最核心的安全保障机制。所有 Gate 硬编码在 Python Bridge 层（非 LLM 提示词），AI **不可绕过**。
 
@@ -127,10 +128,13 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 |------|--------|------|----------|
 | **Gate_S0** 🔴 | 所有 Simulink 操作 | 令牌门控 — 场景未确认拦截一切 | `sl_scene_detect` → 用户确认 → `sl_scene_confirm` |
 | **PROJECT_DIR** | `run_code` / `create_simulink` | 工作区未初始化阻止一切 | `setup_workspace.py` |
+| **Gate_RAW_CMD** 🔴 | `run_code` / `/api/matlab/command` | 原始命令二选一门控 | 令牌请求 → 用户确认 |
 | **Gate_2** | `add_block` / `add_line` | 框架未审批禁止搭建 | `sl_framework_design → review → approve` |
 | **Gate_3** | `subsystem_create` / 结构修改 | 框架锁定后修改需审批 | `sl_framework_modify → approve` |
 | **Gate_4** | `sl_sim_run` | 模型未完成禁止仿真 | `sl_model_complete('complete')` |
 | **Gate_5** | `sl_framework_approve` 入口 | 检查端口完备性+信号闭环 | checkItems 全部 pass |
+| **Gate_SHELL_ONLY** | `add_block`/`add_line`/`set_param` | 子系统内部禁止批量操作 | `micro_design → review → approve` 逐个 |
+| **Gate_CONNECTIVITY** | `add_block` | 连续添加超阈值拦截，强制连线 | `add_line` 连接已有块 |
 
 ### Gate 设计理念
 
@@ -143,7 +147,7 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 
 ## 🔄 Simulink 建模工作流
 
-### 完整建模流程（6 Phase）
+### 完整建模流程（Phase -1 至 Phase 6）
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
@@ -153,14 +157,16 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 │   → 用户确认 → sl_scene_confirm(scene, modelName, token)           │
 │   场景未确认前，所有 Simulink 操作被 Gate_S0 拦截                   │
 ├────────────────────────────────────────────────────────────────────┤
-│ Phase 0: 审视                                                      │
+│ Phase 0: 模型创建 (Scene 1) / 模型加载 (Scene 2)                   │
+│   sl_model_create(modelName) — Scene 1 创建空 .slx（强制执行）     │
+│   sl_model_load(modelName) — Scene 2 加载已有模型                   │
+├────────────────────────────────────────────────────────────────────┤
+│ Phase 0.5: 审视                                                    │
 │   sl_inspect(modelName) + sl_get_model_issues(modelName)            │
-│   每次操作前检查，永远不盲写                                        │
 ├────────────────────────────────────────────────────────────────────┤
 │ Phase 1: 大框架设计                                                 │
 │   sl_framework_design(taskDescription) → designPrompt               │
 │   AI 从第一性原理自主设计子系统架构 + signalFlow + physicsEquations │
-│   **不存在预定义模板，AI 拥有完全设计自由度**                       │
 ├────────────────────────────────────────────────────────────────────┤
 │ Phase 2: 审查审批                                                   │
 │   sl_framework_review(macroFramework) → 11 项自检                   │
@@ -168,24 +174,21 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 ├────────────────────────────────────────────────────────────────────┤
 │ Phase 3: 子系统迭代                                                 │
 │   for each 子系统:                                                  │
-│     sl_micro_design(subsys, task, parentContext) → designPrompt     │
-│     AI 自主设计内部架构 → sl_micro_review → sl_micro_approve        │
-│   Gate_2 在框架审批后才放行搭建操作                                 │
+│     sl_micro_design(subsys, task, parentContext, 'depth', N)        │
+│     → sl_micro_review → sl_micro_approve (Gate_SHELL_ONLY)          │
 ├────────────────────────────────────────────────────────────────────┤
-│ Phase 4: 搭建                                                      │
+│ Phase 4: 骨架构建                                                   │
+│   sl_subsystem_create('empty', inputPorts=N, outputPorts=M)         │
+│   批量创建外壳+Inport/Outport（容器可批量，内部禁止批量）            │
+├────────────────────────────────────────────────────────────────────┤
+│ Phase 5: 递归构建 (Gate_SHELL_ONLY + Gate_CONNECTIVITY)             │
 │   sl_add_block_safe / sl_add_line_safe / sl_set_param_safe          │
-│   每步自动注入 _verification（block_exists / ports_connected）      │
-│   每 3 次 add_block 自动 arrangeSystem(FullLayout=true)             │
+│   每 5 次 add_block 强制 auto_layout；每步自动注入 _verification    │
 ├────────────────────────────────────────────────────────────────────┤
-│ Phase 5: 完成门控 (Gate_4)                                          │
+│ Phase 6: 完成门控 + 仿真                                            │
 │   sl_model_complete(modelName, 'action', 'complete')                │
-│   → 强制 auto-layout + 12 项验证                                   │
-│   → unconnected=0 / GotoFrom 成对 / 无 orphaned                     │
-│   → canProceed=true 才解锁                                          │
-├────────────────────────────────────────────────────────────────────┤
-│ Phase 6: 仿真 & 测试                                                │
-│   sl_sim_run / sl_sim_batch → Gate_4 前置检查                       │
-│   sl_sim_results / sl_baseline_test                                 │
+│   → Gate_4: 12 项验证 + connectionScan + paramAudit                │
+│   → sl_sim_run / sl_sim_batch                                       │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -372,8 +375,8 @@ matlab-agent/
 │   │   ├── system-prompts.ts           # AI 系统提示词 + 门控规则 (~1154 行)
 │   │   └── db.ts                       # SQLite 数据库管理
 │   ├── matlab-bridge/
-│   │   ├── matlab_bridge.py            # Python-MATLAB 桥接核心 (~8714 行)
-│   │   └── sl_toolbox/                 # MATLAB 工具箱（68 个 .m 函数）
+│   │   ├── matlab_bridge.py            # Python-MATLAB 桥接核心 (~10,322 行)
+│   │   └── sl_toolbox/                 # MATLAB 工具箱（72 个 .m 函数）
 │   │       ├── sl_framework_*.m        # 框架设计/审查/审批/修改 (10 个)
 │   │       ├── sl_micro_*.m            # 子系统设计/审查/审批/提示词 (5 个)
 │   │       ├── sl_model_complete.m     # 模型完成门控 (Gate_4)
@@ -393,7 +396,7 @@ matlab-agent/
 │   ├── package.json                    # Node.js 依赖配置
 │   └── src/                            # React 18 + TDesign + Vite 前端
 └── references/                         # 参考文档
-    ├── sl_toolbox_api_guide.md         # 🔴 68 个 API 完整签名文档 (v19.0)
+    ├── sl_toolbox_api_guide.md         # 🔴 72 个 API 完整签名文档 (v21.0)
     ├── pitfalls.md                     # 踩坑经验详录 (33 条)
     ├── pitfall-database.md             # 结构化踩坑数据库
     ├── block-param-registry.md         # 模块参数类型注册表
@@ -404,8 +407,8 @@ matlab-agent/
 
 | 组件 | 规模 |
 |------|------|
-| `matlab_bridge.py` | ~8,714 行 Python |
-| `sl_toolbox/*.m` | 68 个 MATLAB 函数 |
+| `matlab_bridge.py` | ~10,322 行 Python |
+| `sl_toolbox/*.m` | 72 个 MATLAB 函数 |
 | `index.ts` | ~1,900 行 TypeScript |
 | `matlab-controller.ts` | ~1,635 行 TypeScript |
 | `system-prompts.ts` | ~1,154 行 TypeScript |
@@ -430,12 +433,12 @@ matlab-agent/
 
 | 特性 | 说明 |
 |------|------|
-| **6 层硬编码 Gate** | Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR，全部在 Python Bridge 层硬编码 |
+| **8 层硬编码 Gate** | Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR / Gate_SHELL_ONLY / Gate_CONNECTIVITY，全部在 Python Bridge 层硬编码 |
 | **AI 完全设计自由度** | `sl_framework_design` / `sl_micro_design` 是纯 Prompt 组装器，无预定义模板 |
 | **双场景工作流** | Scene 1: 从零建模 + Scene 2: 已有模型沙盒隔离修改 |
 | **反模式主动防护** | 10 大禁止规则嵌入 .m 函数，违反时返回 warning + 替代方案 |
 | **每次操作自动验证** | 每次 `add_block`/`add_line`/`set_param` 自动注入 `_verification` 字段 |
-| **自动排版** | 每 3 次 add 自动触发 `arrangeSystem(FullLayout=true)` |
+| **自动排版** | 每 5 次 add 自动触发 `arrangeSystem(FullLayout=true)`；model_complete 时强制排版 |
 | **diary 输出捕获** | `diary()` + `eng.eval()` 替代 `evalc()`，彻底解决引号转义和中文路径乱码 |
 | **常驻 Python 桥接** | Node.js ↔ Python ↔ MATLAB Engine，stdin/stdout JSON 行协议通信 |
 | **一键启动** | `bash app/ensure-running.sh`，自动端口清理 + 引擎预热 |
@@ -492,6 +495,11 @@ matlab-agent/
 
 | 版本 | 日期 | 核心改动 |
 |------|------|---------|
+| **v12** | 2026-05-15 | [计划中] Gate_CONTENT_DEPTH (Rigor Score) + 参数标准化 + Gate 体系加固 |
+| v11.9 | 2026-05-14 | Phase 0-6 工作流 + Gate_SHELL_ONLY + Gate_REVIEW_BUILD + 5 个新 .m 文件 |
+| v11.8.3 | 2026-05-12 | REST sl_* 门控路由 + Cell/Struct 安全索引 + 中文路径编码 (7 修复) |
+| v11.8.1 | 2026-05-10 | Bug 修复: compute_tree_depth + dimensionality + REST string/char |
+| v11.8 | 2026-05-09 | 递归层级系统: sl_subsystem_tree + sl_hierarchy_validate + build_order |
 | v11.6.8 | 2026-05-07 | Bug Fix: struct 格式统一 + Gate 修复 + 中文路径编码 (10 个修复) |
 | v11.6.7 | 2026-05-06 | Scene 1 端到端评估 + 令牌优化 + 孤儿线清理 |
 | v11.6.6 | 2026-05-06 | 沙盒孤儿线扫描+删除 (force-clear outport auto-connect) |

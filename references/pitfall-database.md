@@ -182,3 +182,55 @@
 - **修复**: _get_next_build_target 跳过 failed 节点，汇总 failedSubsystems 列表
 - **教训**: 递归构建需要容错机制，失败不应阻塞同级其他子系统
 
+---
+
+## 2026-05-15 — v12 审查新增
+
+### PF-034: `check_physics` 空壳 — 不验证方程内容
+- **严重度**: P0
+- **领域**: framework-review, gate-5
+- **现象**: `sl_framework_review` 的 physics 检查只验证子系统是否有 inputs/outputs，不检查 physicsEquations
+- **根因**: `check_physics` 函数 (sl_framework_review.m:162-183) 实现与函数名不符
+- **修复**: 升级为检查 physicsEquations 存在性、非空、变量自洽性
+- **教训**: 验证函数名与实际功能必须一致，不能以"结构检查"冒充"内容检查"
+
+### PF-035: `micro_approve` 橡皮图章 — 不检查 review 结果
+- **严重度**: P0
+- **领域**: micro-approve, gate-skip
+- **现象**: review 失败后仍可 approve
+- **根因**: `sl_micro_approve.m` 只做写入，缺少前置条件检查
+- **修复**: approve 前强制检查 review 状态
+- **教训**: approve 类操作必须有前置守卫
+
+### PF-036: 硬编码参数值 — 无变量引用机制
+- **严重度**: P0
+- **领域**: parameter, standardization
+- **现象**: Constant/Gain 块使用硬编码数值，无法追踪和批量修改
+- **根因**: 无参数标准化基础设施
+- **修复**: 新增 `sl_param_registry.m`，扩展 `check_param_audit` 检测硬编码值
+- **教训**: 系统工程的基础是参数管理
+
+### PF-037: Gate_S0 workspace 变量可伪造
+- **严重度**: P0
+- **领域**: gate-s0, security
+- **现象**: AI 可通过 evalin 直接设置 mS0SceneLocked_ 绕过场景确认
+- **根因**: 场景锁依赖 workspace 变量而非 Bridge 内部签名
+- **修复**: 改用 HMAC 签名令牌
+- **教训**: 安全令牌不应存储在 AI 可写的命名空间
+
+### PF-038: `run_code` 可绕过全部 Gate
+- **严重度**: P0
+- **领域**: gate-raw-cmd, security
+- **现象**: /api/matlab/command 可执行 add_block/add_line/set_param，绕过所有 Gate
+- **根因**: 代码注释 "Does NOT block execution — escape hatch"
+- **修复**: Gate_RAW_CMD 级别拦截建模关键字
+- **教训**: escape hatch 与安全机制不可共存
+
+### PF-039: `add_line_safe` 验证假阳性
+- **严重度**: P1
+- **领域**: add-line, verification
+- **现象**: catch 分支默认 connected=true，只检查 src 不检查 dst
+- **根因**: sl_add_line_safe.m:271-289 验证逻辑不严谨
+- **修复**: catch 设为 false + 增加 dst 端口验证
+- **教训**: 验证失败的默认行为应该是"不信任"而非"信任"
+

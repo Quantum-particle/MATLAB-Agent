@@ -137,3 +137,61 @@ lines = find_system(mn, 'SearchDepth', 1, 'FindAll', 'on', 'type', 'line');
 
 > **详细版本**: 见 SKILL.md (已精简) 或 git 历史
 > **结构版本**: `references/pitfall-database.md` (含 Pattern-Key + 出现次数)
+
+---
+
+## v11.9+ 新增反模式
+
+### P-34: check_physics 不验证方程内容 — 空壳通过审查
+
+`sl_framework_review.m` 的 `check_physics` 函数只检查子系统是否有 inputs/outputs 字段，**完全不检查** `physicsEquations` 是否存在或内容是否正确。AI 可以不提供任何物理方程而通过物理检查。
+
+**触发**: AI 调用 `sl_framework_review`，但 macroFramework 中没有 physicsEquations
+
+**结果**: `check_physics` 返回 `passed=true, confidence=0.9`
+
+**正确做法**: 升级 `check_physics` 检查 physicsEquations 存在性、非空、变量自洽性
+
+### P-35: micro_approve 不检查 review 结果 — 橡皮图章
+
+`sl_micro_approve.m` 只做写入操作，**不检查** `sl_micro_review` 是否通过。AI 可以在 review 失败后直接 approve。
+
+**触发**: AI 跳过 review 或 review 失败后直接调 micro_approve
+
+**结果**: `sl_micro_approve` 返回 `status='ok'` 无论 review 是否通过
+
+**正确做法**: approve 前强制检查 review 已调用且 `passed=true`
+
+### P-36: 硬编码参数值 — 无变量引用检查
+
+Constant/Gain 块可以使用硬编码数值（如 `'9.81'`）而非 MATLAB workspace 变量（如 `'g_accel'`）。`check_param_audit` 只检查参数是否为空，不检测硬编码 vs 变量引用。
+
+**触发**: AI 调用 `set_param(gainBlock, 'Gain', '1.5')`
+
+**结果**: 模型参数无法追踪、无法批量修改、不符合系统工程规范
+
+**正确做法**: 使用 workspace 变量引用，参数统一在 `sl_param_registry` 中管理
+
+### P-37: Gate_S0 workspace 变量可被伪造
+
+场景锁依赖 `mS0SceneLocked_` workspace 变量。AI 可通过 `run_code` 执行 `evalin('base', 'mS0SceneLocked_=1')` 绕过用户确认。
+
+**触发**: AI 直接操作 workspace 变量
+
+**正确做法**: Gate_S0 使用 Bridge 内部 HMAC 签名令牌
+
+### P-38: run_code 可绕过所有 Gate
+
+`run_code` 函数（`/api/matlab/command`）注释明确声明 "Does NOT block execution — escape hatch"。除 `sim()` 外，所有 Simulink 结构操作（add_block, add_line, set_param）都可通过此路径绕过全部门控。
+
+**触发**: AI 通过 `/api/matlab/command` 发送 add_block('simulink/...') 命令
+
+**正确做法**: Gate_RAW_CMD 级别拦截所有建模关键字
+
+### P-39: add_line_safe 验证假阳性
+
+catch 分支中 `verification.srcPortConnected = true` — 如果验证因错误失败，默认认为成功。且只检查 src 端口，不检查 dst 端口。
+
+**触发**: `sl_add_line_safe` 验证阶段抛出异常
+
+**正确做法**: catch 分支设为 false，同时验证 dst 端口
