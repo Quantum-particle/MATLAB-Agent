@@ -2,9 +2,9 @@
 
 > **AI 是设计师，不是代码生成器。** Agent 提供底层门控和 API，但 Simulink 建模的子系统划分、信号流、方程离散化完全由 AI 自主完成。
 >
-> **架构**: `bash` → Python Bridge (--tcp-server) ←TCP→ Node.js Server → REST API。Bridge 独立运行，MATLAB Engine 持久化。6 层 Gate（Python 硬编码）保护每一步正确性，不限制设计空间。
+> **架构**: `bash` → Python Bridge (--tcp-server) ←TCP→ Node.js Server → REST API。Bridge 独立运行，MATLAB Engine 持久化。15 层 Gate（Python 硬编码）保护每一步正确性，不限制设计空间。
 >
-> **🔴 调用规则 (v11.8.3)**: `sl_*` 命令必须通过 `POST /api/matlab/sl/:command` 调用（触发 6 层 Gate）；`POST /api/matlab/command` 需要用户手动授权（Gate_RAW_CMD 令牌门控），AI 不可自行绕过。
+> **🔴 调用规则 (v30)**: `sl_*` 命令必须通过 `POST /api/matlab/sl/:command` 调用（触发 15 层 Gate）；`POST /api/matlab/command` 需要用户手动授权（Gate_RAW_CMD 令牌门控），AI 不可自行绕过。
 >
 > **🔴 外壳/内部原则 (v18.3)**: 子系统**空壳**（`sl_subsystem_create` 创建的空 SubSystem 块 + **Inport/Outport 端口块**）分为两级创建：**(1) 顶层外壳（depth=1）** 在 `framework_approve` 时批量创建（仅容器骨架，不含任何内部块）。**(2) 子外壳（depth≥2）** 在首次 `sl_micro_design` 时**懒创建**——当父子系统被设计时才创建其孩子外壳。**禁止批量创建全部深度外壳再逐个填充**。子系统**内部功能块**（Gain/Integrator/Sum/Constant 等）和**连线** **绝对不能批量**——必须通过 `micro_design → micro_review → micro_approve → build → sl_model_complete` 逐个完成。此规则硬编码在 Python Bridge（`Gate_SHELL_ONLY` + `_batch_create_all_shells(max_depth=1)` + `_create_child_shells_for_subsystem`）和 `sl_model_complete.m` 中，AI 不可绕过。
 >
@@ -208,17 +208,28 @@ Step A: ensure-running.sh (TCP Bridge + Node.js) → Step B: setup_workspace.py 
               └─────────────────────────────────┘
 ```
 
-### 3.1 7 层 Gate（Python bridge 硬编码）
+### 3.1 15 层 Gate（Python bridge 硬编码）
 
 | Gate | 触发点 | 作用 | 解锁 |
 |------|--------|------|------|
 | **Gate_S0** 🔴 | 所有 Simulink 操作 | **令牌门控**: 场景未确认→拦截一切 | `sl_scene_detect` → `AskUserQuestion`(用户点击) → `sl_scene_confirm(令牌)` |
 | **PROJECT_DIR** | `run_code` / `create_simulink` | 未 setup 阻止一切 | `setup_workspace.py` |
-| **Gate_RAW_CMD** 🔴 | `run_code` / `/api/matlab/command` | **原始命令二选一门控**: AI 不可直接执行 MATLAB | `cmd_request` → `AskUserQuestion`(二选一: 同意原始命令 / 用标准流程) → `POST /api/matlab/command`(含令牌) |
+| **Gate_1** | `sl_framework_approve` 入口 | 大框架审批前检查 | `sl_framework_design → review → approve` |
 | **Gate_2** | `add_block` / `add_line` | 框架未审批禁止搭建 | `sl_framework_design → review → approve` |
 | **Gate_3** | `subsystem_create` / 结构修改 | 框架锁定后修改需审批 | `sl_framework_modify → approve` |
 | **Gate_4** | `sl_sim_run` | 模型未完成禁止仿真 | `sl_model_complete('complete')` |
 | **Gate_5** | `sl_framework_approve` 入口 | 检查端口完备性+信号闭环 | checkItems 全部 pass |
+| **Gate_RAW_CMD** 🔴 | `run_code` / `/api/matlab/command` | **原始命令二选一门控**: AI 不可直接执行 MATLAB | `cmd_request` → `AskUserQuestion`(二选一: 同意原始命令 / 用标准流程) → `POST /api/matlab/command`(含令牌) |
+| **Gate_MODEL_EXISTS** 🆕 | 所有写操作 (Scene 1) | Phase 0 强制: .slx 不存在→拦截一切 | `sl_model_create` / `sl_model_load` |
+| **Gate_FRAMEWORK_SEQUENCE** 🆕 | `sl_framework_approve` | 大框架 approve 前强制 review | review 已通过 |
+| **Gate_APPROVE_NO_REVIEW** 🆕 | `sl_micro_approve` | 小框架 approve 前强制 review | review 已通过 + rigor >= 0.65 |
+| **Gate_SHELL_ONLY** | `add_block` / `add_line` | 仅 micro_approved 的子系统可构建 | `sl_micro_approve` |
+| **Gate_CONNECTIVITY** | `sl_add_block` | 连通性强制 (分阶段阈值) | building=15, default=5 |
+| **Gate_SUBSYSTEM_CLOSURE** 🆕 | `add_block/add_line` | 前一子系统未 complete→拦截下一个 | `sl_model_complete(subPath)` |
+| **Gate_MICRO_DESIGN_CLOSURE** 🆕 | `sl_micro_design` | 前一子系统未 complete→拦截下一个设计 | `sl_model_complete(subPath)` |
+| **Gate_REVIEW_BUILD** 🆕 | `sl_model_complete` | build 前强制 connectionScan | micro_approve 已通过 |
+| **Gate_RETRY** 🆕 | `sl_retry_plan` | 重试状态机 (10轮上限 + 断路器) | 3次同错误→升级 design_suspect |
+| **Gate_DELETE_APPROVAL** 🆕 | `sl_delete_block` | 子系统级删除需用户审批 | approvalToken 令牌确认 |
 
 **Gate_S0 令牌机制**: `sl_scene_detect` 返回随机 `confirmationToken`，AI 必须用 `AskUserQuestion` 呈现给用户，用户在可点击选项中确认后，AI 用令牌调用 `sl_scene_confirm`。跳过用户交互 → `TOKEN_MISMATCH` → `gate_blocked`。令牌一次性，用过即失效。
 
@@ -271,7 +282,7 @@ Step A: ensure-running.sh (TCP Bridge + Node.js) → Step B: setup_workspace.py 
 
 ## 第四层：API & 约束速查
 
-### 核心 API（56 函数，完整签名见 `references/sl_toolbox_api_guide.md`）
+### 核心 API（80 函数，完整签名见 `references/sl_toolbox_api_guide.md`）
 
 | 类别 | 函数 |
 |------|------|
@@ -318,15 +329,15 @@ SKILL.md (本文件)                          ← 总索引
 │   ├── ensure-running.sh                  ← 唯一启动脚本（Git Bash）
 │   ├── setup_workspace.py                 ← 工作环境初始化门控
 │   ├── matlab-bridge/
-│   │   ├── matlab_bridge.py               ← Python Bridge 核心 (~7350行, v15: Bugfix 7项)
-│   │   └── sl_toolbox/*.m                 ← 76 个 MATLAB 函数实现 (v12.0: +sl_rigor_score.m, sl_rigor_utils.m, sl_param_registry.m, sl_micro_approve_guard.m)
+│   │   ├── matlab_bridge.py               ← Python Bridge 核心 (~12,850行, v30: 15层Gate + 删除API + 重试状态机)
+│   │   └── sl_toolbox/*.m                 ← 80 个 MATLAB 函数实现 (v30: +sl_delete_block, sl_delete_approval, sl_retry_plan, sl_rigor_score, sl_rigor_utils, sl_param_registry, sl_micro_approve_guard)
 │   └── server/
 │       ├── index.ts                       ← Express 路由 + API 端点 (v11.8.2: +/api/matlab/sl/:command 门控)
 │       ├── matlab-controller.ts           ← Bridge 进程管理与通信 (v11.8.2: +executeSlCommand)
 │       └── system-prompts.ts              ← AI 系统提示词 + 门控规则 (v11.8.2: API 路由规则)
 │
 ├── references/
-│   ├── sl_toolbox_api_guide.md            ← 【建模前必读】51 API 完整签名/参数/返回值
+│   ├── sl_toolbox_api_guide.md            ← 【建模前必读】80 API v30.0 完整签名/参数/返回值
 │   ├── pitfalls.md                        ← 踩坑经验详录（33 条）
 │   ├── pitfall-database.md                ← 结构化踩坑 DB（Pattern-Key 索引）
 │   ├── block-param-registry.md            ← 模块参数类型/枚举值速查
@@ -369,7 +380,7 @@ SKILL.md (本文件)                          ← 总索引
 
 ### 架构修复
 
-- **Bug #1 [P0]**: REST `sl_*` 命令路由 — 新增 `POST /api/matlab/sl/:command` 端点，通过 `_handle_sl_command` 触发 6 层 Gate。此前 `/api/matlab/command` 绕过所有门控，导致 Gate_S0 令牌机制完全失效。
+- **Bug #1 [P0]**: REST `sl_*` 命令路由 — 新增 `POST /api/matlab/sl/:command` 端点，通过 `_handle_sl_command` 触发 Gate 门控。此前 `/api/matlab/command` 绕过所有门控，导致 Gate_S0 令牌机制完全失效。
 - **Bug #3 [P0]**: Cell/Struct 索引安全 — 创建 `sl_safe_index.m` 通用索引辅助函数，替换 `sl_framework_review.m` 中 5 个递归函数的直接索引调用。`sl_fw_normalize.m` catch 块从静默改为 warning。
 - **Bug #2 [P1]**: signalFlow 字段 — `check_signal_flow()` 增加 `src`/`dst` → `srcSubsystem`/`dstSubsystem` 向后兼容映射。
 - **Bug #4 [P1]**: `has_valid_signalflow` 已内联到 `check_subsystem()`，原函数标记 DEPRECATED。`count_signals` 增加 `end` 修复子函数一致性。
@@ -382,7 +393,7 @@ SKILL.md (本文件)                          ← 总索引
 - `_safe_eval_with_paths()` — Bridge 级中文路径安全传递
 
 ### 新增端点
-- `POST /api/matlab/sl/:command` — sl_* 命令门控专用端点（6 层 Gate）
+- `POST /api/matlab/sl/:command` — sl_* 命令门控专用端点（15 层 Gate）
 
 ---
 

@@ -60,7 +60,7 @@
   - **v12.1 Bug 修复**: 10项修复（审批持久化 + 静默异常 + 无锁访问 + SearchDepth + 17处裸except）
   - **v12 Rigor Score**: 四维评分引擎（完整性+自洽性+可追溯性+可证明性），阈值0.65
   - **参数注册系统**: `sl_param_registry.m` 物理参数注册（值+单位+范围+来源）
-  - **README.md**: 全面更新至 v30（13层Gate、76个.m函数、Rigor Score、删除API、重试状态机）
+  - **README.md**: 全面更新至 v30（15层Gate、80个.m函数、Rigor Score、删除API、重试状态机）
   - **GITHUB.md / PUBLISH.md**: 版本历史同步更新
 
 ### v8.0.0 — 2026-04-18 提示词三层架构 + 清仓重推

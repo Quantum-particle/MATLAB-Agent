@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
-  跨平台 · 跨 Agent 框架 · 9 层硬编码门控 · 76 个 MATLAB 函数 · 56 REST API<br>
+  跨平台 · 跨 Agent 框架 · 15 层硬编码门控 · 80 个 MATLAB 函数 · 56 REST API<br>
   支持 WorkBuddy / Claude Code / Codex / Cursor / Cline / Augment 及所有兼容 MCP/REST 的 AI 工具
 </p>
 
@@ -60,7 +60,7 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 │  │  │ API索引  │ │ 建模场景 │ │ 完整注册表│                       ││
 │  │  │ 反模式12条│ │ 仿真场景 │ │ 详细API  │                       ││
 │  │  │ 工作流10步│ │ 测试场景 │ │ 踩坑经验 │                       ││
-│  │  │ 8层Gate  │ │ 修改场景 │ │ 版本兼容 │                       ││
+│  │  │ 15层Gate │ │ 修改场景 │ │ 版本兼容 │                       ││
 │  │  └──────────┘ └──────────┘ └──────────┘                       ││
 │  ├─────────────────────────────────────────────────────────────────┤│
 │  │ 优先: 调用 Simulink 中间件 API（结构化参数+结构化反馈）         ││
@@ -84,11 +84,13 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 └────────────────────────────────┬────────────────────────────────────┘
                                  │ JSON 行协议 (stdin/stdout)
 ┌────────────────────────────────▼────────────────────────────────────┐
-│              Python Bridge (matlab_bridge.py, ~10,500 行)              │
+│              Python Bridge (matlab_bridge.py, ~12,850 行)              │
 │  ┌─────────────────────────────────────────────────────────────────┐│
-│  │  50+ 命令处理器 + 13 层硬编码 Gate + 反模式防护 + 版本检测       ││
+│  │  50+ 命令处理器 + 15 层硬编码 Gate + 反模式防护 + 版本检测       ││
 │  │  Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR      ││
-│  │  Gate_SHELL_ONLY / Gate_CONNECTIVITY / Gate_REVIEW_BUILD         ││
+│  │  Gate_SHELL_ONLY / Gate_CONNECTIVITY / Gate_APPROVE_NO_REVIEW    ││
+│  │  Gate_REVIEW_BUILD / Gate_RETRY / Gate_DELETE_APPROVAL           ││
+│  │  Gate_SUBSYSTEM_CLOSURE / Gate_MICRO_DESIGN_CLOSURE / Gate_RAW_CMD││
 │  │  每个命令 → 调用对应 sl_*.m 工具函数 → 返回结构化 JSON          ││
 │  └─────────────────────────────────────────────────────────────────┘│
 └────────────────────────────────┬────────────────────────────────────┘
@@ -96,7 +98,7 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 ┌────────────────────────────────▼────────────────────────────────────┐
 │                   MATLAB Engine / CLI 回退                           │
 │  ┌─────────────────────────────────────────────────────────────────┐│
-│  │  sl_toolbox/ (76 个 .m 函数)                                   ││
+│  │  sl_toolbox/ (80 个 .m 函数)                                   ││
 │  │  ┌──────────────┬──────────────┬──────────────┐                ││
 │  │  │ 框架设计 (10) │ 子系统 (5)   │ 门控验证 (5) │                ││
 │  │  │ 模型编辑 (8)  │ 信号总线 (4) │ 仿真控制 (4) │                ││
@@ -120,7 +122,7 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 
 ---
 
-## 🔒 9 层硬编码 Gate 门控系统
+## 🔒 15 层硬编码 Gate 门控系统
 
 门控系统是 MATLAB-Agent 最核心的安全保障机制。所有 Gate 硬编码在 Python Bridge 层（非 LLM 提示词），AI **不可绕过**。
 
@@ -139,6 +141,8 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 | **Gate_DELETE_APPROVAL** 🆕 | 子系统级删除 | 删除前强制影响分析+用户确认 | 用户确认 approvalToken |
 | **Gate_SUBSYSTEM_CLOSURE** 🆕 | `add_block`/`add_line` 跨子系统 | 前一子系统 complete 前拦截下一子系统构建 | `sl_model_complete(subPath)` 通过 |
 | **Gate_MICRO_DESIGN_CLOSURE** 🆕 | `sl_micro_design` 跨子系统 | 前一子系统 complete 前拦截下一子系统设计 | `sl_model_complete(subPath)` 通过 |
+| **Gate_REVIEW_BUILD** | `model_complete` 前 | 构建完成后强制 connectionScan 检查 | 修复所有 unconnected 端口 |
+| **Gate_APPROVE_NO_REVIEW** | `sl_micro_approve` | 审批后 Post-MATLAB 一致性校验 | 重新检查不一致项并修正 |
 
 ### Gate 设计理念
 
@@ -360,7 +364,7 @@ python app/setup_workspace.py "D:/my_matlab_project"
 | GET | `/api/matlab/simulink/prompt/scenario` | 获取场景提示词 |
 | GET | `/api/matlab/simulink/prompt/reference` | 获取参考层内容 |
 
-> 完整 76 个 sl_toolbox API 详细文档（含签名、参数、返回值、示例）见 [`references/sl_toolbox_api_guide.md`](references/sl_toolbox_api_guide.md) (v30.0)
+> 完整 80 个 sl_toolbox API 详细文档（含签名、参数、返回值、示例）见 [`references/sl_toolbox_api_guide.md`](references/sl_toolbox_api_guide.md) (v30.0)
 
 ---
 
@@ -379,8 +383,8 @@ matlab-agent/
 │   │   ├── system-prompts.ts           # AI 系统提示词 + 门控规则 (~1154 行)
 │   │   └── db.ts                       # SQLite 数据库管理
 │   ├── matlab-bridge/
-│   │   ├── matlab_bridge.py            # Python-MATLAB 桥接核心 (~10,322 行)
-│   │   └── sl_toolbox/                 # MATLAB 工具箱（72 个 .m 函数）
+│   │   ├── matlab_bridge.py            # Python-MATLAB 桥接核心 (~12,850 行)
+│   │   └── sl_toolbox/                 # MATLAB 工具箱（80 个 .m 函数）
 │   │       ├── sl_framework_*.m        # 框架设计/审查/审批/修改 (10 个)
 │   │       ├── sl_micro_*.m            # 子系统设计/审查/审批/提示词/审批守卫 (6 个)
 │   │       ├── sl_model_complete.m     # 模型完成门控 (Gate_4)
@@ -404,7 +408,7 @@ matlab-agent/
 │   ├── package.json                    # Node.js 依赖配置
 │   └── src/                            # React 18 + TDesign + Vite 前端
 └── references/                         # 参考文档
-    ├── sl_toolbox_api_guide.md         # 🔴 72 个 API 完整签名文档 (v21.0)
+    ├── sl_toolbox_api_guide.md         # 🔴 80 个 API 完整签名文档 (v30.0)
     ├── pitfalls.md                     # 踩坑经验详录 (33 条)
     ├── pitfall-database.md             # 结构化踩坑数据库
     ├── block-param-registry.md         # 模块参数类型注册表
@@ -415,13 +419,13 @@ matlab-agent/
 
 | 组件 | 规模 |
 |------|------|
-| `matlab_bridge.py` | ~10,500 行 Python |
-| `sl_toolbox/*.m` | 76 个 MATLAB 函数 |
-| `index.ts` | ~1,900 行 TypeScript |
-| `matlab-controller.ts` | ~1,635 行 TypeScript |
-| `system-prompts.ts` | ~1,154 行 TypeScript |
-| `ensure-running.sh` | 218 行 Bash |
-| **总计** | **~14,500+ 行源代码** |
+| `matlab_bridge.py` | ~12,850 行 Python |
+| `sl_toolbox/*.m` | 80 个 MATLAB 函数 |
+| `index.ts` | ~2,078 行 TypeScript |
+| `matlab-controller.ts` | ~1,805 行 TypeScript |
+| `system-prompts.ts` | ~1,247 行 TypeScript |
+| `ensure-running.sh` | 309 行 Bash |
+| **总计** | **~17,000+ 行源代码** |
 
 ---
 
@@ -441,7 +445,7 @@ matlab-agent/
 
 | 特性 | 说明 |
 |------|------|
-| **v30 13层硬编码 Gate** | Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR / Gate_SHELL_ONLY / Gate_CONNECTIVITY / Gate_RETRY / Gate_DELETE_APPROVAL / Gate_SUBSYSTEM_CLOSURE / Gate_MICRO_DESIGN_CLOSURE / Gate_RAW_CMD，全部在 Python Bridge 层硬编码 |
+| **v30 15层硬编码 Gate** | Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR / Gate_SHELL_ONLY / Gate_CONNECTIVITY / Gate_APPROVE_NO_REVIEW / Gate_REVIEW_BUILD / Gate_RETRY / Gate_DELETE_APPROVAL / Gate_SUBSYSTEM_CLOSURE / Gate_MICRO_DESIGN_CLOSURE / Gate_RAW_CMD，全部在 Python Bridge 层硬编码 |
 | **AI 完全设计自由度** | `sl_framework_design` / `sl_micro_design` 是纯 Prompt 组装器，无预定义模板 |
 | **Rigor Score 工程严谨性** 🆕 | 四维评分引擎: 完整性 + 自洽性 + 可追溯性 + 可证明性，阈值 0.65 |
 | **全生命周期删除** 🆕 | `sl_delete_block` + `sl_delete_approval` + `sl_retry_plan`，含影响分析+断路器 |

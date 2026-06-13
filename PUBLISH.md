@@ -233,7 +233,7 @@ app/matlab-bridge/*.mat
 - **v15**: 7项Bug修复（signalDimensions/祖先豁免/frameworkFile）
 - **v12.1**: 10项Bug修复（审批持久化/静默异常/无锁访问等）
 - **v12**: Rigor Score 四维评分引擎 + 参数标准化 + Gate体系加固
-- **README.md**: 全面更新至 v30（13层Gate、76个.m函数、新增特性）
+- **README.md**: 全面更新至 v30（15层Gate、80个.m函数、新增特性）
 - **GITHUB.md / PUBLISH.md**: 版本历史同步更新
 
 ### v10.2.1 — 2026-04-21 参数注册表修复 + 全面模块测试
