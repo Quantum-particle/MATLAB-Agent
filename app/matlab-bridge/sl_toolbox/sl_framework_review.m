@@ -4,12 +4,12 @@ function result = sl_framework_review(taskDescription, varargin)
 %   result = sl_framework_review(taskDescription, 'checkItems', {'physics', 'signalFlow'})
 %   result = sl_framework_review(macroFrameworkStruct)  % pass struct directly
 %
-% v11.1: AI 自检大框架，输出检查结果和建议
-%   - physics: 物理方程是否正确
-%   - signalFlow: 信号流拓扑是否完备
-%   - subsystem: 子系统划分是否合理
-%   - gotoFrom: Goto/From 标签计划
-%   - dimensionality: 量纲一致性
+% v11.1: AI ---------------
+%   - physics: --------
+%   - signalFlow: ---------
+%   - subsystem: ---------
+%   - gotoFrom: Goto/From ----
+%   - dimensionality: -----
 
     % ===== Input Validation (P0-3 FIX) =====
     if nargin < 1
@@ -25,7 +25,7 @@ function result = sl_framework_review(taskDescription, varargin)
     end
 
     try
-    % ===== 参数解析 =====
+    % ===== ---- =====
     % v11.8: 11 check items (original 5 + 6 hierarchy checks: Check 12-17)
     p = struct('domain', 'auto', 'checkItems', {{'physics', 'signalFlow', 'subsystem', 'gotoFrom', 'dimensionality', ...
         'nestingDepth', 'singleBlock', 'cohesion', 'crossLevelInterface', 'treeCompleteness', 'leafSubsystems'}});
@@ -47,13 +47,13 @@ function result = sl_framework_review(taskDescription, varargin)
         end
     end
 
-    % 如果 taskDescription 是 struct，直接作为 macroFramework 审查
+    % -- taskDescription - struct----- macroFramework --
     if isstruct(taskDescription)
         macroFramework = taskDescription;
     else
-        % [P2-1 FIX] 优先从 workspace 读取已存在的框架，避免意外重新设计
-        % 旧代码: macroFramework = sl_framework_design(taskDescription, 'domain', p.domain);
-        % 问题: 意外触发重新设计，覆盖已审批的 workspace 变量
+        % [P2-1 FIX] --- workspace -----------------
+        % ---: macroFramework = sl_framework_design(taskDescription, 'domain', p.domain);
+        % --: --------------- workspace --
         taskStr = char(taskDescription);
         fw_var = ['mFW_' taskStr];
         fw_exists = evalin('base', sprintf('exist(''%s'', ''var'')', fw_var));
@@ -67,10 +67,10 @@ function result = sl_framework_review(taskDescription, varargin)
     end
     
     % [v11.6.8] Normalize: ensure struct arrays for (i) indexing compatibility.
-    % Uses global sl_fw_normalize utility (idempotent — no-op for struct arrays).
+    % Uses global sl_fw_normalize utility (idempotent - no-op for struct arrays).
     macroFramework = sl_fw_normalize(macroFramework);
 
-    % ===== 执行检查 =====
+    % ===== ---- =====
     checks = cell(length(p.checkItems), 1);
     checkIdx = 1;
 
@@ -121,7 +121,7 @@ function result = sl_framework_review(taskDescription, varargin)
         end
     end
 
-    % ===== 汇总结果 =====
+    % ===== ---- =====
     passedFlags = zeros(length(checks), 1);
     confidences = zeros(length(checks), 1);
     for i = 1:length(checks)
@@ -156,9 +156,9 @@ function result = sl_framework_review(taskDescription, varargin)
     end
 end
 
-% ===== 检查项子函数 =====
+% ===== ------ =====
 
-% physics: 检查物理方程是否存在、有界、无奇异
+% [v12.0] physics: check physics equations existence + self-consistency (HC-01 FIX)
 function r = check_physics(fw)
     r = struct('item', 'physics', 'passed', true, 'confidence', 0.9, 'issue', '', 'suggestion', '');
     if ~isfield(fw, 'subsystems') || isempty(fw.subsystems)
@@ -169,7 +169,7 @@ function r = check_physics(fw)
         return;
     end
     % [v11.8.3 Bug#9 FIX] Use sl_safe_index for cell/struct array compatibility
-    % 检查每个子系统是否有输入输出定义
+    % Check each subsystem has inputs/outputs defined
     for i = 1:length(fw.subsystems)
         subsys = sl_safe_index(fw.subsystems, i);
         if ~isfield(subsys, 'inputs') || ~isfield(subsys, 'outputs')
@@ -180,6 +180,36 @@ function r = check_physics(fw)
             return;
         end
     end
+    
+    % [v12.0] Check for physics equations at framework level
+    if isfield(fw, 'physicsEquations') && ~isempty(fw.physicsEquations)
+        % Has physics equations - confidence reflects content quality
+        eqs = fw.physicsEquations;
+        nEq = length(eqs);
+        nNonEmpty = 0;
+        for i = 1:nEq
+            eq = sl_safe_index(eqs, i);
+            if isstruct(eq) && isfield(eq, 'equation') && ~isempty(eq.equation)
+                nNonEmpty = nNonEmpty + 1;
+            elseif ischar(eq) && ~isempty(eq)
+                nNonEmpty = nNonEmpty + 1;
+            end
+        end
+        if nNonEmpty < nEq * 0.5
+            r.confidence = 0.3;
+            r.issue = sprintf('Only %d/%d physics equations are non-empty', nNonEmpty, nEq);
+        elseif nNonEmpty < nEq
+            r.confidence = 0.6;
+        else
+            r.confidence = 0.9;
+        end
+    elseif isfield(fw, 'physicsEquations') && isempty(fw.physicsEquations)
+        % physicsEquations exists but empty - AI declared but didn't fill
+        r.confidence = 0.2;
+        r.issue = 'physicsEquations field exists but is empty';
+        r.suggestion = 'Populate physicsEquations with governing equations for the system';
+    end
+    % If no physicsEquations field at all, confidence stays at default 0.5 (from subsystem check)
 end
 % ===== [v11.8 NEW] Check 12: Nesting Depth =====
 function r = check_nesting_depth(fw)
@@ -212,7 +242,7 @@ function r = check_nesting_depth(fw)
     end
 end
 
-% [v11.8.1 Bug#1 FIX] compute_tree_depth — per-element isfield + try/catch
+% [v11.8.1 Bug#1 FIX] compute_tree_depth - per-element isfield + try/catch
 function d = compute_tree_depth(subsystems, current_depth)
     if isempty(subsystems)
         d = current_depth - 1;
@@ -241,7 +271,7 @@ function d = compute_tree_depth(subsystems, current_depth)
     d = max_child_depth;
 end
 
-% signalFlow: 检查信号流连通性、无孤立节点
+% signalFlow: --------------
 function r = check_signal_flow(fw)
     r = struct('item', 'signalFlow', 'passed', true, 'confidence', 0.95, 'issue', '', 'suggestion', '');
     if ~isfield(fw, 'subsystems') || isempty(fw.subsystems)
@@ -252,7 +282,7 @@ function r = check_signal_flow(fw)
         return;
     end
     % [v11.8.3 Bug#9 FIX] Use sl_safe_index for cell/struct array compatibility
-    % 获取所有子系统名称
+    % ---------
     n_subs = length(fw.subsystems);
     subsysNames = cell(1, n_subs);
     for i_s = 1:n_subs
@@ -268,15 +298,15 @@ function r = check_signal_flow(fw)
         return;
     end
 
-    % 如果没有显式 signalFlow，生成默认的链式连接
+    % ------ signalFlow----------
     if ~isfield(fw, 'signalFlow') || isempty(fw.signalFlow)
-        % 默认按顺序链式连接
+        % ---------
         r.confidence = 0.8;
         r.suggestion = 'No explicit signalFlow defined; default chain connection assumed';
         return;
     end
 
-    % 检查 signalFlow 中的连接是否有效
+    % -- signalFlow --------
     signalFlow = fw.signalFlow;
     connectedFrom = {};
     connectedTo = {};
@@ -286,7 +316,7 @@ function r = check_signal_flow(fw)
         else
             sf = signalFlow(i);
         end
-        % [v11.8.2 Bug#2 FIX] 向后兼容: 自动映射 src/dst → srcSubsystem/dstSubsystem
+        % [v11.8.2 Bug#2 FIX] ----: ---- src/dst - srcSubsystem/dstSubsystem
         if ~isfield(sf, 'srcSubsystem') && isfield(sf, 'src')
             sf.srcSubsystem = sf.src;
         end
@@ -299,9 +329,40 @@ function r = check_signal_flow(fw)
         connectedTo{end+1} = to;
     end
 
-    % 检查是否有孤立节点（既没有输出也没有输入）
+    % ---------------------
     allConnected = unique([connectedFrom, connectedTo]);
     isolated = setdiff(subsysNames, allConnected);
+    % [v24 FIX B6] Closed-loop feedback detection:
+    % Subsystems with BOTH input and output ports are part of a feedback loop
+    % (receive signal + send feedback), not truly isolated.
+    % Only flag subsystems with one-directional ports (source or sink).
+    if ~isempty(isolated)
+        still_isolated = {};
+        for i_iso = 1:length(isolated)
+            iso_name = isolated{i_iso};
+            iso_subsys = [];
+            for i_s = 1:n_subs
+                s = sl_safe_index(fw.subsystems, i_s);
+                if isfield(s, 'name') && strcmp(s.name, iso_name)
+                    iso_subsys = s; break;
+                end
+            end
+            has_inputs = false; has_outputs = false;
+            if ~isempty(iso_subsys) && isfield(iso_subsys, 'interfaceSpec')
+                ispec = iso_subsys.interfaceSpec;
+                has_inputs  = isfield(ispec, 'inports')  && ~isempty(ispec.inports);
+                has_outputs = isfield(ispec, 'outports') && ~isempty(ispec.outports);
+            end
+            if has_inputs && has_outputs
+                % Recognized as feedback path — not truly isolated
+                connectedFrom{end+1} = iso_name;
+                connectedTo{end+1} = iso_name;
+            else
+                still_isolated{end+1} = iso_name;
+            end
+        end
+        isolated = still_isolated;
+    end
     if ~isempty(isolated)
         r.passed = false;
         r.confidence = 0.6;
@@ -314,7 +375,7 @@ function r = check_signal_flow(fw)
     for i_s = 1:n_subs
         s = sl_safe_index(fw.subsystems, i_s);
         if isfield(s, 'childSubsystems') && ~isempty(s.childSubsystems)
-            % This is a container subsystem — it SHOULD have internal signalFlow
+            % This is a container subsystem - it SHOULD have internal signalFlow
             if ~isfield(s, 'signalFlow') || isempty(s.signalFlow)
                 subtree_issues{end+1} = sprintf('%s (container, no internal signalFlow)', s.name);
             else
@@ -350,7 +411,7 @@ function r = check_signal_flow(fw)
     end
 end
 
-% subsystem: 检查子系统数量 >= 1，无循环依赖
+% subsystem: ------- >= 1------
 function r = check_subsystem(fw)
     r = struct('item', 'subsystem', 'passed', true, 'confidence', 0.8, 'issue', '', 'suggestion', '');
     try
@@ -368,7 +429,7 @@ function r = check_subsystem(fw)
         r.issue = 'At least one subsystem required';
         return;
     end
-    % 检查重复名称
+    % ------
     names = {fw.subsystems.name};
     if length(unique(names)) ~= length(names)
         r.passed = false;
@@ -377,7 +438,7 @@ function r = check_subsystem(fw)
         r.suggestion = 'Use unique names for each subsystem';
         return;
     end
-    % 检查循环依赖（简化版：检查直接的环形连接）
+    % ---------------------
     % [v11.8.2 Bug#4 FIX] Inline has_valid_signalflow check to avoid scope issue
     has_sf = false;
     if isfield(fw, 'signalFlow') && ~isempty(fw.signalFlow)
@@ -400,7 +461,7 @@ function r = check_subsystem(fw)
             if ~isstruct(sf), continue; end
             from = sf.srcSubsystem;
             to = sf.dstSubsystem;
-            % 检查是否存在 from -> to -> from 的直接循环
+            % ------ from -> to -> from -----
             for j = 1:length(fw.signalFlow)
                 if iscell(fw.signalFlow)
                     sf2 = fw.signalFlow{j};
@@ -427,15 +488,15 @@ function r = check_subsystem(fw)
     end
 end
 
-% gotoFrom: 检查 Goto/From 标签成对
+% gotoFrom: -- Goto/From ----
 function r = check_goto_from(fw)
     r = struct('item', 'gotoFrom', 'passed', true, 'confidence', 1.0, 'issue', '', 'suggestion', '');
     if ~isfield(fw, 'gotoFromPlan') || isempty(fw.gotoFromPlan)
-        % 没有 Goto/From 计划，这是合法的
+        % -- Goto/From --------
         r.confidence = 0.9;
         return;
     end
-    % 检查标签是否唯一
+    % --------
     nGf = length(fw.gotoFromPlan);
     tags = cell(nGf, 1);
     for i = 1:nGf
@@ -453,7 +514,7 @@ function r = check_goto_from(fw)
         r.suggestion = 'Use unique tag names for each Goto/From pair';
         return;
     end
-    % 检查每个 Goto 是否有对应的 From
+    % ---- Goto ------ From
     % [v11.8.3 Bug#9 FIX] Use sl_safe_index for cell/struct array compatibility
     n_s = length(fw.subsystems);
     subsysNames = cell(1, n_s);
@@ -469,7 +530,7 @@ function r = check_goto_from(fw)
         end
         srcSubsystem = gf.srcSubsystem;
         dstSubsystems = gf.dstSubsystems;
-        % 检查 srcSubsystem 是否存在
+        % -- srcSubsystem ----
         if ~any(strcmp(subsysNames, srcSubsystem))
             r.passed = false;
             r.confidence = 0.6;
@@ -477,7 +538,7 @@ function r = check_goto_from(fw)
             r.suggestion = 'Ensure Goto source subsystem exists';
             return;
         end
-        % 检查 dstSubsystems 列表是否存在
+        % -- dstSubsystems ------
         if iscell(dstSubsystems)
             for j = 1:length(dstSubsystems)
                 if ~any(strcmp(subsysNames, dstSubsystems{j}))
@@ -657,7 +718,7 @@ end
 function find_single_block_in_tree(subsystems, parent_path, results)
     if isempty(subsystems), return; end
     for i = 1:length(subsystems)
-        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] 统一 cell/struct 索引
+        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] -- cell/struct --
         path = sub.name;
         if ~isempty(parent_path)
             path = [parent_path '/' sub.name]; %#ok<AGROW>
@@ -696,7 +757,7 @@ end
 
 function check_cohesion_recursive(subsystems, parent_path, issues)
     for i = 1:length(subsystems)
-        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] 统一 cell/struct 索引
+        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] -- cell/struct --
         path = sub.name;
         if ~isempty(parent_path)
             path = [parent_path '/' sub.name]; %#ok<AGROW>
@@ -740,7 +801,7 @@ end
 
 function check_interface_recursive(subsystems, parent_path, issues)
     for i = 1:length(subsystems)
-        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] 统一 cell/struct 索引
+        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] -- cell/struct --
         path = sub.name;
         if ~isempty(parent_path)
             path = [parent_path '/' sub.name]; %#ok<AGROW>
@@ -797,7 +858,7 @@ end
 function collect_paths(subsystems, parent_path, results)
     if isempty(subsystems), return; end
     for i = 1:length(subsystems)
-        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] 统一 cell/struct 索引
+        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] -- cell/struct --
         path = sub.name;
         if ~isempty(parent_path)
             path = [parent_path '/' sub.name]; %#ok<AGROW>
@@ -836,7 +897,7 @@ end
 function find_empty_leaves(subsystems, parent_path, results)
     if isempty(subsystems), return; end
     for i = 1:length(subsystems)
-        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] 统一 cell/struct 索引
+        sub = sl_safe_index(subsystems, i);  % [v11.8.2 Bug#3 FIX] -- cell/struct --
         path = sub.name;
         if ~isempty(parent_path)
             path = [parent_path '/' sub.name]; %#ok<AGROW>

@@ -128,6 +128,36 @@ function result = sl_add_block_safe(modelName, sourceBlock, varargin)
         if isempty(strfind(destPath, '/'))
             destPath = [modelName '/' destPath];
         end
+        
+        % [v13 BUGFIX #46] Detect if destPath is a subsystem path
+        % If destPath points to a SubSystem block, the caller intends to
+        % create the block INSIDE that subsystem. Append the block type name.
+        try
+            dstBlockType = get_param(destPath, 'BlockType');
+            if strcmp(dstBlockType, 'SubSystem')
+                % destPath is a SubSystem → build the block inside it
+                [~, blockBaseName, ~] = fileparts(srcBlock);
+                parts = strsplit(blockBaseName, '/');
+                blockBaseName = parts{end};
+                destPath = [destPath '/' blockBaseName];
+            end
+        catch
+            % destPath doesn't exist as a block yet — 
+            % check if the parent directory exists as a subsystem
+            [parentPath, ~, ~] = fileparts(destPath);
+            if ~isempty(parentPath)
+                try
+                    parentType = get_param(parentPath, 'BlockType');
+                    if strcmp(parentType, 'SubSystem')
+                        % Parent is a SubSystem, destPath is already a full block path
+                        % (e.g., "Model/Parent/Gain1") — keep as-is
+                    end
+                catch
+                    % Neither destPath nor parent exist as blocks
+                    % destPath will be created at this path
+                end
+            end
+        end
     end
     
     % ===== 检查名称冲突 =====

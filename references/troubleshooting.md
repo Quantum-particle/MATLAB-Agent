@@ -1,6 +1,6 @@
 # MATLAB Agent 故障排除指南
 
-> 版本: 5.1.0 | 最后更新: 2026-04-10
+> 版本: 6.0.0 | 最后更新: 2026-05-11
 
 本文档汇总了 MATLAB Agent 开发和运行中遇到的所有问题及其解决方案。
 
@@ -138,16 +138,24 @@ if ($old) {
 - PowerShell 中用 `Push-Location` / `Pop-Location`
 - API 调用中用 UTF-8 编码：`[System.Text.Encoding]::UTF8.GetBytes($json)`
 
-### 0.6 Python Bridge spawn 失败
+### 0.6 🔴 TCP Bridge 未启动 / 连接失败 (v6.0 — 最关键！)
 
-**症状**: `spawn('python', [...]) Error: spawn python ENOENT`。
+> **TCP 是唯一 Bridge 通信方式！Bridge 未启动 = 所有 MATLAB 操作不可用！**
 
-**根因**: Python 不在系统 PATH 中，或 Python 命令名不是 `python`。
+**症状**: Node.js 日志显示 `MATLAB Bridge TCP 连接不可用` 或 `Bridge port file not found after 30s`。
+
+**根因**: Python Bridge (`--tcp-server` 模式) 未启动。v6.0 已移除 spawn 降级，不存在 fallback。
 
 **解决方案**:
-- 确保 `python` 在 PATH 中：`where python`
-- 如果只有 `python3`，创建符号链接或添加 PATH
-- Node.js 端 `matlab-controller.ts` 使用 `spawn('python', ...)` — 需 `python` 在 PATH
+1. 运行 `bash app/ensure-running.sh` — 自动启动 Bridge + Node.js
+2. 检查 Bridge 日志: `%TEMP%\matlab-bridge-out.log`
+3. 确认端口文件存在: `app/data/matlab-bridge.port`
+4. 手动测试 TCP: `python -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 27042)); s.close()"`
+
+**🔴 核心约束**:
+- 不存在 spawn 降级 — TCP 连接失败 = 服务不可用
+- 必须通过 `ensure-running.sh` 启动（bash & 后台进程）
+- Node.js 不能直接 spawn Python Bridge（Exit status: 3）
 
 ### 0.7 AI Agent 标准启动流程
 
@@ -156,21 +164,34 @@ if ($old) {
 1. 检查: curl -s http://localhost:3000/api/health
 2. 已运行 → 跳过
 3. 未运行 → bash ensure-running.sh  （唯一！Git Bash 环境）
-4. Engine 20-30s 就绪，health → "ready":true
+4. ensure-running.sh 自动执行:
+   a. 清理残留进程
+   b. 检查 node_modules
+   c. 启动 Python Bridge (--tcp-server) ← 🔴 核心步骤
+   d. 等待 Bridge 端口文件
+   e. 验证 TCP 连通性
+   f. 启动 Node.js 服务器
+   g. 等待 Engine 预热
+5. Engine 18-30s 就绪，health → "ready":true
 ```
 
-### 0.8 🔴 CMD 启动全面禁止 (v11.4.2)
+### 0.8 🔴 CMD 启动全面禁止 + spawn 降级已移除 (v11.4.2 / v6.0)
 
 > **CMD `start /B`、`start /MIN`、PowerShell Start-Process — 全部无法启动 Engine！**
+> **Node.js spawn() — 已在 v6.0 中移除降级，不再存在 fallback！**
 
 **唯一可用方式**: Git Bash 原生 `bash ensure-running.sh`。
 
-**根因**: MATLAB Engine 的 "Simple server"（进程间通信）在 CMD 派生进程中无法创建。所有 Windows 控制台继承机制（`start /B` 共享控制台、`Start-Process`、`cmd /c` 包装）都无法绕过此限制。Git Bash 的 `&` 后台运行不继承控制台 → 唯一可行方案。
+**根因**: 
+1. MATLAB Engine 的 "Simple server"（进程间通信）在 CMD 派生进程中无法创建
+2. Node.js spawn() 导致 MATLAB Engine Exit status: 3（Windows DLL 初始化崩溃）
+3. Git Bash 的 `&` 后台运行不继承控制台 → 唯一可行方案
 
-**不再提供的启动文件**:
-- ~~`ensure-running.bat`~~ (已删除)
-- ~~`start.bat`~~ (改为引导提示)
-- **`ensure-running.sh`** ← 唯一保留
+**v6.0 关键变更**:
+- ❌ 已移除 `ensureBridgeProcess()` — 不再有 spawn 模式
+- ❌ 已移除 `BridgeMode 'spawn'` — 不再存在降级
+- ❌ `--server` (stdin/stdout) 模式已废弃 — Bridge 只接受 `--tcp-server`
+- ✅ TCP 是唯一通信方式 — 连接失败 = 服务不可用，AI 不可绕过
 
 ---
 
@@ -916,3 +937,57 @@ end
 | `find_system(path, 'SearchDepth', 1)` 逐层深入 | 标准做法 |
 | 先检查 `get_param(path, 'Mask')` | 确认是封装模块 |
 | 读取 `MaskVariables` 中的 `@数字` | 表示参数序号，如 `Omega=@1` = 第1个参数 |
+
+---
+
+## 25. 🔴 TCP Bridge 连接失败 (v6.0 新增)
+
+> **TCP 是唯一 Bridge 通信方式 — 不存在 spawn 降级！**
+
+### 症状
+
+- Node.js 日志: `MATLAB Bridge TCP 连接不可用`
+- Node.js 日志: `Bridge port file not found after 30s`
+- API 返回: `MATLAB Bridge 未启动。请先运行: bash ensure-running.sh`
+- Health 端点: `matlab.ready: false`, `warmup: failed`
+
+### 根因
+
+v6.0 已移除 spawn fallback。TCP 是唯一 Bridge 通信方式。
+Node.js spawn() 在 Windows 上导致 MATLAB Engine Exit status: 3（DLL 初始化崩溃），
+因此 Bridge 必须由 bash 独立启动（--tcp-server），Node.js 通过 TCP 连接通信。
+
+### 诊断步骤
+
+```bash
+# 1. 检查 Bridge 端口文件是否存在
+cat app/data/matlab-bridge.port  # 应显示端口号，如 27042
+
+# 2. 检查 Bridge PID 文件
+cat app/data/matlab-bridge.pid   # 应显示进程 PID
+
+# 3. 检查 Bridge 进程是否存活
+tasklist | findstr <PID>
+
+# 4. 测试 TCP 连通性
+python -c "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1', 27042)); s.close(); print('OK')"
+
+# 5. 查看 Bridge 日志
+cat %TEMP%/matlab-bridge-out.log
+```
+
+### 解决方案
+
+1. **重新启动**: `bash app/ensure-running.sh` — 自动启动 Bridge + Node.js
+2. **手动启动 Bridge**: `python app/matlab-bridge/matlab_bridge.py --tcp-server`
+3. **清理残留**: 删除 `app/data/matlab-bridge.port` 和 `app/data/matlab-bridge.pid`，重新启动
+
+### 常见问题
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| 端口文件不存在 | Bridge 未启动 | 运行 ensure-running.sh |
+| 端口文件存在但连接被拒 | Bridge 进程已崩溃 | 删除端口文件，重新启动 |
+| Bridge 启动后立即退出 | Python 路径或 MATLAB_ROOT 问题 | 检查 Bridge 日志 |
+| 两个 Bridge 实例冲突 | 旧 PID 文件指向已死进程 | 删除 PID 文件，重新启动 |
+| Git Bash `/c/` 路径问题 | Bridge 读取 MATLAB_ROOT | ensure-running.sh 自动用 cygpath -w 转换 |

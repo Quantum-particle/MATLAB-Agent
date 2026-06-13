@@ -1,6 +1,6 @@
 # MATLAB Agent GitHub 仓库管理记录
 
-> 最后更新: 2026-04-10
+> 最后更新: 2026-06-13
 
 ---
 
@@ -45,6 +45,23 @@
 ---
 
 ## 更新历史
+
+### v30.0 — 2026-06-13 清仓重推 — v30 全量同步
+
+- **分支**: main
+- **内容**: 全量清仓重推，替换仓库所有文件
+- **核心改动**:
+  - **v30 删除API**: `sl_delete_block.m` (~280行) + `sl_delete_approval.m` (~130行) + `sl_retry_plan.m` (~140行)
+  - **Gate_RETRY 状态机**: 10轮/子系统上限，断路器（连续3次同类型失败→design_suspect）
+  - **Gate_DELETE_APPROVAL**: 子系统级删除强制影响分析+用户确认
+  - **LineChildren 递归删除**: LookUnderMasks + bus-split 分支处理
+  - **v18.3 Gate 绕过修复**: Gate_SHELL_ONLY 3条绕过路径修复，懒创建子外壳
+  - **v15 Bug 修复**: signalDimensions 空值保护，Gate_SUBSYSTEM_CLOSURE 祖先豁免，frameworkFile 文件路径
+  - **v12.1 Bug 修复**: 10项修复（审批持久化 + 静默异常 + 无锁访问 + SearchDepth + 17处裸except）
+  - **v12 Rigor Score**: 四维评分引擎（完整性+自洽性+可追溯性+可证明性），阈值0.65
+  - **参数注册系统**: `sl_param_registry.m` 物理参数注册（值+单位+范围+来源）
+  - **README.md**: 全面更新至 v30（13层Gate、76个.m函数、Rigor Score、删除API、重试状态机）
+  - **GITHUB.md / PUBLISH.md**: 版本历史同步更新
 
 ### v8.0.0 — 2026-04-18 提示词三层架构 + 清仓重推
 

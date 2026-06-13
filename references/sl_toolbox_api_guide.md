@@ -2461,7 +2461,8 @@ result = sl_framework_review(macroFramework, varargin)
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| macroFramework | struct | 必填 | 大框架结构体（从 sl_framework_design 获取） |
+| macroFramework | struct | 必填* | 大框架结构体（从 sl_framework_design 获取）。*可选：若通过 frameworkFile 传递则不需要 |
+| frameworkFile 🆕 v15 | string | "" | 框架 JSON 文件路径。作为 macroFramework 的回退方案，适用于 >50KB 的大型框架 |
 | checkItems | cell | 全部11项 | 要执行的检查项 |
 
 ### 返回结构
@@ -2520,7 +2521,8 @@ result = sl_framework_approve(modelName, varargin)
 |------|------|--------|------|
 | modelName | string | 必填 | 模型名称 |
 | locked | boolean | true | 是否锁定大框架 |
-| macroFramework | struct | {} | 大框架结构体（可选，从 workspace 获取） |
+| macroFramework | struct | {} | 大框架结构体。可省略，若通过 frameworkFile 传递则不需要 |
+| frameworkFile 🆕 v15 | string | "" | 框架 JSON 文件路径。作为 macroFramework 的回退方案 |
 
 ### 返回结构
 

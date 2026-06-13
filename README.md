@@ -1,8 +1,8 @@
-# MATLAB-Agent v11.9
+# MATLAB-Agent v30
 
 <p align="center">
   <strong>AI 驱动的 MATLAB/Simulink 开发助手</strong><br>
-  跨平台 · 跨 Agent 框架 · 8 层硬编码门控 · 72 个 MATLAB 函数 · 50+ REST API<br>
+  跨平台 · 跨 Agent 框架 · 9 层硬编码门控 · 76 个 MATLAB 函数 · 56 REST API<br>
   支持 WorkBuddy / Claude Code / Codex / Cursor / Cline / Augment 及所有兼容 MCP/REST 的 AI 工具
 </p>
 
@@ -84,9 +84,9 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 └────────────────────────────────┬────────────────────────────────────┘
                                  │ JSON 行协议 (stdin/stdout)
 ┌────────────────────────────────▼────────────────────────────────────┐
-│              Python Bridge (matlab_bridge.py, ~10,300 行)              │
+│              Python Bridge (matlab_bridge.py, ~10,500 行)              │
 │  ┌─────────────────────────────────────────────────────────────────┐│
-│  │  50+ 命令处理器 + 8 层硬编码 Gate + 反模式防护 + 版本检测       ││
+│  │  50+ 命令处理器 + 13 层硬编码 Gate + 反模式防护 + 版本检测       ││
 │  │  Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR      ││
 │  │  Gate_SHELL_ONLY / Gate_CONNECTIVITY / Gate_REVIEW_BUILD         ││
 │  │  每个命令 → 调用对应 sl_*.m 工具函数 → 返回结构化 JSON          ││
@@ -96,7 +96,7 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 ┌────────────────────────────────▼────────────────────────────────────┐
 │                   MATLAB Engine / CLI 回退                           │
 │  ┌─────────────────────────────────────────────────────────────────┐│
-│  │  sl_toolbox/ (72 个 .m 函数)                                   ││
+│  │  sl_toolbox/ (76 个 .m 函数)                                   ││
 │  │  ┌──────────────┬──────────────┬──────────────┐                ││
 │  │  │ 框架设计 (10) │ 子系统 (5)   │ 门控验证 (5) │                ││
 │  │  │ 模型编辑 (8)  │ 信号总线 (4) │ 仿真控制 (4) │                ││
@@ -120,7 +120,7 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 
 ---
 
-## 🔒 8 层硬编码 Gate 门控系统
+## 🔒 9 层硬编码 Gate 门控系统
 
 门控系统是 MATLAB-Agent 最核心的安全保障机制。所有 Gate 硬编码在 Python Bridge 层（非 LLM 提示词），AI **不可绕过**。
 
@@ -135,6 +135,10 @@ MATLAB-Agent 通过标准 HTTP REST API 对外提供服务，可与**任何**支
 | **Gate_5** | `sl_framework_approve` 入口 | 检查端口完备性+信号闭环 | checkItems 全部 pass |
 | **Gate_SHELL_ONLY** | `add_block`/`add_line`/`set_param` | 子系统内部禁止批量操作 | `micro_design → review → approve` 逐个 |
 | **Gate_CONNECTIVITY** | `add_block` | 连续添加超阈值拦截，强制连线 | `add_line` 连接已有块 |
+| **Gate_RETRY** 🆕 | 子系统 retry_count ≥ 3 | 断路器：连续 3 次同类型失败自动升级 | 错误类型变更或人工重置 |
+| **Gate_DELETE_APPROVAL** 🆕 | 子系统级删除 | 删除前强制影响分析+用户确认 | 用户确认 approvalToken |
+| **Gate_SUBSYSTEM_CLOSURE** 🆕 | `add_block`/`add_line` 跨子系统 | 前一子系统 complete 前拦截下一子系统构建 | `sl_model_complete(subPath)` 通过 |
+| **Gate_MICRO_DESIGN_CLOSURE** 🆕 | `sl_micro_design` 跨子系统 | 前一子系统 complete 前拦截下一子系统设计 | `sl_model_complete(subPath)` 通过 |
 
 ### Gate 设计理念
 
@@ -356,7 +360,7 @@ python app/setup_workspace.py "D:/my_matlab_project"
 | GET | `/api/matlab/simulink/prompt/scenario` | 获取场景提示词 |
 | GET | `/api/matlab/simulink/prompt/reference` | 获取参考层内容 |
 
-> 完整 68 个 sl_toolbox API 详细文档（含签名、参数、返回值、示例）见 [`references/sl_toolbox_api_guide.md`](references/sl_toolbox_api_guide.md) (v19.0)
+> 完整 76 个 sl_toolbox API 详细文档（含签名、参数、返回值、示例）见 [`references/sl_toolbox_api_guide.md`](references/sl_toolbox_api_guide.md) (v30.0)
 
 ---
 
@@ -378,8 +382,9 @@ matlab-agent/
 │   │   ├── matlab_bridge.py            # Python-MATLAB 桥接核心 (~10,322 行)
 │   │   └── sl_toolbox/                 # MATLAB 工具箱（72 个 .m 函数）
 │   │       ├── sl_framework_*.m        # 框架设计/审查/审批/修改 (10 个)
-│   │       ├── sl_micro_*.m            # 子系统设计/审查/审批/提示词 (5 个)
+│   │       ├── sl_micro_*.m            # 子系统设计/审查/审批/提示词/审批守卫 (6 个)
 │   │       ├── sl_model_complete.m     # 模型完成门控 (Gate_4)
+│   │       ├── sl_delete_*.m           # 安全删除/删除审批/重试计划 (3 个) 🆕
 │   │       ├── sl_scene_*.m            # 场景检测与确认 (Gate_S0)
 │   │       ├── sl_add_*.m              # 安全添加模块/连线/参数 (8 个)
 │   │       ├── sl_sim_*.m              # 仿真运行/批量/结果 (4 个)
@@ -389,7 +394,10 @@ matlab-agent/
 │   │       ├── sl_auto_layout.m        # 自动排布
 │   │       ├── sl_baseline_test.m      # 基线测试
 │   │       ├── sl_block_registry.m     # 模块注册表 (核心基础设施)
-│   │       └── sl_self_improve.m       # 自我改进引擎
+│   │       ├── sl_rigor_score.m        # 工程严谨性四维评分 🆕
+│   │       ├── sl_rigor_utils.m        # 符号分析工具 🆕
+│   │       ├── sl_param_registry.m     # 物理参数注册系统 🆕
+│   │       └── sl_safe_index.m         # Cell/Struct 安全索引
 │   ├── ensure-running.sh               # ⭐ 一键启动脚本（Git Bash，唯一方式）
 │   ├── setup_workspace.py              # 工作环境初始化门控
 │   ├── TROUBLESHOOTING.md              # 故障排除手册
@@ -407,13 +415,13 @@ matlab-agent/
 
 | 组件 | 规模 |
 |------|------|
-| `matlab_bridge.py` | ~10,322 行 Python |
-| `sl_toolbox/*.m` | 72 个 MATLAB 函数 |
+| `matlab_bridge.py` | ~10,500 行 Python |
+| `sl_toolbox/*.m` | 76 个 MATLAB 函数 |
 | `index.ts` | ~1,900 行 TypeScript |
 | `matlab-controller.ts` | ~1,635 行 TypeScript |
 | `system-prompts.ts` | ~1,154 行 TypeScript |
 | `ensure-running.sh` | 218 行 Bash |
-| **总计** | **~14,000+ 行源代码** |
+| **总计** | **~14,500+ 行源代码** |
 
 ---
 
@@ -433,8 +441,12 @@ matlab-agent/
 
 | 特性 | 说明 |
 |------|------|
-| **8 层硬编码 Gate** | Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR / Gate_SHELL_ONLY / Gate_CONNECTIVITY，全部在 Python Bridge 层硬编码 |
+| **v30 13层硬编码 Gate** | Gate_S0 / Gate_2 / Gate_3 / Gate_4 / Gate_5 / PROJECT_DIR / Gate_SHELL_ONLY / Gate_CONNECTIVITY / Gate_RETRY / Gate_DELETE_APPROVAL / Gate_SUBSYSTEM_CLOSURE / Gate_MICRO_DESIGN_CLOSURE / Gate_RAW_CMD，全部在 Python Bridge 层硬编码 |
 | **AI 完全设计自由度** | `sl_framework_design` / `sl_micro_design` 是纯 Prompt 组装器，无预定义模板 |
+| **Rigor Score 工程严谨性** 🆕 | 四维评分引擎: 完整性 + 自洽性 + 可追溯性 + 可证明性，阈值 0.65 |
+| **全生命周期删除** 🆕 | `sl_delete_block` + `sl_delete_approval` + `sl_retry_plan`，含影响分析+断路器 |
+| **参数注册系统** 🆕 | `sl_param_registry.m` 物理参数注册（值+单位+范围+来源），预置模板 |
+| **重试状态机** 🆕 | Gate_RETRY 断路器: 10轮/子系统上限，连续3次同类型失败自动升级 |
 | **双场景工作流** | Scene 1: 从零建模 + Scene 2: 已有模型沙盒隔离修改 |
 | **反模式主动防护** | 10 大禁止规则嵌入 .m 函数，违反时返回 warning + 替代方案 |
 | **每次操作自动验证** | 每次 `add_block`/`add_line`/`set_param` 自动注入 `_verification` 字段 |
@@ -495,7 +507,11 @@ matlab-agent/
 
 | 版本 | 日期 | 核心改动 |
 |------|------|---------|
-| **v12** | 2026-05-15 | [计划中] Gate_CONTENT_DEPTH (Rigor Score) + 参数标准化 + Gate 体系加固 |
+| **v30** | 2026-05-26 | sl_delete_block 全生命周期删除 API + Gate_RETRY 断路器 + Gate_DELETE_APPROVAL + LineChildren 递归 |
+| **v18.3** | 2026-05-20 | Gate_SHELL_ONLY 绕过漏洞修复 (3条路径) + 懒创建子外壳 + 排版强制执行修复 |
+| **v15** | 2026-05-18 | 7 项 Bug 修复: signalDimensions 空值保护 + Gate_SUBSYSTEM_CLOSURE 祖先豁免 + frameworkFile 文件路径 |
+| **v12.1** | 2026-05-16 | 10 项 Bug 修复: 审批持久化 + 静默异常 + 无锁访问 + SearchDepth 修复 + 17 处裸 except |
+| **v12** | 2026-05-15 | Gate_CONTENT_DEPTH (Rigor Score 四维引擎) + 参数标准化 + Gate 体系 7 项加固 |
 | v11.9 | 2026-05-14 | Phase 0-6 工作流 + Gate_SHELL_ONLY + Gate_REVIEW_BUILD + 5 个新 .m 文件 |
 | v11.8.3 | 2026-05-12 | REST sl_* 门控路由 + Cell/Struct 安全索引 + 中文路径编码 (7 修复) |
 | v11.8.1 | 2026-05-10 | Bug 修复: compute_tree_depth + dimensionality + REST string/char |

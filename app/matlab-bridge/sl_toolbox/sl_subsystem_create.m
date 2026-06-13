@@ -14,6 +14,7 @@ function result = sl_subsystem_create(modelName, subsystemName, mode, varargin)
 %     'position'     - [left,top,right,bottom]，mode='empty' 时使用，默认 [200,100,400,250]
 %     'inputPorts'   - double，空子系统输入端口数，默认 1
 %     'outputPorts'  - double，空子系统输出端口数，默认 1
+%     'subsystemPath' - char，父路径（v16 Fix #41），如 'ADRC_Controller'。非空时创建在 modelName/subsystemPath/subsystemName 下
 %     'loadModelIfNot' - 默认 true
 %
 %   输出: struct
@@ -30,6 +31,8 @@ function result = sl_subsystem_create(modelName, subsystemName, mode, varargin)
     opts.position = [200, 100, 400, 250];
     opts.inputPorts = 1;
     opts.outputPorts = 1;
+    opts.inputPortNames = {};
+    opts.outputPortNames = {};
     opts.loadModelIfNot = true;
 
     % ===== 解析 varargin =====
@@ -77,6 +80,25 @@ function result = sl_subsystem_create(modelName, subsystemName, mode, varargin)
                         i = i + 2;
                     else
                         result = struct('status', 'error', 'error', 'loadModelIfNot value missing');
+                        return;
+                    end
+                case 'inputportnames'
+                    if i+1 <= length(varargin)
+                        opts.inputPortNames = varargin{i+1};
+                        i = i + 2;
+                    end
+                case 'outputportnames'
+                    if i+1 <= length(varargin)
+                        opts.outputPortNames = varargin{i+1};
+                        i = i + 2;
+                    end
+                % [v16 Fix #41] 支持 subsystemPath — 在父子系统内创建子子系统
+                case 'subsystempath'
+                    if i+1 <= length(varargin)
+                        opts.subsystemPath = char(varargin{i+1});
+                        i = i + 2;
+                    else
+                        result = struct('status', 'error', 'error', 'subsystemPath value missing');
                         return;
                     end
                 otherwise
@@ -136,14 +158,97 @@ function result = sl_subsystem_create(modelName, subsystemName, mode, varargin)
     end
 
     % ===== 目标路径 =====
-    destPath = [modelName '/' subsystemName];
+    % [v16 Fix #41] 支持 subsystemPath — 创建嵌套子系统
+    % 旧行为: destPath = [modelName '/' subsystemName] (始终顶层)
+    % 新行为: 如果 subsystemPath 非空, destPath = [modelName '/' subsystemPath '/' subsystemName]
+    if isfield(opts, 'subsystemPath') && ~isempty(opts.subsystemPath)
+        destPath = [modelName '/' opts.subsystemPath '/' subsystemName];
+    else
+        destPath = [modelName '/' subsystemName];
+    end
 
     % ===== 检查子系统是否已存在 =====
-    existingBlocks = find_system(modelName, 'SearchDepth', 1, 'LookUnderMasks', 'none', 'BlockType', 'SubSystem');
-    for ei = 1:length(existingBlocks)
-        if strcmp(existingBlocks{ei}, destPath)
-            result = struct('status', 'error', 'error', ['Subsystem already exists: ' destPath]);
+    % [v16 Fix #41] 使用 get_param 直接检查精确路径, 而非 find_system SearchDepth=1
+    % find_system SearchDepth=1 仅搜索顶层, 嵌套子系统会漏检
+    subsystemExists = false;
+    try
+        h = get_param(destPath, 'Handle');  %#ok<NASGU>
+        subsystemExists = true;
+    catch
+        subsystemExists = false;
+    end
+    
+    % [v19 FIX #NEW-5] Idempotent: if subsystem exists (shell created by framework_approve)
+    % but has no Inport/Outport blocks, create them now instead of erroring.
+    if subsystemExists && strcmp(mode, 'empty')
+        try
+            inBlocks = find_system(destPath, 'SearchDepth', 1, ...
+                'LookUnderMasks', 'on', 'BlockType', 'Inport');
+            outBlocks = find_system(destPath, 'SearchDepth', 1, ...
+                'LookUnderMasks', 'on', 'BlockType', 'Outport');
+            existingIn = length(inBlocks) - 1;  % exclude subsystem self
+            existingOut = length(outBlocks) - 1;
+        catch
+            existingIn = -1; existingOut = -1;
+        end
+        
+        if existingIn == 0 && existingOut == 0
+            % Shell exists but no ports — idempotently create them
+            for pi = 1:opts.inputPorts
+                portName = ['In' num2str(pi)];
+                if pi <= length(opts.inputPortNames)
+                    customName = opts.inputPortNames{pi};
+                    if ischar(customName) && ~isempty(customName)
+                        portName = customName;
+                    end
+                end
+                portPath = [destPath '/' portName];
+                try
+                    add_block('simulink/Sources/In1', portPath);
+                    set_param(portPath, 'Port', num2str(pi));
+                catch
+                end
+            end
+            for pi = 1:opts.outputPorts
+                portName = ['Out' num2str(pi)];
+                if pi <= length(opts.outputPortNames)
+                    customName = opts.outputPortNames{pi};
+                    if ischar(customName) && ~isempty(customName)
+                        portName = customName;
+                    end
+                end
+                portPath = [destPath '/' portName];
+                try
+                    add_block('simulink/Sinks/Out1', portPath);
+                    set_param(portPath, 'Port', num2str(pi));
+                catch
+                end
+            end
+            result = struct('status', 'ok');
+            result.subsystem = struct('path', destPath, 'mode', 'empty', ...
+                'inputPorts', opts.inputPorts, 'outputPorts', opts.outputPorts, ...
+                'internalBlocks', {{}});
+            result.verification = struct('subsystemExists', true, ...
+                'externalConnectionsPreserved', true);
+            result.apiUsed = 'manual_empty_idempotent';
             return;
+        elseif existingIn > 0 || existingOut > 0
+            % Ports already exist — protect existing model
+            result = struct('status', 'error', ...
+                'error', ['Subsystem already exists with ports: ' destPath]);
+            return;
+        end
+        % Fall through: existingIn/existingOut < 0 (error reading) → try fresh create
+    end
+    
+    if ~subsystemExists
+        % 回退: 也检查 SearchDepth=inf (兼容非精确路径情况)
+        existingBlocks = find_system(modelName, 'SearchDepth', 10, 'LookUnderMasks', 'none', 'BlockType', 'SubSystem');
+        for ei = 1:length(existingBlocks)
+            if strcmp(existingBlocks{ei}, destPath)
+                result = struct('status', 'error', 'error', ['Subsystem already exists: ' destPath]);
+                return;
+            end
         end
     end
 
@@ -557,6 +662,12 @@ function [result, apiUsed] = create_empty_subsystem(modelName, subsystemName, de
     % ===== 4. 添加指定数量的输入端口 =====
     for pi = 1:opts.inputPorts
         portName = ['In' num2str(pi)];
+        if pi <= length(opts.inputPortNames)
+            customName = opts.inputPortNames{pi};
+            if ischar(customName) && ~isempty(customName)
+                portName = customName;
+            end
+        end
         portPath = [destPath '/' portName];
         try
             add_block('simulink/Sources/In1', portPath);
@@ -570,6 +681,12 @@ function [result, apiUsed] = create_empty_subsystem(modelName, subsystemName, de
     % ===== 5. 添加指定数量的输出端口 =====
     for pi = 1:opts.outputPorts
         portName = ['Out' num2str(pi)];
+        if pi <= length(opts.outputPortNames)
+            customName = opts.outputPortNames{pi};
+            if ischar(customName) && ~isempty(customName)
+                portName = customName;
+            end
+        end
         portPath = [destPath '/' portName];
         try
             add_block('simulink/Sinks/Out1', portPath);

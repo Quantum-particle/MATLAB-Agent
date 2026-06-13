@@ -6,11 +6,34 @@ function r = sl_check_signal_closure(fw)
     if ~isfield(fw, 'subsystems') || ~isfield(fw, 'signalFlow') || isempty(fw.signalFlow)
         r.confidence = 0.8; return;
     end
-    names = cell(1, length(fw.subsystems));
-    for i = 1:length(fw.subsystems), names{i} = sl_safe_index(fw.subsystems, i).name; end
+    % [v30 B6 AUDIT] Build subsystem name list with guards for missing 'name' field
+    nSubs = length(fw.subsystems);
+    names = cell(1, nSubs);
+    for i = 1:nSubs
+        sub = sl_safe_index(fw.subsystems, i);
+        if isstruct(sub) && isfield(sub, 'name')
+            names{i} = sub.name;
+        else
+            names{i} = sprintf('_unnamed_%d', i);
+        end
+    end
     issues = {};
-    for i = 1:length(fw.signalFlow)
-        if iscell(fw.signalFlow), sf = fw.signalFlow{i}; else sf = fw.signalFlow(i); end
+    nFlow = length(fw.signalFlow);
+    for i = 1:nFlow
+        % [v30 B6 AUDIT] Guard against non-struct elements in signalFlow array
+        if iscell(fw.signalFlow)
+            sf = fw.signalFlow{i};
+        else
+            sf = fw.signalFlow(i);
+        end
+        if ~isstruct(sf)
+            issues{end+1} = sprintf('signalFlow[%d] is not a struct', i);
+            continue;
+        end
+        if ~isfield(sf, 'srcSubsystem') || ~isfield(sf, 'dstSubsystem')
+            issues{end+1} = sprintf('signalFlow[%d] missing srcSubsystem/dstSubsystem', i);
+            continue;
+        end
         if ~any(strcmp(names, sf.srcSubsystem))
             issues{end+1} = sprintf('src "%s" not in subsystems', sf.srcSubsystem);
         end

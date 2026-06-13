@@ -44,7 +44,6 @@
 PUBLISH.md
 SKILL.md
 app/TROUBLESHOOTING.md
-app/ensure-running.bat
 app/server/system-prompts.ts
 references/troubleshooting.md
 ```
@@ -107,7 +106,7 @@ cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
 # 0. 🔴 更新 README.md（版本号、新特性、变更日志等）
 
 # 1. 取消 assume-unchanged 保护
-git update-index --no-assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/ensure-running.bat app/server/system-prompts.ts references/troubleshooting.md
+git update-index --no-assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/server/system-prompts.ts references/troubleshooting.md
 
 # 2. 脱敏：替换 "泰坦" → "泰坦"
 #    （用脚本或手动替换所有受保护文件中的敏感字段）
@@ -122,7 +121,7 @@ git -c http.proxy="" -c https.proxy="" push origin main
 #    （用脚本或手动恢复）
 
 # 5. 🔴 重新标记 assume-unchanged
-git update-index --assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/ensure-running.bat app/server/system-prompts.ts references/troubleshooting.md
+git update-index --assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/server/system-prompts.ts references/troubleshooting.md
 ```
 
 ### 方式三：🔴 清仓重推（GitHub 文件版本不一致时）
@@ -136,7 +135,7 @@ cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent"
 #    确保首页展示的信息与本次推送一致
 
 # 1. 取消所有 assume-unchanged 保护
-git update-index --no-assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/ensure-running.bat app/server/system-prompts.ts references/troubleshooting.md
+git update-index --no-assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/server/system-prompts.ts references/troubleshooting.md
 
 # 2. 脱敏处理
 #    替换所有受保护文件中的 "泰坦" → "泰坦"
@@ -159,7 +158,7 @@ git -c http.proxy="" -c https.proxy="" push origin main
 #    将 "泰坦" 替换回 "泰坦"
 
 # 8. 🔴 重新标记 assume-unchanged
-git update-index --assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/ensure-running.bat app/server/system-prompts.ts references/troubleshooting.md
+git update-index --assume-unchanged PUBLISH.md SKILL.md app/TROUBLESHOOTING.md app/server/system-prompts.ts references/troubleshooting.md
 ```
 
 ---
@@ -225,6 +224,17 @@ app/matlab-bridge/*.mat
 ---
 
 ## 版本历史
+
+### v30.0 — 2026-06-13 清仓重推 — v30 全量同步
+
+- 全量清仓重推，替换仓库所有文件
+- **v30**: sl_delete_block/delete_approval/retry_plan 全生命周期删除API + Gate_RETRY 断路器 + Gate_DELETE_APPROVAL
+- **v18.3**: Gate_SHELL_ONLY 绕过修复（3条路径）+ 懒创建子外壳
+- **v15**: 7项Bug修复（signalDimensions/祖先豁免/frameworkFile）
+- **v12.1**: 10项Bug修复（审批持久化/静默异常/无锁访问等）
+- **v12**: Rigor Score 四维评分引擎 + 参数标准化 + Gate体系加固
+- **README.md**: 全面更新至 v30（13层Gate、76个.m函数、新增特性）
+- **GITHUB.md / PUBLISH.md**: 版本历史同步更新
 
 ### v10.2.1 — 2026-04-21 参数注册表修复 + 全面模块测试
 

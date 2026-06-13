@@ -1,5 +1,5 @@
 function result = sl_review_core(modelPath, action, varargin)
-% SL_REVIEW_CORE v11.8 Unified Review Engine — shared by sl_micro_review, sl_validate_model, sl_model_complete
+% SL_REVIEW_CORE v11.8 Unified Review Engine - shared by sl_micro_review, sl_validate_model, sl_model_complete
 %   result = sl_review_core(modelPath, 'all')     % run all 4 dimensions
 %   result = sl_review_core(modelPath, 'portPairing')
 %   result = sl_review_core(modelPath, 'paramAudit')
@@ -7,10 +7,10 @@ function result = sl_review_core(modelPath, action, varargin)
 %   result = sl_review_core(modelPath, 'layoutAudit')
 %
 % Dimensions:
-%   1. portPairing:    Inport/Outport + Goto/From 配对完整性
-%   2. paramAudit:     逐模块参数非空/非默认检查
-%   3. connectionScan: 全端口连线完整性扫描
-%   4. layoutAudit:    模块位置重叠/越界检查
+%   1. portPairing:    Inport/Outport + Goto/From -----
+%   2. paramAudit:     -------/-----
+%   3. connectionScan: ----------
+%   4. layoutAudit:    ------/----
 %
 % Output: struct with fields {passed, confidence, issue, details}
 
@@ -20,7 +20,8 @@ function result = sl_review_core(modelPath, action, varargin)
     
     % Validate model path
     if isempty(modelPath)
-        result = struct('status', 'error', 'message', 'sl_review_core: modelPath required');
+        result = struct('status', 'error', 'message', 'sl_review_core: modelPath required', ...
+            'item', 'unknown', 'passed', false, 'confidence', 0.0, 'issue', 'modelPath empty');
         return;
     end
     
@@ -35,7 +36,7 @@ function result = sl_review_core(modelPath, action, varargin)
             load_system(topModel);
         end
     catch
-        % Model not loadable — review of built model not possible
+        % Model not loadable - review of built model not possible
         result = struct('status', 'ok', 'modelPath', modelPath, ...
             'action', action, 'passed', true, 'confidence', 0.3, ...
             'issue', sprintf('Model not loaded: %s (review skipped)', modelPath), ...
@@ -116,11 +117,11 @@ function r = check_port_pairing(modelPath)
         
         % Check 3: Inport/Outport count should be >= 1 for subsystems
         if inportCount == 0
-            issues{end+1} = 'No Inport blocks found — subsystem has no input interface';
+            issues{end+1} = 'No Inport blocks found - subsystem has no input interface';
             r.confidence = min(r.confidence, 0.3);
         end
         if outportCount == 0
-            issues{end+1} = 'No Outport blocks found — subsystem has no output interface';
+            issues{end+1} = 'No Outport blocks found - subsystem has no output interface';
             r.confidence = min(r.confidence, 0.3);
         end
         
@@ -229,6 +230,59 @@ function r = check_param_audit(modelPath)
             issues{end+1} = sprintf('%d/%d blocks have parameter issues', blocksWithIssues, totalBlocks);
         end
         
+        % [v12.0] Hardcoded numeric detection (PM-02 FIX)
+        blocksWithHardcoded = 0;
+        hardcodedIssues = {};
+        for i = 2:length(blocks)
+            bp = blocks{i};
+            try
+                btype = get_param(bp, 'BlockType');
+                if any(strcmp(btype, {'Inport', 'Outport', 'Goto', 'From', 'SubSystem'}))
+                    continue;
+                end
+                % Check Gain value
+                if strcmp(btype, 'Gain')
+                    gainVal = get_param(bp, 'Gain');
+                    if ~isempty(gainVal) && ischar(gainVal)
+                        gainStr = strtrim(gainVal);
+                        % [v24 FIX] Hardcoded if purely numeric/arithmetic — no variable names.
+                        % Previous regex '^--\d+\.-\d*...' was corrupted and never matched.
+                        if isempty(regexp(gainStr, '[a-zA-Z_]', 'once'))
+                            blocksWithHardcoded = blocksWithHardcoded + 1;
+                            if blocksWithHardcoded <= 5
+                                hardcodedIssues{end+1} = sprintf('Gain block %s = %s (hardcoded)', get_param(bp, 'Name'), gainStr);
+                            end
+                        end
+                    end
+                end
+                % Check Constant value
+                if strcmp(btype, 'Constant')
+                    constVal = get_param(bp, 'Value');
+                    if ~isempty(constVal) && ischar(constVal)
+                        constStr = strtrim(constVal);
+                        if isempty(regexp(constStr, '[a-zA-Z_]', 'once'))
+                            blocksWithHardcoded = blocksWithHardcoded + 1;
+                            if blocksWithHardcoded <= 5
+                                hardcodedIssues{end+1} = sprintf('Constant block %s = %s (hardcoded)', get_param(bp, 'Name'), constStr);
+                            end
+                        end
+                    end
+                end
+            catch
+            end
+        end
+        if blocksWithHardcoded > 0
+            if ~r.passed
+                r.issue = [r.issue '; '];
+            else
+                r.issue = '';
+            end
+            r.issue = [r.issue sprintf('%d/%d blocks have hardcoded numeric values', blocksWithHardcoded, totalBlocks)];
+            r.confidence = min(r.confidence, max(0.3, 1.0 - blocksWithHardcoded / max(1, totalBlocks)));
+            r.details.hardcodedCount = blocksWithHardcoded;
+            r.details.hardcodedIssues = hardcodedIssues;
+        end
+        
         % Show first 5 detailed issues
         if length(paramIssues) > 5
             paramIssues = paramIssues(1:5);
@@ -311,7 +365,14 @@ function r = check_connection_scan(modelPath)
         nUnconnected = length(unconnected);
         if nUnconnected > 0
             r.passed = false;
-            r.confidence = max(0.1, 1.0 - nUnconnected / max(1, totalBlocks * 2));
+            % [v12.0] Linear degradation formula (CN-02 FIX)
+            % Replace: max(0.1, 1.0 - nUnconnected / max(1, totalBlocks * 2))
+            % With:    1.0 - min(1.0, nUnconnected / max(1, totalBlocks))
+            % And cap at 0.5 if more than 5 unconnected ports
+            r.confidence = 1.0 - min(1.0, nUnconnected / max(1, totalBlocks));
+            if nUnconnected > 5
+                r.confidence = min(r.confidence, 0.5);
+            end
             
             % Limit reported issues
             if nUnconnected <= 10

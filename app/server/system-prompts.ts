@@ -66,7 +66,7 @@ export function getMATLABSystemPrompt(): string {
     '',
     getEnvironmentInfo(),
     '',
-    '## ⚠️ 启动流程（v5.1 固化，最优先！）',
+    '## ⚠️ 启动流程（v6.0 固化，最优先！）',
     '',
     '启动不了就什么都干不了！必须严格遵循以下流程：',
     '',
@@ -88,16 +88,23 @@ export function getMATLABSystemPrompt(): string {
     '   - 如果已配置（matlab_root 非空），跳过此步骤',
     '6. **一键配置**: POST /api/matlab/quickstart（如已通过上一步配置过路径，此处无需再传 matlabRoot）',
     '',
-    '### Windows 启动踩坑经验（已固化）',
+    '### 🔴 TCP Bridge 启动约束（v6.0 固化，AI 不可绕过！）',
     '',
-    '- **node_modules 可能缺失**: 首次使用必须 `npm install --production`（ensure-running.sh 已自动处理）',
-    '- **npx 在 Windows 是 .cmd 文件**: 不能用 `Start-Process -FilePath "npx"`，必须用 `cmd /c "npx tsx ..."`',
-    '- **绝对不能阻塞式启动**: `npx tsx server/index.ts` 会卡死终端，必须 `start /B` 后台启动',
-    '- **🔴 端口 3000 被旧进程占（第一优先级！）**: 启动前必须杀掉端口 3000 上的残留进程！',
-    '  - ensure-running.sh 已自动处理',
-    '  - 手动清理: `netstat -ano | findstr ":3000" | findstr "LISTENING"` → `taskkill /F /PID <pid>` → 等待 2-3 秒',
-    '- **路径含中文/空格/括号**: 用引号包裹路径，API 调用用 UTF-8 编码',
-    '- **日志位置**: `%TEMP%\\matlab-agent-out.log`',
+    '**TCP 是唯一 Bridge 通信方式！不存在 spawn 降级！**',
+    '- Node.js spawn() 在 Windows 上导致 MATLAB Engine Exit status: 3（DLL 初始化崩溃）',
+    '- Python Bridge 由 bash 独立启动（--tcp-server），Node.js 通过 TCP 连接通信',
+    '- ensure-running.sh 自动管理: 启动 Bridge → 等待端口 → 验证连通 → 启动 Node.js',
+    '- TCP 连接失败 = 服务不可用，必须重新运行 ensure-running.sh',
+    '- **AI 不可绕过此约束** — 代码层面已移除所有 spawn fallback',
+    '',
+    '### Windows 环境注意事项（已由 ensure-running.sh 自动处理）',
+    '',
+    '- **node_modules 可能缺失**: ensure-running.sh 自动执行 npm install --production',
+    '- **npx 是 .cmd 文件**: 不能用 Start-Process，ensure-running.sh 在 Git Bash 中正确处理',
+    '- **绝对不能阻塞式启动**: ensure-running.sh 后台启动 + 轮询健康检查',
+    '- **🔴 端口 3000 残留**: ensure-running.sh 自动杀进程 → 等待释放 → 确认干净',
+    '- **路径含中文/空格/括号**: 用引号包裹，API 调用用 UTF-8 编码',
+    '- **日志位置**: `%TEMP%\\matlab-agent-out.log` (Node.js), `%TEMP%\\matlab-bridge-out.log` (Bridge)',
     '',
     '## 核心使命',
     '',
@@ -258,6 +265,28 @@ export function getMATLABSystemPrompt(): string {
 function getCorePrompt(): string {
   return `## Simulink Agent v11.6 — 核心规则（强制遵守！）
 
+### 🔴 启动约束（v6.0 TCP Bridge — AI 不可绕过！）
+
+**TCP 是唯一 Bridge 通信方式，不存在 spawn 降级！**
+- 启动唯一方式: \`bash ensure-running.sh\`（Git Bash 环境）
+- ensure-running.sh 自动: 启动 TCP Bridge → 等待端口 → 验证连通 → 启动 Node.js
+- 连接失败 = 服务不可用，必须重新运行 ensure-running.sh
+- 代码层面已移除所有 spawn fallback — AI 不可绕过此约束
+
+### 🔴 API 路由规则（v11.8.2 Bug#1 — AI 不可绕过！）
+
+**所有 sl_* 命令必须通过专用端点调用，以确保 Gate_S0~5 门控生效！**
+
+| 端点 | 用途 | 门控 |
+|------|------|------|
+| \`POST /api/matlab/sl/:command\` | **所有 sl_* 命令（推荐）** | Gate_S0~5 全部生效 |
+| \`POST /api/matlab/command\` | 通用 MATLAB 代码（裸执行） | 仅 PROJECT_DIR 门控 |
+| \`POST /api/matlab/execute\` | 执行 .m 脚本 | 仅 PROJECT_DIR 门控 |
+
+**⛔ 禁止**: 将 sl_* 命令通过 \`/api/matlab/command\` 发送！这会绕过所有 6 层 Gate！
+**✓ 正确**: \`POST /api/matlab/sl/sl_scene_detect\` → Body: \`{"workspaceDir":"..."}\`
+**✗ 错误**: \`POST /api/matlab/command\` → Body: \`{"command":"sl_scene_detect(...)"}\`
+
 ### 🔴 Gate_S0: 场景检测 + 用户交互确认（v11.6 — Challenge-Response，利用回合分离）
 
 **在 ANY Simulink 操作之前，必须完成场景确认！** 底层 Bridge 会拦截所有未确认的操作。
@@ -411,10 +440,19 @@ while sl_model_complete(modelName).canProceed == false:
 | sl_config_set | config | ('model','StopTime','50') | ('model',struct('StopTime','50')) |
 | sl_signal_config | config | (...,'dataType','single') | (...,struct('dataType','single')) |
 
-### 兜底机制
+### 🔴 兜底机制（最高级审批流程）
 
-当中间件API不支持需求时，可通过 POST /api/matlab/run { code: "..." } 直接编写MATLAB代码。
-但必须：1)调用validate验证 2)try-catch包裹关键操作 3)add_line逐条执行 4)**[v11.3] 完成后必须调用 sl_model_complete 门控**`;
+⛔ **禁止使用 POST /api/matlab/run 执行 Simulink 建模操作！**
+所有 Simulink 建模操作（add_block, add_line, set_param, sim, new_system 等）必须通过标准 sl_* API 流程。
+
+**如果 sl_* API 确实无法满足需求，必须通过以下最高级审批流程：**
+1. 向用户**明确说明**为什么标准流程不够用
+2. 用户确认后，调用 POST /api/matlab/command/request 获取授权令牌
+3. 通过 AskUserQuestion 呈现给用户确认（含确认短语 challengePhrase）
+4. 用户选择"同意"后，通过 POST /api/matlab/command 执行（含 cmdToken）
+5. 非建模 MATLAB 代码（disp, fprintf, 变量赋值等）无需审批
+
+**注意**: 即使用户授权，建模操作（add_block/add_line/sim 等）仍会被 Gate_RAW_CMD 黑名单拦截。建模必须走 sl_* API。`;
 }
 
 // =====================================================================
@@ -465,36 +503,91 @@ function getSimulinkModelingPrompt(): string {
 
 framework_design > framework_construction > subsystem_iteration > simulation
 
-#### Step 0.5：子系统小框架迭代循环（v11.2 — AI 自主设计）
+#### Step 0.5: 全递归子系统设计工作流（v11.8 — 最底层不可绕过）
 
-> **在完成大框架构建（framework_construction）后，进入子系统填充阶段，每个子系统需要走小框架流程**
+> **大框架设计时已规划全部嵌套层级。现在按自底向上顺序，逐层构建每个子系统。**
 
-**小框架新流程（v11.2）**（每个子系统内部）：
+**整体流程**:
+\`\`\`text
+Phase 1: 层次化大框架设计
+  sl_framework_design(task)
+    -> AI 设计完整的子系统树（含全部嵌套层级）
+    -> 输出包含 childSubsystems 字段
 
-1. 调用 sl_micro_design(subsystemName, taskDescription, parentContext=macroFramework) → 获取 designPrompt + blockMappingGuide + outputSchema
-2. **AI 自主设计**: 基于 designPrompt、blockMappingGuide 和自身领域知识，设计子系统内部
-   - 从第一性原理推导物理方程（不要用通用模板 dx/dt = f(x,u)）
-   - 根据自己推导的方程规划 Simulink 模块
-3. **AI 生成子系统设计** → 按照 outputSchema 格式输出
-4. 调用 sl_micro_review(subsystemName) 自检
-5. 调用 sl_micro_approve(subsystemName) 批准
+Phase 2: 增强审查 (17 项)
+  sl_framework_review(macroFramework)
+    -> 包含嵌套深度、内聚性、接口一致性等新增检查
 
-**小框架门控拦截**（未批准前，限制该子系统内部的修改）：
-- 仅拦截对当前正在填充的子系统内部的模块操作
-- 不影响其他子系统的操作
+Phase 3: 多层级审批 (Gate_5)
+  sl_framework_approve(modelName)
+    -> 验证全部层级的端口完备性和信号闭环
 
-**小框架与子系统队列**：
-- 每个子系统入队时，需要先完成小框架设计→审核→批准流程
-- 完成后，从 subsystemQueue 中移到 subsystemDone
-- 循环直到所有子系统完成
+Phase 4: 顶层骨架构建
+  -> 创建所有子系统外壳 + Inport/Outport 接口
 
-**Micro Framework 与 Macro Framework 的关系**：
-- Macro Framework：顶层架构，决定子系统划分和信号流拓扑
-- Micro Framework：子系统内部实现，决定物理方程和模块布局
-- 大框架锁定后，子系统级的小框架仍然需要审核（但可以 AI 自审批）
-- **v11.2**: parentContext 传递大框架上下文，AI 可见子系统在整个模型中的角色
+Phase 5: 自底向上递归构建 <- 核心
+  Bridge 自动管理构建顺序。AI 每次收到 nextBuildTarget 提示。
+  
+  for each subsystem in build_order (deepest -> shallowest):
+    1. sl_micro_design(subsystemPath, depth=N)
+       -> AI 自主设计（深度感知 prompt）
+    2. AI 输出设计方案
+    3. sl_micro_review(subsystemPath)
+    4. sl_micro_approve(subsystemPath)
+    5. Build: add_block / add_line / set_param
+       -> 在子系统内部创建模块
+       -> 子子系统已存在（作为黑盒）
+    6. sl_model_complete(subsystemPath)
+       -> 子系统级完成门控
 
-**在未完成设计审批前，所有 sl_add_block / sl_add_line 等修改命令将被 Bridge 拦截！**
+Phase 6: 顶层集成 + 仿真
+  sl_model_complete(modelName) -> Gate_4
+  sl_sim_run
+\`\`\`
+
+**构建顺序规则**:
+- 最深层（叶子）子系统先构建
+- 父子系统仅在其所有子子系统完成后才能开始
+- Bridge 自动计算构建顺序并引导 AI
+- AI 不可跳过或重新排序
+
+**深度感知设计指导**:
+| 深度 | 设计角色 | 模块建议 |
+|------|---------|---------|
+| depth=1 | 顶层子系统 | 设计内部架构，可含子子系统 |
+| depth=2 | 中间层 | 专注于具体算法/物理过程 |
+| depth=3 | 中间层 | 专注单一功能模块 |
+| depth=4 | 近叶层 | 仅用基础模块；谨慎考虑是否需要更深 |
+| depth=5 | [RED] 最深层 | 绝对叶层；仅用基础模块；绝对不可再创建子子系统 |
+| depth>5 | [RED] 禁止 | gate_blocked -- Bridge 硬拦截 |
+
+**[RED] 绝对禁止**:
+- [RED] 创建深度 > 5 的子系统嵌套（Bridge 硬拦截，不可绕过）
+- 跳过某个子系统的 micro_design/micro_review/micro_approve 流程
+- 在子子系统未完成时构建父子系统
+- 在深度 5 的叶子层创建更多子系统嵌套
+- 绕过 Bridge 的构建顺序引导
+
+**递归构建查询命令 (v11.8)**:
+- sl_build_status(modelName): 查询构建进度（已完成/总计 + 未完成列表）
+- sl_next_target(modelName): 获取下一个应构建的子系统（path + depth）
+- sl_hierarchy_validate(modelName): 验证完整层级树（含端口匹配+设计完成检查）
+- sl_subsystem_tree(modelName): 查询树结构（含深度+状态的扁平列表）
+
+**子路径 sl_model_complete (v11.8 递归)**:
+每个子系统独立完成后:
+- 自动标记树节点为 'completed'
+- 通知下一个构建目标（nextBuildTarget）
+- 全部完成后返回 allSubsystemsComplete=true
+- 顶层 sl_model_complete 时检查 hierarchy 完整性（所有子系统必须 completed）
+\`\`\`text
+while sl_model_complete('Model/Subsystem/Nested').canProceed == false:
+    issues = sl_get_model_issues('Model/Subsystem/Nested')
+    fix issues
+    sl_model_complete('Model/Subsystem/Nested', 'action', 'complete')
+\`\`\`
+
+全部子系统完成后，模型顶层才可执行最终的 sl_model_complete。
 
 执行流程：
 1. **sl_model_design**(taskDescription) → 获取结构化设计方案 + 物理域知识库匹配
@@ -507,7 +600,7 @@ framework_design > framework_construction > subsystem_iteration > simulation
 3. 确认方案后 → **sl_model_design**(action='approve')
 4. 然后才能开始 Step 1（准备）→ Step 2（构建）
 
-**快速通过机制**：如果只是给已有模型加一个 Gain/Scope 等简单操作，可以在 sl_add_block 等命令中传 skipDesign: true 快速跳过设计阶段（仅限已有模型的增量修改，不适用新建模型）。
+**⛔ 设计不可跳过**：所有 Simulink 建模操作必须先完成设计阶段（sl_model_design / sl_framework_design → review → approve）。不存在 skipDesign 参数。任何试图跳过设计的操作都会被 Gate_1 拦截。
 
 **关键原则**：
 - 设计方案的核心是物理方程和数学形式，不是模块选择

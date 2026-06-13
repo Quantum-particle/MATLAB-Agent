@@ -76,9 +76,10 @@ function result = sl_sim_run(modelName, varargin)
         try
             % 检查模型是否能编译（使用 evalc 安全方式）
             try
-                % 注意：model('compile') 在 Engine 模式下可能不支持
-                % 改用 set_param + SimulationCommand 方式
-                set_param(modelName, 'SimulationCommand', 'update');
+                % [v24 FIX Bug#15] Replace deprecated set_param SimulationCommand
+                % with model('compile') which works in MATLAB Engine mode.
+                % sl_best_practices.m recommends model('compile') over SimulationCommand.
+                evalc(sprintf('model(''%s'', [], [], [], ''compile'');', modelName));
             catch ME_compile
                 % 编译失败不算致命错误，只记录警告
                 preCheckWarns{end+1} = ['Model update check: ' ME_compile.message]; %#ok<AGROW>

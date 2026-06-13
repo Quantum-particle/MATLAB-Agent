@@ -6,11 +6,74 @@
 >
 > **🔴 调用规则 (v11.8.3)**: `sl_*` 命令必须通过 `POST /api/matlab/sl/:command` 调用（触发 6 层 Gate）；`POST /api/matlab/command` 需要用户手动授权（Gate_RAW_CMD 令牌门控），AI 不可自行绕过。
 >
-> **🔴 外壳/内部原则 (v11.9)**: 子系统**空壳**（`sl_subsystem_create` 创建的空 SubSystem 块 + **Inport/Outport 端口块**）可以批量创建——`sl_subsystem_create('empty', inputPorts=N, outputPorts=M)` 一步完成外壳+端口。子系统**内部功能块**（Gain/Integrator/Sum/Constant 等）和**连线** **绝对不能批量**——每个子系统的内部设计必须独立走完整的 Gate 防护流程：`micro_design → micro_review → micro_approve → build(添加功能块+连线) → sl_model_complete`。此规则硬编码在 Python Bridge 的 `_handle_sl_command` 中（`Gate_SHELL_ONLY`），AI 不可绕过。
+> **🔴 外壳/内部原则 (v18.3)**: 子系统**空壳**（`sl_subsystem_create` 创建的空 SubSystem 块 + **Inport/Outport 端口块**）分为两级创建：**(1) 顶层外壳（depth=1）** 在 `framework_approve` 时批量创建（仅容器骨架，不含任何内部块）。**(2) 子外壳（depth≥2）** 在首次 `sl_micro_design` 时**懒创建**——当父子系统被设计时才创建其孩子外壳。**禁止批量创建全部深度外壳再逐个填充**。子系统**内部功能块**（Gain/Integrator/Sum/Constant 等）和**连线** **绝对不能批量**——必须通过 `micro_design → micro_review → micro_approve → build → sl_model_complete` 逐个完成。此规则硬编码在 Python Bridge（`Gate_SHELL_ONLY` + `_batch_create_all_shells(max_depth=1)` + `_create_child_shells_for_subsystem`）和 `sl_model_complete.m` 中，AI 不可绕过。
 >
 > **🔴 启动方式**: TCP 是唯一 Bridge 通信方式（v11.9 固化）。Node.js spawn() 会导致 MATLAB Engine Exit status: 3（Windows DLL 初始化崩溃），因此 Bridge 由 bash 独立启动，Node.js 通过 TCP 连接。不存在 spawn 降级，AI 不可绕过。
 >
 > **文件管理**: `.slx`/`.m` 在 workspace；中间文件（`.py`/`.json`/`slprj/`）自动隔离到 `workspace/.matlab_agent_tmp/`。
+
+---
+
+## 第零层：根本设计原则（代码级不可绕过）
+
+### 🔴 matlab-agent 的本质
+
+**matlab-agent 是一个代码级强制性的标准化 Simulink 建模监管框架。** 它是一个嵌入到 API 层的 Gate 体系，AI 必须处于这个迭代循环的监管、监督和引导之下。
+
+- AI 的角色：**自主设计师**——决定子系统划分、信号流、方程离散化、块拓扑、参数值、构建顺序
+- Agent 的角色：**代码级强制监管者**——通过 Python 硬编码的 Gate 体系确保每一步不可跳过
+- AI **不可以**跳过任何 Gate 检查
+- AI **不可以**绕过标准化作业流程中的任何一步
+- 一旦 AI 尝试跳过 → Gate 硬编码返回 `gate_blocked`，明确告知缺失步骤
+
+### 🔴 标准化作业流程（硬编码，按 Gate 顺序执行）
+
+```
+Phase -1  Gate_S0              场景确认         sl_scene_detect → sl_scene_confirm
+Phase  1  Gate_1               大框架批准       sl_framework_approve
+Phase  3  Gate_APPROVE_NO_     子系统迭代       每个子系统独立:
+         REVIEW                                   sl_micro_design → sl_micro_review → sl_micro_approve
+Phase  5  Gate_SHELL_ONLY      构建封锁          仅 micro_approved 的子系统可 add_block/add_line
+         Gate_CONNECTIVITY     连通性强制         building 阶段阈值 15，connecting 阶段阈值 5
+         Gate_SUBSYSTEM_       子系统封锁        当前子系统 sl_model_complete passed 之前，
+         CLOSURE                                  禁止开始下一个子系统的内部构建
+Phase  6  Gate_4               集成验收          sl_model_complete(model) passed → sl_sim_run
+```
+
+**每步都有对应的 Gate，每步都可被 Gate 拦截。没有"跳过"选项。**
+
+### 🔴 v12.1 Gate 体系补全 (2026-05-16)
+
+| Gate | 触发命令 | 作用 |
+|------|---------|------|
+| **Gate_MODEL_EXISTS** 🆕 | 所有写操作 (Scene 1) | Phase 0 强制: .slx 不存在→拦截一切 |
+| **Gate_FRAMEWORK_SEQUENCE** 🆕 | `sl_framework_approve` | 大框架 approve 前强制 review |
+| **Gate_APPROVE_NO_REVIEW** ✅ 重新启用 | `sl_micro_approve` | 小框架 approve 前强制 review |
+| **Gate_MICRO_DESIGN_CLOSURE** 🆕 | `sl_micro_design` | 前一子系统未 complete → 拦截下一个设计 |
+| **Gate_SUBSYSTEM_CLOSURE** 🆕 | `add_block/add_line` | 前一子系统未 complete → 拦截下一个构建 |
+| **Gate_CONNECTIVITY** (增强) | `sl_add_block` | 分阶段阈值: building=15, default=5 |
+
+### 🔴 Gate_SUBSYSTEM_CLOSURE（v12.1 新增）
+
+这是补全迭代循环的关键 Gate。它的逻辑是：
+
+> 当子系统 A 已 micro_approve 但尚未 sl_model_complete(subPath) 通过时，对子系统 B 的任何 add_block 操作都将被 Gate_SUBSYSTEM_CLOSURE 拦截。
+
+这意味着 AI 无法：
+- 一次性审批全部子系统后批量构建
+- 在未验证子系统 A 的情况下开始子系统 B 的内部构建
+- 跳过 sl_model_complete(subPath) 直接进入下一个
+
+**唯一合法路径**: `micro_approve(A) → build(A) → complete(A) → micro_approve(B) → build(B) → complete(B) → ...`
+
+### 🔴 Gate_MICRO_DESIGN_CLOSURE（v12.1 新增）
+
+补全设计阶段的迭代循环：
+
+> 当子系统 A 已 micro_approve 但尚未 sl_model_complete(subPath) 通过时，对子系统 B 的 micro_design 调用将被 Gate_MICRO_DESIGN_CLOSURE 拦截。
+
+这意味着 AI 无法在设计阶段就批量设计所有子系统。
+
 
 ---
 
@@ -187,13 +250,14 @@ Step A: ensure-running.sh (TCP Bridge + Node.js) → Step B: setup_workspace.py 
 
 > **🔴 v11.9 关键修正**: `sl_subsystem_create('empty', inputPorts=N, outputPorts=M)` 已经包含 Inport/Outport 创建（共 N+M 个端口块）。**构建脚本禁止重复添加 In1/Out1 块**——重复添加导致端口加倍（228 unconnected 根因）。
 >
-> 构建流程：
-> 1. `sl_subsystem_create('empty', inputPorts=N, outputPorts=M)` — 批量创建外壳 + Inport/Outport
-> 2. `sl_micro_design → review → approve` — 逐个审批子系统内部设计
-> 3. 添加**功能块**（Gain/Integrator/Sum/Constant 等）— 禁止添加 In1/Out1
-> 4. 连线（内部 + 跨子系统）— Inport/Outport 已存在，直接引用端口号
+> 构建流程 (v18.3)：
+> 1. `framework_approve` 阶段：`_batch_create_all_shells(max_depth=1)` — 仅批量创建顶层外壳 + Inport/Outport
+> 2. `sl_micro_design` 阶段：`_create_child_shells_for_subsystem` — 懒创建该子系统下的子外壳
+> 3. `sl_micro_design → review → approve` — 逐个审批子系统内部设计
+> 4. 添加**功能块**（Gain/Integrator/Sum/Constant 等）— 禁止添加 In1/Out1
+> 5. 连线（内部 + 跨子系统）— Inport/Outport 已存在，直接引用端口号
 >
-> Bridge 自动管理构建顺序（subsystem_tree + build_order），硬深度限制 5 层。
+> Bridge 自动管理构建顺序（subsystem_tree + build_order + 懒创建），硬深度限制 5 层。
 
 **Phase 5 — 递归构建 (v11.8)**: 按 build_order 自底向上逐层构建每个子系统。`sl_build_status` / `sl_next_target` 查询进度。每个子系统独立走 micro_design(depth-aware) → micro_review → micro_approve → build(add_block/add_line/set_param) → `sl_model_complete(subPath)`。子路径 complete 成功后自动标记节点为 completed，通知下一个构建目标。
 
@@ -217,9 +281,10 @@ Step A: ensure-running.sh (TCP Bridge + Node.js) → Step B: setup_workspace.py 
 | 子系统 | `sl_micro_design` `_review` `_approve` |
 | 层级 🔴 | `sl_hierarchy_validate` `sl_subsystem_tree` `sl_build_status` `sl_next_target` (v11.8) |
 | 构建 | `sl_add_block_safe` `sl_add_line_safe` `sl_set_param_safe` `sl_block_position` |
+| 删除 🔴 | `sl_delete_block` `sl_delete` `sl_delete_approval` |
 | 配置 | `sl_config_set` `sl_auto_layout` |
 | 验证 | `sl_validate_model` `sl_get_model_issues` `sl_inspect` |
-| 门控 | `sl_model_complete` `sl_check_port_completeness` `sl_check_signal_closure` |
+| 门控 🔴 | `sl_model_complete` `sl_check_port_completeness` `sl_check_signal_closure` `sl_retry_plan` |
 | 仿真 | `sl_sim_run` `sl_sim_batch` `sl_sim_results` `sl_baseline_test` |
 
 ### 反模式 & 陷阱速查
@@ -235,7 +300,7 @@ Step A: ensure-running.sh (TCP Bridge + Node.js) → Step B: setup_workspace.py 
 | `Scope` 端口数 | `NumInputPorts` 不是 `NumPorts` |
 | `arrangeSystem` 不加 FullLayout | `'FullLayout','true'`，前后 save |
 | 新增模块 | 四文件同步: registry.md + .m + bridge.py + api_guide |
-| 🔴 批量创建子系统内部块 | **外壳可批量，内部必须逐个 Gate 流程** — `micro_design → review → approve → build` 不可跳过 |
+| 🔴 批量创建所有深度子系统外壳 | **顶层外壳可批量（depth=1），子外壳在 micro_design 时懒创建，内部块必须逐个 Gate 流程** — `micro_design → review → approve → build` 不可跳过 |
 | 🔴 用 Gate_RAW_CMD 绕过子系统内部审查 | 子系统内部块创建永远走 `sl_*` API，不通过 `/api/matlab/command` |
 | 🔴 micro_approve 后重复添加 In1/Out1 | `sl_subsystem_create('empty',inputPorts=N,outputPorts=M)` 已包含 Inport/Outport — 构建脚本只需添加功能块+连线 |
 | 🔴 构建后不调用 sl_auto_layout | `sl_model_complete` **强制**排版（v11.9 固化）。连续 5+ add_block 后也自动排版。不排版导致块重叠无法阅读 |
@@ -253,8 +318,8 @@ SKILL.md (本文件)                          ← 总索引
 │   ├── ensure-running.sh                  ← 唯一启动脚本（Git Bash）
 │   ├── setup_workspace.py                 ← 工作环境初始化门控
 │   ├── matlab-bridge/
-│   │   ├── matlab_bridge.py               ← Python Bridge 核心（~7000行）
-│   │   └── sl_toolbox/*.m                 ← 72 个 MATLAB 函数实现 (v11.8.2: +sl_safe_index.m 安全索引)
+│   │   ├── matlab_bridge.py               ← Python Bridge 核心 (~7350行, v15: Bugfix 7项)
+│   │   └── sl_toolbox/*.m                 ← 76 个 MATLAB 函数实现 (v12.0: +sl_rigor_score.m, sl_rigor_utils.m, sl_param_registry.m, sl_micro_approve_guard.m)
 │   └── server/
 │       ├── index.ts                       ← Express 路由 + API 端点 (v11.8.2: +/api/matlab/sl/:command 门控)
 │       ├── matlab-controller.ts           ← Bridge 进程管理与通信 (v11.8.2: +executeSlCommand)
@@ -327,7 +392,7 @@ SKILL.md (本文件)                          ← 总索引
 - **Phase -1 (Gate_S0)**: 场景确认令牌门控
 - **Phase 0**: `sl_model_create` — Scene 1 创建空 .slx（框架设计前强制执行）
 - **Phase 1-3**: 大框架设计→审查审批→子系统迭代（同 v11.8）
-- **Phase 4**: 骨架构建 — `sl_subsystem_create('empty', inputPorts=N, outputPorts=M)` 批量创建外壳+端口
+- **Phase 4**: 骨架构建 — `sl_subsystem_create('empty', inputPorts=N, outputPorts=M)` 仅顶层外壳批量创建 (depth=1)，子外壳在 micro_design 时懒创建
 - **Phase 5**: 递归构建 — 按 build_order 自底向上，每子系统独立走 Gate
 - **Phase 6**: 顶层集成 + Gate_4 → 仿真
 
@@ -353,23 +418,243 @@ SKILL.md (本文件)                          ← 总索引
 
 ---
 
-## v12 路线图 (2026-05-15) — 计划中
+## v12 路线图 (2026-05-15) — 已实现
 
-### 🔴 Gate_CONTENT_DEPTH — 工程严谨性评分（Rigor Score）
-- 不验证"方程对不对"（无限域），验证"AI有没有认真设计"（有限域）
-- 四维评分: 完整性(0.30) + 自洽性(0.35) + 可追溯性(0.20) + 可证明性(0.15)
+### Gate_CONTENT_DEPTH — 工程严谨性评分（Rigor Score）
+- **sl_rigor_score.m** — 四维评分引擎: 完整性(0.30) + 自洽性(0.35) + 可追溯性(0.20) + 可证明性(0.15)
+- **sl_rigor_utils.m** — 符号分析工具（9个辅助函数）：变量提取、导数算子计数、操作覆盖检查等
+- **sl_micro_approve_guard.m** — 审批前置检查：review 已通过 + rigor >= 0.65
 - 完全领域无关，零物理知识依赖，不限制 AI 建模自由
 - 阈值 0.65 → gate_blocked
 
-### Gate 体系加固
-- Gate_S0 HMAC 签名令牌（防 workspace 变量伪造）
-- Gate_RAW_CMD 建模命令拦截（add_block/add_line/set_param/sim 等）
-- 移除 skipDesign 后门
-- 审批状态持久化到 `.matlab_agent_tmp/approvals.json`
-- Gate_CONNECTIVITY 阈值 12→5 + 全局未连线触发器
+### Gate 体系加固 (全部 P0/P1 修复)
+- **Gate_APPROVE_NO_REVIEW**: 审批前强制检查 review 已调用并通过 (HC-07)
+- **Gate_S0 加固**: 移除 workspace 变量依赖路径（Python _SCENE_STATE 主控）
+- **Gate_RAW_CMD 建模拦截**: 9 命令黑名单（add_block/add_line/set_param/sim 等），含 cmdToken 也拦截 (GT-03/GT-07)
+- **skipDesign 后门移除**: 设计阶段必须完成 (GT-08)
+- **Gate_CONNECTIVITY 加固**: 阈值 12→5 + 全局未连线 >10 触发 (CN-03)
+- **审批持久化**: `_MICRO_APPROVED_SUBSYSTEMS` → `.matlab_agent_tmp/approvals.json` (GT-01)
 
-### 参数标准化
-- `sl_param_registry.m` — 物理参数注册系统（值+单位+范围+来源）
+### 审查系统升级
+- **sl_micro_review.m**: check_physics 委托 rigor score 引擎子维度 (HC-02/HC-03)
+- **sl_framework_review.m**: check_physics 检查 physicsEquations 存在性 + 置信度缩放 (HC-01)
+- **sl_validate_model.m**: check_unconnected warning → fail (CN-01)
+- **sl_review_core.m**: connectionScan 线性衰减公式 + paramAudit 硬编码检测 (CN-02/PM-02)
+- **sl_model_complete.m**: paramAudit 加入 mustPassChecks (>20% 硬编码 → canProceed=false) (PM-02)
+- **sl_add_line_safe.m**: catch 分支 fail-closed + src/dst 双端口验证 (CN-07)
 
-> v12 完整审查报告和修复方案见 `d:\MATLAB_Workspace\MATLAB_Agent开发\matlab_agent_v12_*.md`
+### 参数标准化 & Prompt 对齐
+- **sl_param_registry.m** — 物理参数注册系统（值+单位+范围+来源），预置 quadrotor/pendulum/RLC 模板
+- **sl_micro_prompts.m**: outputSchema +parameters +derivedFrom +assumptions；系统提示词 +rigor 自检要求
+- **sl_framework_prompts.m**: outputSchema +parameters +assumptions
 
+### 新增文件 (4个)
+| 文件 | 行数 | 描述 |
+|------|------|------|
+| `sl_toolbox/sl_rigor_score.m` | ~350 | 四维评分引擎 |
+| `sl_toolbox/sl_rigor_utils.m` | ~320 | 符号分析工具 |
+| `sl_toolbox/sl_param_registry.m` | ~300 | 参数注册系统 |
+| `sl_toolbox/sl_micro_approve_guard.m` | ~130 | approve 前置检查 |
+
+### 修改文件 (11个)
+| 文件 | 变更 | 描述 |
+|------|------|------|
+| `matlab_bridge.py` | ~300 行 | 5 个 Gate 变更 + 审批持久化 |
+| `sl_micro_review.m` | ~50 行 | check_physics → rigor |
+| `sl_framework_review.m` | ~35 行 | check_physics 升级 |
+| `sl_review_core.m` | ~60 行 | paramAudit + connectionScan |
+| `sl_validate_model.m` | 1 行 | unconnected → fail |
+| `sl_model_complete.m` | ~30 行 | paramAudit mustPass |
+| `sl_add_line_safe.m` | 2 行 | 假阳性修复 |
+| `sl_micro_prompts.m` | ~20 行 | outputSchema 扩展 |
+| `sl_framework_prompts.m` | ~10 行 | outputSchema 扩展 |
+| `SKILL.md` | ~50 行 | v12 已实现文档 |
+
+### 待验证
+- [ ] Quadrotor_ADRC 全量重建 (所有子系统 rigor >= 0.65)
+- [ ] 端到端仿真测试 (零 unconnected, < 20% 硬编码)
+- [ ] R2016a 兼容性验证
+
+---
+
+## v12.1 Bugfix (2026-05-16)
+
+### 10 个 Bug 修复 (P1×5 + P2×5)
+基于 `matlab_agent_v12.1_code_review_report_2026-05-16` 第二部分工程级修复方案执行。
+
+| Bug ID | 严重度 | 描述 | 文件 |
+|--------|:------:|------|------|
+| #31 | P1 | `_persist_approvals` 静默吞异常 | matlab_bridge.py |
+| #32 | P1 | `_load_approvals` 静默吞异常 | matlab_bridge.py |
+| #33 | P1 | `_SUBSYSTEM_STATES` 无锁访问 | matlab_bridge.py |
+| #34 | P1 | SearchDepth=1 模型级漏检内部块 | sl_validate_model.m |
+| #35 | P1 | Inport 输入端口误报 unconnected | sl_validate_model.m |
+| #36 | P2 | micro_frameworks/micro_framework 存储不一致 | matlab_bridge.py (6处) |
+| #37 | P2 | ALLOWED_COMMANDS 重复条目 | index.ts |
+| #38 | P2 | 裸 except: → except Exception: (17处) | matlab_bridge.py |
+| #39 | P2 | 错误响应格式不一致 | index.ts |
+| #40 | P2 | ensure-running.sh 无 trap 清理 | ensure-running.sh |
+
+### 测试结果
+- 静态代码分析: 16/16 通过
+- BUGFIX 标记验证: 4/4 通过
+- 动态测试: 3/4 通过 (1 项需服务重启)
+- **总计: 23/24 通过**
+
+---
+
+## v15 Bugfix (2026-05-18)
+
+### 修复概述
+基于 `matlab_agent_v15_bugfix_research_and_plan_2026-05-17.md` 修复方案，7 项 Bug 修复（含复查中发现的 1 项额外修复），改动量 ~43 行。
+
+| Bug ID | 严重度 | 描述 | 文件 | 改动 |
+|--------|:------:|------|------|:----:|
+| #50 | P0 | signalDimensions 空值崩溃 (空 struct {} 无 input/output 字段) | sl_micro_review.m | +3行 |
+| #50-ext | P0 | blockPlan 检查中 mf.signalDimensions.states 缺少 isfield 守卫 (复查发现) | sl_micro_review.m | +1行 |
+| #54 | P0 | Gate_SUBSYSTEM_CLOSURE 父子系统死锁 — 祖先豁免 | matlab_bridge.py | +8行 |
+| #51/53 | P0 | micro_approve modelName 自动推导 (从 subsystemName 回退) | matlab_bridge.py | +3行 |
+| #55 | P1 | consecutive_adds 计数器跨子系统不重置 | matlab_bridge.py | +5行 |
+| #49 | P1 | frameworkFile 文件路径支持 (替代 inline JSON) 🆕 | matlab_bridge.py | +15行 |
+| #56 | P1 | 模型创建时旧持久化状态残留 | matlab_bridge.py | +8行 |
+
+### 关键变更
+
+#### Bug #50 — signalDimensions 空值保护
+`sl_micro_review.m` 新增 `isfield(sd, 'input')` / `isfield(sd, 'output')` 空 struct 守卫。当 AI 传入 `signalDimensions: {}` 时不再崩溃，而是返回 `passed=false, issue="signalDimensions missing input/output fields"`。
+
+#### Bug #54 — Gate_SUBSYSTEM_CLOSURE 祖先豁免
+`Gate_SUBSYSTEM_CLOSURE` 新增祖先豁免逻辑：若 `_prev_incomplete` 是当前目标子系统的祖先（路径前缀匹配），则不拦截。解决了父子系统 `ADRC_Controller → TD_X` 的死锁问题。
+
+#### Bug #49 — frameworkFile 文件路径 🆕
+`sl_framework_review` 和 `sl_framework_approve` 新增 `frameworkFile` 参数：
+```json
+// 旧方式: inline JSON (>50KB 构造困难)
+{"macroFramework": {"subsystems": [...], ...}}
+// 新方式: 文件路径回退
+{"frameworkFile": "/path/to/framework.json"}
+```
+Bridge 自动从文件读取 JSON 作为 `macroFramework` 回退值。
+
+### 验证结果
+- Python compile 通过
+- 服务启动: Bridge + Server + Engine 正常
+- API 测试: 7/7 修复全部验证通过
+- 验证报告: `matlab_agent_v15_bugfix_verification_report_2026-05-18.md`
+
+---
+
+## v18.3 Bugfix — Gate 绕过漏洞修复 (2026-05-20)
+
+### 代码审查发现
+系统性代码审查发现 Gate_SHELL_ONLY 存在 3 条绕过路径，sl_model_complete 排版强制执行有缺陷，framework_approve 违反 v18 外壳原则。
+
+### B1+B2 [P0] Gate_SHELL_ONLY 绕过 — 短 subsystemPath/blockPath
+**根因**: `_extract_target_subsystem()` 第 7816 行要求候选值包含 `'/'` 才被采纳。短名称 "Reference_Generator" 无 '/' → target="" → Gate 被静默跳过。
+
+**修复**: 增加三级回退：
+1. `'/'` 扫描失败后检查短 `subsystemPath` 和 `blockPath`（无需 '/'）
+2. 短 target 无 '/' 时作为子系统名直接返回
+3. 空 target 但有 `subsystemPath` key 存在时使用 model_name 作为回退
+
+**改动**: `matlab_bridge.py` `_extract_target_subsystem()` +50 行
+
+### B4 [P1] sl_model_complete 静默排版失败
+**根因**: `sl_model_complete.m` 第 30 行 `try; sl_auto_layout; catch; end` 静默吞噬所有排版错误。
+
+**修复**: try/catch 改为 warning 记录（非阻断），排版失败信息可见。
+
+**改动**: `sl_model_complete.m` 3 行
+
+### B5 [P1] framework_approve 批量创建所有深度外壳
+**根因**: `_batch_create_all_shells` 递归创建所有深度外壳，违反 v18 "逐子系统创建原则"。
+
+**修复**:
+- `_batch_create_all_shells` 新增 `max_depth` 参数（默认 1），仅创建顶层外壳
+- 新增 `_create_child_shells_for_subsystem` 函数，在 `sl_micro_design` 时懒创建子外壳
+
+**改动**: `matlab_bridge.py` `_batch_create_all_shells()` + `_create_child_shells_for_subsystem()` + `sl_micro_design` 注入点 +60 行
+
+### SKILL.md 同步更新
+- 外壳/内部原则描述更新为 v18.3 二级创建模型
+- 构建流程描述增加懒创建步骤
+- 反模式表格更新
+
+### 改动量
+| 文件 | 改动 |
+|------|------|
+| `matlab_bridge.py` | ~+110 行 |
+| `sl_model_complete.m` | 3 行 |
+| `SKILL.md` | 4 处修改 + 新增 changelog |
+
+### 审查报告
+`matlab_agent_v18_code_review_bypass_report_2026-05-20.md`
+- API 测试: 7/7 修复全部验证通过
+- 验证报告: `matlab_agent_v15_bugfix_verification_report_2026-05-18.md`
+
+---
+
+## v30 更新 (2026-05-26) — sl_delete_block 全生命周期删除 API
+
+### 新增 API
+
+| API | MATLAB 文件 | 功能 |
+|-----|-----------|------|
+| `sl_delete_block` | `sl_delete_block.m` (~280行) | 核心删除 + 参数清理(signalLogging/callbacks/paramRegistry) + LineChildren递归 + preserveShell |
+| `sl_delete_approval` | `sl_delete_approval.m` (~130行) | 子系统删除影响分析（子节点+下游依赖+连线统计） |
+| `sl_retry_plan` | `sl_retry_plan.m` (~140行) | retryPlan 自动生成 + 断路器（3次同错误→升级） |
+
+### Gate_RETRY 状态机
+
+- **10轮/子系统上限**: 5轮实现修复 + 5轮设计回退 = 10 max
+- **断路器**: 连续3次同类型失败 → 自动从 `implementation_error` 升级为 `design_suspect`
+- `_SUBSYSTEM_STATES` 新增字段: `retry_count`, `design_count`, `max_impl_retries`(5), `max_design_retries`(5), `last_failure`, `repeated_failure_count`
+- Gate 豁免: `retrying_impl` 时 Gate_APPROVE_NO_REVIEW 放行; `retrying_design` 时 Gate_MICRO_DESIGN_CLOSURE 放行
+- Gate_CONNECTIVITY: `retrying_impl` 时阈值 5→15
+
+### Gate_DELETE_APPROVAL
+
+- 子系统级删除（2段路径）→ 返回 `pending_approval` + `approvalToken`
+- AI 用 `AskUserQuestion` 展示影响报告 → 用户确认后携带 `approvalToken` 重试
+- 内部块删除（3+段路径）→ 自动放行
+- 令牌 120s 过期，一次性使用
+
+### sl_model_complete 增强
+
+- 新增 `failureType` 字段 (`implementation_error` | `design_suspect`)
+- 新增 `failedChecks[]` per-port 详情（供 `sl_retry_plan` 定位）
+- `paramAudit`/`blockPlan`/`compilation` 失败 → `design_suspect`
+
+### 参数清理（实时生效）
+
+- `sl_param_registry('remove', blockPath)` — 删除前清理注册表
+- `DataLogging=off` — 信号日志配置清理
+- Callback 清理（DeleteFcn/CopyFcn/PreDeleteFcn 等）
+
+### LineChildren 递归
+
+- `LookUnderMasks: 'all'` + `FindAll: 'on'` 穿透 Mask
+- `LineChildren` 递归处理 bus-split 分支
+- `SrcPortHandle < 0` → 悬空线删除
+
+### 兼容性
+
+- `sl_delete` → `sl_delete_safe.m`（旧 API 不变，转发到 `sl_delete_block`）
+- `sl_delete` 保留在 ALLOWED_COMMANDS 白名单
+
+### 改动量
+
+| 文件 | 操作 | 行数 |
+|------|:----:|:----:|
+| `sl_delete_block.m` | 新建 | ~280 |
+| `sl_delete_approval.m` | 新建 | ~130 |
+| `sl_retry_plan.m` | 新建 | ~140 |
+| `matlab_bridge.py` | 修改 | ~200 |
+| `sl_model_complete.m` | 修改 | ~70 |
+| `sl_param_registry.m` | 修改 | ~30 |
+| `sl_delete_safe.m` | 修改 | ~10 (简化为转发) |
+| `sl_subsystem_tree.m` | 修改 | ~5 (retry字段) |
+| `index.ts` | 修改 | ~3 (白名单) |
+| `SKILL.md` | 修改 | ~50 |
+
+**总计**: 3 新文件 + 7 修改 = 10 文件, ~918 行

@@ -54,6 +54,10 @@ function str = sl_format_param_value(blockPath, paramName, value)
         elseif ~isempty(regexp(valStr, '^[a-zA-Z_]\w*$', 'once'))
             % 看起来像变量名（纯字母数字下划线），不加引号让 MATLAB 解析
             str = valStr;
+        elseif ~isempty(regexp(valStr, '^-?\d+(\.\d+)?([eE][+-]?\d+)?$', 'once'))
+            % [v13 BUGFIX] Numeric scalar string: pass as-is, don't add quotes
+            % e.g., '5', '-10', '3.14', '1e-3' → 5, -10, 3.14, 1e-3
+            str = valStr;
         else
             % 普通字符串/表达式，加单引号
             str = ['''', valStr, ''''];

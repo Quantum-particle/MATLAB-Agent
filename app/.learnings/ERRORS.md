@@ -7655,3 +7655,1119 @@ list indices must be integers or slices, not str
 - Related Files: matlab_bridge.py
 
 ---
+
+## [ERR-20260515-sl_rigor] sl_rigor_utils
+
+**Logged**: 2026-05-15T20:16:30.209662
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_rigor_utils
+
+### Error
+```
+list indices must be integers or slices, not str
+```
+
+### Context
+- Command: sl_rigor_utils
+- Params: {'_pos_1': 'extract_variables', '_pos_2': [{'equation': 'm * dv/dt = F - k * v'}, {'equation': 'F = m * a'}]}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260515-sl_rigor] sl_rigor_utils
+
+**Logged**: 2026-05-15T20:16:30.398751
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_rigor_utils
+
+### Error
+```
+'int' object does not support item assignment
+```
+
+### Context
+- Command: sl_rigor_utils
+- Params: {'_pos_1': 'count_derivative_operators', '_pos_2': [{'equation': 'dv/dt = F/m'}, {'equation': 'dw/dt = tau/I'}]}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260515-sl_rigor] sl_rigor_utils
+
+**Logged**: 2026-05-15T20:18:52.598531
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_rigor_utils
+
+### Error
+```
+list indices must be integers or slices, not str
+```
+
+### Context
+- Command: sl_rigor_utils
+- Params: {'action': 'extract_variables', '_pos_2': [{'equation': 'm*dv/dt = F'}]}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260519-sl_subsy] sl_subsystem_tree
+
+**Logged**: 2026-05-19T08:41:40.519415
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_subsystem_tree
+
+### Error
+```
+list indices must be integers or slices, not str
+```
+
+### Context
+- Command: sl_subsystem_tree
+- Params: {'modelName': 'Quadrotor_ADRC_v17'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260521-sl_subsy] sl_subsystem_tree
+
+**Logged**: 2026-05-21T10:40:48.619169
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_subsystem_tree
+
+### Error
+```
+list indices must be integers or slices, not str
+```
+
+### Context
+- Command: sl_subsystem_tree
+- Params: {'modelName': 'Quadrotor_ADRC_v19'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260521-sl_subsy] sl_subsystem_tree
+
+**Logged**: 2026-05-21T11:06:15.744448
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_subsystem_tree
+
+### Error
+```
+list indices must be integers or slices, not str
+```
+
+### Context
+- Command: sl_subsystem_tree
+- Params: {'modelName': 'Quadrotor_ADRC_v19'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260522-sl_add_b] sl_add_blocks_batch
+
+**Logged**: 2026-05-22T10:36:09.123508
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_blocks_batch
+
+### Error
+```
+cannot access local variable 'model_name_for_verify' where it is not associated with a value
+```
+
+### Context
+- Command: sl_add_blocks_batch
+- Params: {'modelName': 'Quadrotor_ADRC_E2E_Test', 'subsystemPath': 'Sensors', 'blocks': [{'blockType': 'simulink/Math Operations/Gain', 'blockName': 'EB7_G1'}, {'blockType': 'simulink/Math Operations/Gain', 'blockName': 'EB7_G2'}, {'blockType': 'simulink/Continuous/Integrator', 'blockName': 'EB7_I1'}]}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260522-sl_add_b] sl_add_blocks_batch
+
+**Logged**: 2026-05-22T10:36:20.872001
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_add_blocks_batch
+
+### Error
+```
+cannot access local variable 'model_name_for_verify' where it is not associated with a value
+```
+
+### Context
+- Command: sl_add_blocks_batch
+- Params: {'modelName': 'Quadrotor_ADRC_E2E_Test', 'subsystemPath': 'Sensors', 'blocks': [{'blockType': 'simulink/Math Operations/Gain', 'blockName': 'EB7_G1'}]}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260524-sl_subsy] sl_subsystem_tree
+
+**Logged**: 2026-05-24T13:19:40.427381
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_subsystem_tree
+
+### Error
+```
+list indices must be integers or slices, not str
+```
+
+### Context
+- Command: sl_subsystem_tree
+- Params: {'modelName': 'Quadrotor_ADRC'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260526-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-26T15:19:29.609932
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+cannot access local variable 'time' where it is not associated with a value
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'modelName': 'Test_Delete_API_v30', 'blockPath': 'Test_Delete_API_v30/Gain1', 'reason': 'test', 'approvalToken': '61b8d691-9772-4822-8e39-ea8549a47201'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260526-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-26T15:19:31.223148
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+cannot access local variable 'time' where it is not associated with a value
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'modelName': 'Test_Delete_API_v30', 'blockPath': 'Test_Delete_API_v30/Gain2', 'reason': 'test cascade', 'approvalToken': '46834032-b6de-4899-b486-809d8cb2f215'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260526-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-26T15:19:32.033607
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+cannot access local variable 'time' where it is not associated with a value
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'modelName': 'Test_Delete_API_v30', 'blockPath': 'Test_Delete_API_v30/Gain3', 'reason': 'test param cleanup', 'approvalToken': '4f22deb5-c5cf-480d-b5ec-04aab58f562c'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260526-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-26T15:19:32.838620
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+cannot access local variable 'time' where it is not associated with a value
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'modelName': 'Test_Delete_API_v30', 'blockPath': 'Test_Delete_API_v30/Gain4', 'reason': 'test signal logging', 'approvalToken': '1714b632-7de9-41c8-8d52-1705f4c60cf0', 'cleanup': {'signalLogging': True}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260526-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-26T15:19:33.645698
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+cannot access local variable 'time' where it is not associated with a value
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'modelName': 'Test_Delete_API_v30', 'blockPath': 'Test_Delete_API_v30/Gain5', 'reason': 'test callbacks', 'approvalToken': 'bb708251-76fa-4fcb-bad7-51e25d4772b1', 'cleanup': {'callbacks': True}}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T08:48:45.859438
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'modelName': 'UT_Quick', 'blockPath': 'UT_Quick/Gain1', 'reason': 'test'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T08:57:55.484084
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'modelName': 'UT_FINAL', 'blockPath': 'UT_FINAL/Gain1', 'reason': 'test'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_subsy] sl_subsystem_tree
+
+**Logged**: 2026-05-27T16:03:03.161160
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_subsystem_tree
+
+### Error
+```
+list indices must be integers or slices, not str
+```
+
+### Context
+- Command: sl_subsystem_tree
+- Params: {'modelName': 'Quadrotor_ADRC_v31'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:54.888629
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Constant'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:55.204663
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Constant1'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:55.533613
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Constant2'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:55.852891
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Gain'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:56.150105
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Gain1'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:56.446119
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Gain2'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:56.722360
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Gain3'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:57.021103
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Gain4'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:57.322097
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Gain5'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:57.625768
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Gain6'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:57.934124
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Product'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:58.232539
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Product1'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:58.533640
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Product2'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:58.832244
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Product3'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:59.134617
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Sum'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:59.443844
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Sum1'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:08:59.739524
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Sum2'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:09:00.068043
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Sum3'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---
+
+## [ERR-20260527-sl_delet] sl_delete_block
+
+**Logged**: 2026-05-27T16:09:04.159463
+**Priority**: high
+**Status**: pending
+**Area**: matlab-api
+
+### Summary
+sl_* command execution failed: sl_delete_block
+
+### Error
+```
+name '_APPROVED_SUBSYSTEM_STATES' is not defined
+```
+
+### Context
+- Command: sl_delete_block
+- Params: {'blockPath': 'Quadrotor_ADRC_v31/Constant'}
+- MATLAB Version: unknown
+- Bridge Mode: engine
+- MATLAB Output: 
+
+### Suggested Fix
+[To be determined by analysis]
+
+### Metadata
+- Reproducible: unknown
+- Related Files: matlab_bridge.py
+
+---

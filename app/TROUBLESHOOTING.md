@@ -49,7 +49,7 @@
 cd "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app"
 if not exist "node_modules" npm install --production
 ```
-一键脚本 `start.bat` 和 `ensure-running.bat` 已自动处理此步骤。
+一键脚本 `bash ensure-running.sh` 已自动处理此步骤。
 
 ### 0.2 Windows 下 npx 不是可执行文件
 
@@ -125,7 +125,7 @@ if ($old) {
 - 杀掉进程后 **不要立即启动新服务**！必须等待 2-3 秒让操作系统完全释放端口
 - Windows 的 TIME_WAIT 状态默认持续 2 分钟，但 LISTENING 端口杀掉进程后通常 1-3 秒即可释放
 - 如果多次杀进程后端口仍被占用，可能是系统级 TIME_WAIT，等待 30 秒后重试
-- **一键脚本已自动处理**: `start.bat` 和 `ensure-running.bat` 会自动杀进程 → 等待端口释放 → 确认干净 → 再启动
+- **一键脚本已自动处理**: `bash ensure-running.sh` 会自动杀进程 → 等待端口释放 → 确认干净 → 再启动
 
 ### 0.5 含中文/空格/括号的路径问题
 
@@ -151,11 +151,11 @@ if ($old) {
 
 ```
 0. 🔴 端口清理（最优先！启动前必须确保环境干净！）:
-   - ensure-running.bat 已自动处理（杀进程 → 等端口释放 → 确认干净 → 再启动）
+   - ensure-running.sh 已自动处理（杀进程 → 等端口释放 → 确认干净 → 再启动）
    - 手动: netstat -ano | findstr ":3000" | findstr "LISTENING" → taskkill /F /PID <pid> → 等2-3秒
 1. 检查服务是否已运行: powershell -Command "try { Invoke-RestMethod -Uri 'http://localhost:3000/api/health' -TimeoutSec 5 } catch { Write-Host 'FAIL' }"
 2. 如已运行 → 直接使用 quickstart API
-3. 如未运行 → 执行: cmd /c "C:\Users\泰坦\.workbuddy\skills\matlab-agent\app\ensure-running.bat"
+3. 如未运行 → 执行: `bash ensure-running.sh`
 4. 等待 ensure-running 返回退出码 0
 5. 使用 quickstart API: POST /api/matlab/quickstart
    （必须用 ConvertTo-Json 变量构造法）
@@ -551,7 +551,7 @@ cmd /c "start /B npx tsx server/index.ts"
 #   warming_bridge → warming_engine → ready / failed
 ```
 
-**一键脚本**：`start-matlab-agent.ps1` 封装了完整流程。
+**启动脚本**：`bash ensure-running.sh` 唯一启动方式
 
 ---
 
@@ -604,7 +604,7 @@ MATLAB Engine 启动受系统负载、MATLAB 版本、Python 兼容性等影响�
 
 ### 解决方案
 - **预热超时不是致命错误**：服务器仍在运行，功能请求会触发延迟初始化
-- **启动脚本**：`start-matlab-agent.ps1` 预热超时后输出黄色警告，`exit 0`
+- **启动脚本**：`bash ensure-running.sh` 预热超时后继续运行，不阻塞
 - **API 层**：Node.js 预热超时标记 `warmupStatus = 'failed'`，但服务器继续运行
 - **Python 层**：`get_engine()` 带线程超时，超时自动切换到 CLI 回退模式
 - **最差情况**：自动降级到 CLI 模式（变量不跨命令保持）

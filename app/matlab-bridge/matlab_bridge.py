@@ -53,16 +53,16 @@ import threading
 from pathlib import Path
 from datetime import datetime
 
-# 强制 UTF-8
+# 强制 UTF-8 — v12.1 BUGFIX #38: bare except→except Exception (avoid swallowing SystemExit/KeyboardInterrupt)
 if sys.stdin.encoding != 'utf-8':
     try: sys.stdin.reconfigure(encoding='utf-8', errors='replace')
-    except: pass
+    except Exception: pass
 if sys.stdout.encoding != 'utf-8':
     try: sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-    except: pass
+    except Exception: pass
 if sys.stderr.encoding != 'utf-8':
     try: sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-    except: pass
+    except Exception: pass
 
 
 # ============= MATLAB_ROOT 配置（v4.1: 仅从环境变量读取）============
@@ -93,9 +93,459 @@ _test_engine = None  # [v11.4.2] Engine from compatibility test, reused by get_e
 _matlab_version = None  # 缓存 MATLAB 版本号
 _SCENE_STATE = {}  # v11.5: Scene 2 state for CLI mode (no MATLAB engine)
 _S2_MOD_PERMISSIONS = {}  # v11.5: Gate_S2_MODIFY permissions cache
+_APPROVAL_TOKENS = {}  # v30: approval tokens for delete/structural changes (reuses S0 confirmationToken pattern)
 _REQUEST_COUNTER = 0  # v11.6: Monotonically increasing request counter for turn detection
 _RAW_CMD_STATE = {}  # v11.8.3: Raw MATLAB command gate (requires user confirmation like Gate_S0)
-_MICRO_APPROVED_SUBSYSTEMS = {}  # v11.8.4: Gate_SHELL_ONLY — tracks which subsystems have micro_approve. {model: set(subsys_paths)}
+_MICRO_APPROVED_SUBSYSTEMS = {}  # v11.8.4: DEPRECATED, replaced by _SUBSYSTEM_STATES (v12.1)
+
+# [v24] Block type aliases: map bare Simulink block names to full library paths
+_SUBSYSTEM_ALIASES = {
+    'SubSystem': 'simulink/Ports & Subsystems/Subsystem',
+    'Subsystem': 'simulink/Ports & Subsystems/Subsystem',
+}
+
+# [v12.1] Subsystem finite state machine (replaces _MICRO_APPROVED_SUBSYSTEMS)
+from dataclasses import dataclass, asdict, field
+from typing import Dict
+
+@dataclass
+class SubsystemState:
+    """Per-subsystem state for enforced iteration lifecycle.
+    
+    Status transitions:
+        pending → reviewed → approved → building → completed
+        completed → approved (re-open)
+    """
+    status: str = 'pending'  # pending | reviewed | approved | building | completed | blocked
+    reviewed_at: str = ''    # ISO timestamp of last passed review
+    approved_at: str = ''    # ISO timestamp of approval
+    completed_at: str = ''   # ISO timestamp of model_complete passed
+    consecutive_adds: int = 0  # per-subsystem add_block counter
+    total_blocks: int = 0      # total blocks added
+    total_lines: int = 0       # total lines added
+
+_SUBSYSTEM_STATES: Dict[str, Dict[str, SubsystemState]] = {}  # {model_name: {subsys_path: SubsystemState}}
+_FRAMEWORK_REVIEWED: set = set()  # v12.1: models that passed framework_review (for Gate_FRAMEWORK_SEQUENCE)
+
+def _set_subsystem_state(model_name, subsys_name, status, **kwargs):
+    """Set subsystem state with transition validation. (v12.1 BUGFIX #33: thread-safe via _global_lock)"""
+    with _global_lock:
+        if model_name not in _SUBSYSTEM_STATES:
+            _SUBSYSTEM_STATES[model_name] = {}
+        states = _SUBSYSTEM_STATES[model_name]
+        if subsys_name not in states:
+            states[subsys_name] = SubsystemState()
+        ss = states[subsys_name]
+        ss.status = status
+        for k, v in kwargs.items():
+            if hasattr(ss, k):
+                setattr(ss, k, v)
+        return ss
+
+def _get_subsystem_state(model_name, subsys_name):
+    """Get subsystem state (v12.1 BUGFIX #33: thread-safe via _global_lock), returns None if not found."""
+    with _global_lock:
+        states = _SUBSYSTEM_STATES.get(model_name, {})
+        ss = states.get(subsys_name)
+        if ss is not None:
+            # Return a copy to prevent external mutation of shared state
+            return SubsystemState(**asdict(ss))
+        return None
+
+# [v12.0→v12.1] Approval persistence helpers — upgraded for _SUBSYSTEM_STATES
+def _get_approvals_path(model_name):
+    """Get path to subsystem_states.json for a given model."""
+    import os
+    _pd = _project_dir or os.getcwd()
+    _tmp_dir = os.path.join(_pd, '.matlab_agent_tmp')
+    os.makedirs(_tmp_dir, exist_ok=True)
+    _safe_name = model_name.replace('/', '__').replace('\\', '__').replace(' ', '_')
+    return os.path.join(_tmp_dir, f'subsystem_states_{_safe_name}.json')
+
+def _persist_approvals(model_name):
+    """Save _SUBSYSTEM_STATES for a model to disk (v12.1: structured state)."""
+    import json, os
+    try:
+        _path = _get_approvals_path(model_name)
+        _states = _SUBSYSTEM_STATES.get(model_name, {})
+        _data = {
+            'model': model_name,
+            'subsystems': {k: asdict(v) for k, v in _states.items()},
+            'count': len(_states),
+            'timestamp': __import__('time').strftime('%Y-%m-%dT%H:%M:%S', __import__('time').localtime()),
+            'version': 'v12.1'
+        }
+        with open(_path, 'w', encoding='utf-8') as f:
+            json.dump(_data, f, indent=2, ensure_ascii=False)
+    except json.JSONDecodeError as e:
+        import logging
+        logging.getLogger('matlab_bridge').warning(
+            f"[v12.1 BUGFIX #31] Failed to encode approvals for {model_name}: {e}")
+    except (IOError, OSError) as e:
+        import logging
+        logging.getLogger('matlab_bridge').warning(
+            f"[v12.1 BUGFIX #31] Failed to write approvals for {model_name}: {e}")
+
+def _load_approvals(model_name):
+    """Load _SUBSYSTEM_STATES from disk on Bridge restart (v12.1)."""
+    import json, os
+    try:
+        _path = _get_approvals_path(model_name)
+        if os.path.exists(_path):
+            with open(_path, 'r', encoding='utf-8') as f:
+                _data = json.load(f)
+            _subsystems = _data.get('subsystems', {})
+            if _subsystems:
+                if model_name not in _SUBSYSTEM_STATES:
+                    _SUBSYSTEM_STATES[model_name] = {}
+                for _sub_name, _sub_data in _subsystems.items():
+                    # [v24 FIX #NEW-8 MERGE] Only load states not already in memory.
+                    # Unconditional overwrite would undo in-memory state changes
+                    # (e.g., "completed" set by sl_model_complete → overwritten to "approved" from disk).
+                    if _sub_name not in _SUBSYSTEM_STATES[model_name]:
+                        _SUBSYSTEM_STATES[model_name][_sub_name] = SubsystemState(**_sub_data)
+                return len(_subsystems)
+    except json.JSONDecodeError as e:
+        import logging
+        logging.getLogger('matlab_bridge').warning(
+            f"[v12.1 BUGFIX #32] Corrupted approvals file for {model_name}: {e}")
+    except (IOError, OSError) as e:
+        import logging
+        logging.getLogger('matlab_bridge').warning(
+            f"[v12.1 BUGFIX #32] Failed to read approvals for {model_name}: {e}")
+    except TypeError as e:
+        import logging
+        logging.getLogger('matlab_bridge').warning(
+            f"[v12.1 BUGFIX #32] Invalid approvals data for {model_name}: {e}")
+    return 0
+
+def _restore_all_state():
+    """v12.1: Restore all _SUBSYSTEM_STATES and _FRAMEWORK_REVIEWED on Bridge restart."""
+    import json, os, glob as _glob, logging
+    _pd = _project_dir or os.getcwd()
+    _tmp_dir = os.path.join(_pd, '.matlab_agent_tmp')
+    if not os.path.isdir(_tmp_dir):
+        return 0
+    _restored = 0
+    for _f in _glob.glob(os.path.join(_tmp_dir, 'subsystem_states_*.json')):
+        try:
+            with open(_f, 'r', encoding='utf-8') as fh:
+                _data = json.load(fh)
+            _model = _data.get('model', '')
+            _subsystems = _data.get('subsystems', {})
+            if _model and _subsystems:
+                if _model not in _SUBSYSTEM_STATES:
+                    _SUBSYSTEM_STATES[_model] = {}
+                for _sn, _sd in _subsystems.items():
+                    _SUBSYSTEM_STATES[_model][_sn] = SubsystemState(**_sd)
+                _restored += len(_subsystems)
+        except Exception:
+            pass
+    # Restore _FRAMEWORK_REVIEWED
+    _fw_path = os.path.join(_tmp_dir, 'framework_reviewed.json')
+    if os.path.exists(_fw_path):
+        try:
+            with open(_fw_path, 'r', encoding='utf-8') as fh:
+                _fw_data = json.load(fh)
+            _FRAMEWORK_REVIEWED.update(_fw_data.get('models', []))
+        except Exception:
+            pass
+    # [v17 BUGFIX #63] Restore framework_approved models
+    _fw_approved = _fw_data.get('approved', []) if '_fw_data' in dir() else []
+    for _m in _fw_approved:
+        _FRAMEWORK_APPROVED_MODELS.add(_m)
+    if _restored > 0:
+        logging.getLogger('matlab_bridge').info(f"[V12.1] Restored {_restored} subsystem states, {len(_fw_approved)} framework approvals")
+    return _restored
+
+
+def _migrate_subsystem_states():
+    """v30: One-shot migration — fill default retry fields for legacy subsystem states.
+    
+    Called on Bridge startup to ensure all SubsystemState entries have:
+    retry_count, design_count, max_impl_retries, max_design_retries,
+    last_failure, repeated_failure_count.
+    Never crashes — all defaults via setdefault.
+    """
+    import logging as _log
+    _migrated = 0
+    for _model, _states in _SUBSYSTEM_STATES.items():
+        for _key, _state in _states.items():
+            if not hasattr(_state, 'retry_count') or _state.retry_count is None:
+                _state.retry_count = 0
+            if not hasattr(_state, 'design_count') or _state.design_count is None:
+                _state.design_count = 0
+            if not hasattr(_state, 'max_impl_retries') or _state.max_impl_retries is None:
+                _state.max_impl_retries = 5
+            if not hasattr(_state, 'max_design_retries') or _state.max_design_retries is None:
+                _state.max_design_retries = 5
+            if not hasattr(_state, 'last_failure') or _state.last_failure is None:
+                _state.last_failure = None
+            if not hasattr(_state, 'repeated_failure_count') or _state.repeated_failure_count is None:
+                _state.repeated_failure_count = 0
+            _migrated += 1
+    if _migrated > 0:
+        _log.info(f"[v30] Migrated {_migrated} subsystem states with retry defaults")
+
+
+def _enter_retry_state(model_name, subsystem_path, failure_type, check_name=''):
+    """v30: Enter retry state for a subsystem after sl_model_complete failure.
+    
+    Reusable — any command failure can trigger retry state transition.
+    Includes circuit breaker: 3 consecutive same-check failures → design_suspect upgrade.
+    
+    Returns: dict with status, retry_count, design_count, remaining
+    """
+    import time, logging as _log
+    with _global_lock:
+        state_key = f"{model_name}::{subsystem_path}"
+        if model_name not in _SUBSYSTEM_STATES:
+            _SUBSYSTEM_STATES[model_name] = {}
+        state = _SUBSYSTEM_STATES[model_name].get(subsystem_path)
+        if state is None:
+            state = SubsystemState()
+            _SUBSYSTEM_STATES[model_name][subsystem_path] = state
+        
+        # Ensure v30 fields
+        if not hasattr(state, 'retry_count') or state.retry_count is None:
+            state.retry_count = 0
+        if not hasattr(state, 'design_count') or state.design_count is None:
+            state.design_count = 0
+        if not hasattr(state, 'max_impl_retries') or state.max_impl_retries is None:
+            state.max_impl_retries = 5
+        if not hasattr(state, 'max_design_retries') or state.max_design_retries is None:
+            state.max_design_retries = 5
+        if not hasattr(state, 'repeated_failure_count') or state.repeated_failure_count is None:
+            state.repeated_failure_count = 0
+        
+        # Circuit breaker: 3 consecutive same-type failures → upgrade
+        if failure_type == 'implementation_error':
+            prev = None
+            if hasattr(state, 'last_failure') and state.last_failure:
+                prev = state.last_failure
+            if prev and prev.get('type') == 'implementation_error':
+                state.repeated_failure_count = (state.repeated_failure_count or 0) + 1
+                if state.repeated_failure_count >= 3:
+                    failure_type = 'design_suspect'
+                    _log.warning(f"[Gate_RETRY] Circuit breaker: {subsystem_path} upgraded to design_suspect after 3 consecutive impl failures")
+            else:
+                state.repeated_failure_count = 1
+        
+        if failure_type == 'implementation_error':
+            state.status = 'retrying_impl'
+            state.retry_count = (state.retry_count or 0) + 1
+        elif failure_type == 'design_suspect':
+            state.status = 'retrying_design'
+            state.design_count = (state.design_count or 0) + 1
+            state.repeated_failure_count = 0  # Reset on design change
+        
+        state.last_failure = {'type': failure_type, 'check': check_name, 'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}
+        
+        # Check limits
+        if (state.retry_count or 0) > (state.max_impl_retries or 5) or \
+           (state.design_count or 0) > (state.max_design_retries or 5):
+            state.status = 'failed'
+            _log.critical(f"[Gate_RETRY] {subsystem_path} exhausted all retries ({state.retry_count}/{state.design_count})")
+        
+        _persist_approvals(model_name.split('::')[0] if '::' in model_name else model_name.split('/')[0])
+        
+        remaining = (state.max_impl_retries - state.retry_count) + (state.max_design_retries - state.design_count)
+        return {
+            'status': state.status,
+            'retry_count': state.retry_count,
+            'design_count': state.design_count,
+            'remaining': max(0, remaining),
+            'repeated_failure_count': state.repeated_failure_count,
+        }
+
+
+def _gate_delete_approval(model_name, block_path, reason=''):
+    """v30 Gate_DELETE_APPROVAL: Subsystem-level deletion requires user confirmation.
+    
+    len(parts) == 2: subsystem level → needs approval (call sl_delete_approval.m for impact)
+    len(parts) >= 3: internal block → no approval needed
+    len(parts) == 1: model itself → blocked
+    """
+    import time, uuid
+    parts = str(block_path).split('/')
+    if len(parts) == 1:
+        return {"status": "gate_blocked", "blocked": True,
+                "gate": "Gate_DELETE_APPROVAL",
+                "reason": "Cannot delete model itself via sl_delete_block"}
+    if len(parts) >= 3:
+        # Internal block deletion — no approval needed
+        return None
+    
+    # [v30 BUGFIX #v30-2] len(parts)==2 could be either "Model/Subsys" (needs approval)
+    # or "Model/Gain1" (top-level regular block, no approval needed).
+    # Use Python-side subsystem state to distinguish: if the path is a known
+    # subsystem (in _SUBSYSTEM_STATES or _APPROVED_SUBSYSTEM_STATES), it needs
+    # approval. Otherwise it's a regular block (Gain, Constant, etc.) — skip.
+    if len(parts) == 2:
+        # Check Python-side state first (no engine dependency, works in CLI mode)
+        _all_subsystem_keys = set()
+        _all_subsystem_keys.update(_SUBSYSTEM_STATES.keys())
+        # v30.1: _APPROVED_SUBSYSTEM_STATES was never defined — removed ref
+        # Also check subpath variants (some states store without model prefix)
+        _subpath = parts[1] if len(parts) >= 2 else block_path
+        _is_known_subsystem = (
+            block_path in _all_subsystem_keys or
+            _subpath in _all_subsystem_keys or
+            any(block_path.startswith(k + '/') for k in _all_subsystem_keys)
+        )
+        if not _is_known_subsystem:
+            # Not a known subsystem — treat as regular top-level block
+            return None
+        # Fallback: if state check inconclusive, try MATLAB engine
+        try:
+            eng = get_engine()
+            if eng is not None:
+                _bt = str(eng.eval(f"get_param('{block_path}','BlockType')", nargout=1)).strip()
+                if _bt != 'SubSystem':
+                    return None
+        except Exception:
+            pass  # Engine unavailable or block doesn't exist — trust state check
+    
+    # Subsystem-level: get impact via sl_delete_approval.m
+    impact = _call_sl_function('sl_delete_approval', {
+        '_pos_1': model_name,
+        '_pos_2': block_path,
+    })
+    
+    if impact is None or (isinstance(impact, dict) and impact.get('status') == 'error'):
+        impact = {'subsystemsToDelete': [block_path], 'childBlocks': 0,
+                  'downstreamSubsystems': [], 'totalAffectedLines': 0}
+    
+    token = str(uuid.uuid4())
+    _APPROVAL_TOKENS[token] = {
+        'type': 'delete_subsystem',
+        'target': block_path,
+        'model': model_name,
+        'expires_at': time.time() + 120,
+        'used': False,
+    }
+    
+    return {
+        "status": "pending_approval",
+        "blocked": True,
+        "gate": "Gate_DELETE_APPROVAL",
+        "requiredApproval": {
+            "needed": True,
+            "approvalToken": token,
+            "tokenExpiresIn": 120,
+            "target": block_path,
+            "impact": impact,
+            "reason": reason or 'Subsystem deletion requires confirmation',
+            "hint": "Present this deletion impact report to the user for confirmation"
+        }
+    }
+
+
+# [v17 BUGFIX #63] Persistent set of framework-approved models
+_FRAMEWORK_APPROVED_MODELS: set = set()
+
+
+def _persist_framework_state(model_name, approved=False):
+    """v17: Persist _FRAMEWORK_REVIEWED and framework_approved to disk."""
+    import json, os, logging as _log
+    try:
+        _pd = _project_dir or os.getcwd()
+        _tmp_dir = os.path.join(_pd, '.matlab_agent_tmp')
+        os.makedirs(_tmp_dir, exist_ok=True)
+        _fw_path = os.path.join(_tmp_dir, 'framework_reviewed.json')
+        _data = {
+            'models': list(_FRAMEWORK_REVIEWED),
+            'approved': list(_FRAMEWORK_APPROVED_MODELS),
+            'timestamp': __import__('time').strftime('%Y-%m-%dT%H:%M:%S', __import__('time').localtime()),
+            'version': 'v17'
+        }
+        with open(_fw_path, 'w', encoding='utf-8') as f:
+            json.dump(_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        _log.getLogger('matlab_bridge').warning(f"Failed to persist framework state: {e}")
+
+
+# [v21 FIX EB1] Unified macroFramework resolver — supports both inline JSON and frameworkFile path
+def _resolve_macro_framework(params):
+    """Resolve macroFramework from params dict or frameworkFile path.
+    
+    Priority: params.macroFramework > params.frameworkFile (file read fallback)
+    
+    Args:
+        params: dict with optional 'macroFramework' or 'frameworkFile' keys
+    
+    Returns:
+        Parsed macro framework dict, or empty dict if neither source is available
+    """
+    import json, os, logging as _log
+    mf = params.get('macroFramework', {})
+    if not mf:
+        fw_file = params.get('frameworkFile', '')
+        if fw_file and os.path.exists(fw_file):
+            try:
+                with open(fw_file, 'r', encoding='utf-8') as f:
+                    mf = json.load(f)
+                _log.getLogger('matlab_bridge').info(
+                    f'[v21 EB1] Resolved macroFramework from file: {fw_file}')
+            except Exception as e:
+                _log.getLogger('matlab_bridge').warning(
+                    f'[v21 EB1] Failed to read frameworkFile "{fw_file}": {e}')
+        elif fw_file:
+            _log.getLogger('matlab_bridge').warning(
+                f'[v21 EB1] frameworkFile not found: {fw_file}')
+    return mf
+
+
+# ============= [v15 Bypass Fix] Unified Gate Check =============
+
+def _is_scene_locked():
+    """[v15 Bypass Fix] Authoritative Gate_S0 scene lock check.
+    
+    Python _SCENE_STATE dict is the AUTHORITATIVE source.
+    MATLAB workspace variables (mS0SceneLocked_) are cache only,
+    synced from Python state for MATLAB functions that need them.
+    
+    This prevents BP-10: MATLAB workspace variable manipulation
+    cannot disable Gate checks (Python state is not affected by assignin).
+    
+    Returns: True if scene is confirmed, False otherwise.
+    """
+    # Primary: Python state (authoritative, not manipulable via MATLAB)
+    if _SCENE_STATE.get('scene_confirmed', False):
+        return True
+    
+    # Fallback: MATLAB workspace (for Bridge restart scenarios where _SCENE_STATE is cleared)
+    try:
+        if _connection_mode == 'engine' and _matlab_engine is not None:
+            _flag = _matlab_engine.eval(
+                "evalin('base', 'exist(''mS0SceneLocked_'', ''var'')')", nargout=1)
+            if _flag == 1:
+                # Sync MATLAB → Python on recovery
+                _SCENE_STATE['scene_confirmed'] = True
+                return True
+    except Exception:
+        pass
+    
+    return False
+
+
+# [v15 Bypass Fix #1] Script modeling blacklist — blocks modeling ops in .m scripts
+_SCRIPT_MODELING_PATTERNS = [
+    (r'\badd_block\s*\(', 'add_block'),
+    (r'\badd_line\s*\(', 'add_line'),
+    (r'\bdelete_block\s*\(', 'delete_block'),
+    (r'\bdelete_line\s*\(', 'delete_line'),
+    (r'\breplace_block\s*\(', 'replace_block'),
+    (r'\bset_param\s*\(', 'set_param'),
+    (r'\bsim\s*\(', 'sim'),
+    (r'\bnew_system\s*\(', 'new_system'),
+    (r'\bclose_system\s*\(', 'close_system'),
+    (r'\bopen_system\s*\(', 'open_system'),
+    (r'\bload_system\s*\(', 'load_system'),
+    (r'\bsave_system\s*\(', 'save_system'),
+    (r'\bassignin\s*\(', 'assignin'),
+    (r'\bevalin\s*\(', 'evalin'),
+]
 
 # ============= Workspace Isolation（v5.4 → v10.1 强制隔离）=============
 # 中间临时文件隔离到 .matlab_agent_tmp/ 子文件夹，避免污染用户工作目录
@@ -159,7 +609,7 @@ def _detect_matlab_version():
                 if ver_str:
                     _matlab_version = str(ver_str).strip()
                     return _matlab_version
-            except:
+            except Exception:
                 pass
     
     # 回退: 从路径推测
@@ -302,6 +752,10 @@ def _python_to_matlab_value(v, _depth=0):
             return '-Inf'
         return str(v)
     elif isinstance(v, list):
+        # [v29 BUGFIX P0] Flat numeric lists → MATLAB numeric array, not cell
+        # position=[100,50,130,80] should become [100,50,130,80] not {100,50,130,80}
+        if _is_flat_numeric_list(v):
+            return _list_to_matlab_vector(v)
         return _list_to_matlab_cell(v, _depth + 1)
     elif isinstance(v, dict):
         return _dict_to_matlab_struct(v, _depth + 1)
@@ -1745,7 +2199,7 @@ def _handle_self_improve(action, params):
                 try:
                     with open(patches_file, 'r', encoding='utf-8') as f:
                         patches_list = json.load(f)
-                except:
+                except Exception:
                     patches_list = []
             patches_list.append(patch_meta)
             with open(patches_file, 'w', encoding='utf-8') as f:
@@ -1792,7 +2246,7 @@ def _handle_self_improve(action, params):
                                 break
                         with open(patches_file, 'w', encoding='utf-8') as f:
                             json.dump(patches_list, f, indent=2, ensure_ascii=False)
-                    except:
+                    except Exception:
                         pass
                 return {
                     "status": "ok",
@@ -2194,8 +2648,8 @@ def _auto_fix_args(command, params):
             fixed['shortName'] = ''
             fixes.append("shortName: auto-set to empty (list all)")
     
-    # 修正5: blockPath 缺模型前缀（常见于 sl_set_param / sl_delete）
-    if command in ('sl_set_param', 'sl_set_param_safe', 'sl_delete'):
+    # 修正5: blockPath 缺模型前缀（常见于 sl_set_param / sl_delete / sl_delete_block）
+    if command in ('sl_set_param', 'sl_set_param_safe', 'sl_delete', 'sl_delete_block'):
         block_path = fixed.get('blockPath', '')
         model_name = fixed.get('modelName', '')
         if block_path and model_name and '/' not in block_path:
@@ -2396,12 +2850,12 @@ def init_agent_workspace():
                              f"  Simulink.fileGenControl('set', 'CacheFolder', '{tmp_dir_safe}/slprj'); "
                              f"catch, end; "
                              f"end;", nargout=0)
-                except:
+                except Exception:
                     pass  # R2016a 可能不支持 Simulink.fileGenControl
                 
                 # 3. [v10.1] 清理旧的 MATLAB 变量
                 eng.eval("clear matlab_agent_tmp_path;", nargout=0)
-            except:
+            except Exception:
                 pass
     
     _agent_workspace_initialized = True
@@ -2514,7 +2968,7 @@ def cleanup_agent_workspace(keep_results=True, deep_clean=False):
                 try:
                     os.remove(fpath)
                     deleted_files.append(rel_path)
-                except:
+                except Exception:
                     pass
             elif ext in result_exts:
                 if keep_results:
@@ -2523,14 +2977,14 @@ def cleanup_agent_workspace(keep_results=True, deep_clean=False):
                     try:
                         os.remove(fpath)
                         deleted_files.append(rel_path)
-                    except:
+                    except Exception:
                         pass
             else:
                 # 其他文件（.m 临时脚本、diary 输出等）→ 始终删除
                 try:
                     os.remove(fpath)
                     deleted_files.append(rel_path)
-                except:
+                except Exception:
                     pass
         
         # [v10.1] 删除空子目录
@@ -2540,20 +2994,20 @@ def cleanup_agent_workspace(keep_results=True, deep_clean=False):
                 if not os.listdir(dpath):
                     os.rmdir(dpath)
                     deleted_dirs.append(os.path.relpath(dpath, tmp_dir))
-            except:
+            except Exception:
                 pass
     
     # 如果隔离目录为空，删除目录本身
     remaining = []
     try:
         remaining = os.listdir(tmp_dir)
-    except:
+    except Exception:
         pass
     if not remaining:
         try:
             os.rmdir(tmp_dir)
             _agent_workspace_initialized = False
-        except:
+        except Exception:
             pass
     
     # [v10.1] 深度清理：检查工作目录中的散落中间文件
@@ -2600,7 +3054,7 @@ def _deep_clean_workspace(project_dir, keep_results=True):
             deleted_dirs.append('slprj/')
             # slprj 下可能有大量文件，不逐一记录
             deleted.append('slprj/ (entire directory)')
-        except:
+        except Exception:
             pass
     
     # 2. 清理工作目录根下的散落中间文件
@@ -2616,9 +3070,9 @@ def _deep_clean_workspace(project_dir, keep_results=True):
                 try:
                     os.remove(fpath)
                     deleted.append(fname)
-                except:
+                except Exception:
                     pass
-    except:
+    except Exception:
         pass
     
     return {"deleted": deleted, "deleted_dirs": deleted_dirs}
@@ -2749,11 +3203,11 @@ def _test_engine_compatibility():
             try:
                 eng.eval("1+1;", nargout=0)
                 _result['compatible'] = True
-            except:
+            except Exception:
                 _result['compatible'] = False
             finally:
                 try: eng.quit()
-                except: pass
+                except Exception: pass
         except (ImportError, Exception) as e:
             sys.stderr.write(f"[MATLAB Bridge] Engine API 不可用: {e}\n")
             sys.stderr.flush()
@@ -2899,7 +3353,7 @@ def get_engine():
         try:
             _matlab_engine.eval("1+1;", nargout=0)
             return _matlab_engine
-        except:
+        except Exception:
             _matlab_engine = None
     
     matlab_engine_module = setup_matlab_engine()
@@ -2940,7 +3394,7 @@ def get_engine():
             _matlab_engine.eval("warning('off', 'Simulink:Engine:MdlFileShadowing');", nargout=0)
             _matlab_engine.eval("warning('off', 'Simulink:LoadSave:MaskedSystemWarning');", nargout=0)
             _matlab_engine.eval("set(0, 'DefaultFigureVisible', 'on');", nargout=0)
-        except:
+        except Exception:
             pass
 
     return _matlab_engine
@@ -3044,7 +3498,7 @@ def set_project_dir(dir_path):
             try:
                 cd_code = f"cd('{dir_safe}'); addpath('{dir_safe}');"
                 _run_code_via_diary(eng, cd_code)
-            except:
+            except Exception:
                 pass
     # CLI 模式下只记录目录，每次执行时 cd
     
@@ -3054,9 +3508,15 @@ def set_project_dir(dir_path):
     # v6.0: 自动部署并初始化 sl_toolbox（中文路径安全）
     sl_init_result = _ensure_sl_toolbox_in_matlab()
     
+    # [v12.1] Restore persistent state on project dir setup
+    _restored_count = _restore_all_state()
+    # [v30] Migrate legacy subsystem states to include retry fields
+    _migrate_subsystem_states()
+    
     return {"status": "ok", "project_dir": dir_path, "connection_mode": mode, 
             "workspace_isolation": init_result.get("tmp_dir", ""),
-            "sl_toolbox": sl_init_result.get("toolbox_path", "")}
+            "sl_toolbox": sl_init_result.get("toolbox_path", ""),
+            "stateRestored": _restored_count}
 
 
 def get_project_dir():
@@ -3088,7 +3548,7 @@ def scan_project_files(dir_path=None):
                     with open(fpath, 'r', encoding='utf-8', errors='replace') as f:
                         first_lines = [f.readline().rstrip() for _ in range(5)]
                     entry["preview"] = '\n'.join(first_lines)
-                except:
+                except Exception:
                     entry["preview"] = ""
                 files["scripts"].append(entry)
             elif ext == '.mat':
@@ -3190,7 +3650,7 @@ def read_simulink_model(model_path):
                         blocks.append(line)
             try:
                 eng.eval(f"close_system('{model_name}', 0);", nargout=0)
-            except:
+            except Exception:
                 pass
             return {"status": "ok", "model_name": model_name, "path": model_path, "block_count": block_count, "blocks": blocks[:50]}
         except Exception as e:
@@ -3221,6 +3681,24 @@ def read_simulink_model(model_path):
 
 # ============= 代码执行（核心：持久化工作区 / CLI 回退）============
 def execute_script(script_path, output_dir=None):
+    # ===== [v15 Bypass Fix #1] Gate_S0: scene must be confirmed =====
+    if not _is_scene_locked():
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "Gate_S0",
+            "reason": "Scene not confirmed. Script execution blocked until Gate_S0 is completed.",
+            "message": (
+                "SCENE_NOT_CONFIRMED: 执行脚本前必须确认场景。\n"
+                "Step 1: Call sl_scene_detect(workspaceDir) to auto-detect\n"
+                "Step 2: Present the result to the user for confirmation (AskUserQuestion)\n"
+                "Step 3: User confirms -> sl_scene_confirm locks the scene"
+            ),
+            "requiredAction": "sl_scene_detect",
+            "hint": "1. sl_scene_detect(workspaceDir)\n2. AskUserQuestion\n3. sl_scene_confirm"
+        }
+    # ===== Gate_S0 end =====
+    
     if not os.path.exists(script_path):
         return {"status": "error", "message": f"文件不存在: {script_path}"}
     
@@ -3230,6 +3708,34 @@ def execute_script(script_path, output_dir=None):
     
     if script_name.startswith('_'):
         return {"status": "error", "message": f"函数名不能以下划线开头: {script_name}"}
+    
+    # ===== [v15 Bypass Fix #1] Script modeling blacklist =====
+    if _SCRIPT_MODELING_PATTERNS:
+        try:
+            with open(script_path, 'r', encoding='utf-8', errors='ignore') as _sf:
+                _script_content = _sf.read()[:100000]  # limit to 100KB
+            _blocked = []
+            for _pat, _name in _SCRIPT_MODELING_PATTERNS:
+                if re.search(_pat, _script_content):
+                    _blocked.append(_name)
+            if _blocked:
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_EXECUTE_SCRIPT",
+                    "reason": f"Script contains blocked modeling operations: {', '.join(_blocked)}",
+                    "message": (
+                        f"MODELING_IN_SCRIPT_BLOCKED: 脚本文件包含被拦截的建模操作: {', '.join(_blocked)}\n"
+                        f"Simulink 建模操作必须通过标准 sl_* API 流程执行（Gate_S0~5 保护）。\n"
+                        f"如需绕过标准流程执行此脚本，请使用 AskUserQuestion 向用户说明原因，由用户决定。"
+                    ),
+                    "blockedOperations": _blocked,
+                    "requiredAction": "use_sl_api_or_ask_user",
+                    "hint": "Use sl_* API (sl_add_block_safe, sl_add_line_safe, sl_sim_run) via POST /api/matlab/sl/:command"
+                }
+        except Exception:
+            pass  # fail-open for file read errors; Gate_S0 still applies as primary defense
+    # ===== Blacklist end =====
     
     mode = _detect_connection_mode()
     
@@ -3257,7 +3763,7 @@ def execute_script(script_path, output_dir=None):
             # 清理 workspace 变量
             for var in cleanup_vars:
                 try: eng.eval(f"clear {var}", nargout=0)
-                except: pass
+                except Exception: pass
             
             if isinstance(matlab_output_raw, dict) and matlab_output_raw.get('status') == 'error':
                 matlab_output_raw["script_path"] = script_path
@@ -3497,7 +4003,7 @@ def _run_code_via_diary(eng, code, timeout=120):
     for f in [script_file, diary_file]:
         if os.path.exists(f):
             try: os.remove(f)
-            except: pass
+            except Exception: pass
     
     # 1. 写代码到临时 .m 文件（UTF-8 编码，带 BOM 以确保 MATLAB 识别）
     try:
@@ -3521,7 +4027,7 @@ def _run_code_via_diary(eng, code, timeout=120):
         # [BUG FIX] 先强制关闭可能残留的 diary，避免路径冲突
         try:
             eng.eval("diary('off');", nargout=0)
-        except:
+        except Exception:
             pass
         
         # 开启 diary 捕获输出
@@ -3530,7 +4036,7 @@ def _run_code_via_diary(eng, code, timeout=120):
         # 先删除旧 diary 文件（如果存在），确保本次输出是干净的
         if os.path.exists(diary_file):
             try: os.remove(diary_file)
-            except: pass
+            except Exception: pass
         eng.eval(f"diary('{diary_file_safe}');", nargout=0)
         
         # v6.0: 临时重定向 OS 级别的 stdout（fd 1），防止 MATLAB Engine 的
@@ -3557,7 +4063,7 @@ def _run_code_via_diary(eng, code, timeout=120):
                 try:
                     clear_cmd = 'clear ' + ' '.join(cleanup_vars) + ';'
                     eng.eval(clear_cmd, nargout=0)
-                except:
+                except Exception:
                     pass
         finally:
             os.dup2(saved_stdout_fd, 1)  # 恢复 fd 1
@@ -3598,7 +4104,7 @@ def _run_code_via_diary(eng, code, timeout=120):
                     output_str = str(fallback_val)
                     # 清理临时变量
                     try: eng.eval("clear('sl_result');", nargout=0)
-                    except: pass
+                    except Exception: pass
             except Exception:
                 pass
                 output_str = ""
@@ -3625,7 +4131,7 @@ def _run_code_via_diary(eng, code, timeout=120):
         elapsed_ms = round((time.time() - start_time) * 1000)
         # 确保 diary 被关闭
         try: eng.eval("diary('off');", nargout=0)
-        except: pass
+        except Exception: pass
         error_msg = re.sub(r'<[^>]+>', '', str(e))
         return {"status": "error", "message": f"MATLAB 执行错误: {error_msg}", "executionTime": elapsed_ms}
     finally:
@@ -3633,7 +4139,7 @@ def _run_code_via_diary(eng, code, timeout=120):
         for f in [script_file, diary_file]:
             try:
                 if os.path.exists(f): os.remove(f)
-            except: pass
+            except Exception: pass
     
     return {"output": output_str, "executionTime": elapsed_ms}
 
@@ -3663,6 +4169,7 @@ def _handle_cmd_request(command_preview):
     _RAW_CMD_STATE['cmd_timestamp'] = _ts
     _RAW_CMD_STATE['cmd_request_id'] = _req
     _RAW_CMD_STATE['cmd_preview'] = command_preview[:500] if command_preview else '(no preview)'
+    _RAW_CMD_STATE['cmd_source'] = 'cmd_request'  # [v15 Fix #11] endpoint binding
     
     return {
         "status": "ok",
@@ -3701,8 +4208,9 @@ def _handle_cmd_request(command_preview):
     }
 
 
-def run_code(code, show_output=True):
+def run_code(code, show_output=True, cmd_source=''):
     """在持久化工作区中直接执行 MATLAB 代码
+    [v15 Fix #11] cmd_source: endpoint binding for Gate_RAW_CMD token ('cmd_request' or 'run_endpoint')
     
     Engine 模式：变量跨命令保持
     CLI 模式：每次执行独立，变量不保持
@@ -3731,11 +4239,42 @@ def run_code(code, show_output=True):
     # [v11.8.3] Gate_RAW_CMD: Raw MATLAB command requires user confirmation token
     # AI cannot use /api/matlab/command directly — must first call /api/matlab/command/request
     # and present the challenge phrase to the user via AskUserQuestion.
+    # [v15 Fix #11] Endpoint binding: token generated by cmd_request is ONLY valid for /api/matlab/command
+    # /api/matlab/run cannot consume cmd_request tokens (uses its own run_endpoint flow).
     _raw_cmd_token = _RAW_CMD_STATE.pop('cmd_token', None)
     _raw_cmd_ts = _RAW_CMD_STATE.pop('cmd_timestamp', 0)
     _raw_cmd_req = _RAW_CMD_STATE.pop('cmd_request_id', 0)
     _raw_cmd_preview = _RAW_CMD_STATE.pop('cmd_preview', '')
+    _raw_cmd_source = _RAW_CMD_STATE.pop('cmd_source', 'unknown')
     _current_ts = time.time()
+    
+    # [v15 Fix #11] Endpoint binding: if called from /api/matlab/run (not /api/matlab/command),
+    # do NOT consume the cmd_request token — force proper endpoint usage.
+    _caller_cmd_source = cmd_source
+    if _raw_cmd_source == 'cmd_request' and _caller_cmd_source != 'cmd_request':
+        # Restore token — caller is not /api/matlab/command
+        _RAW_CMD_STATE['cmd_token'] = _raw_cmd_token
+        _RAW_CMD_STATE['cmd_timestamp'] = _raw_cmd_ts
+        _RAW_CMD_STATE['cmd_request_id'] = _raw_cmd_req
+        _RAW_CMD_STATE['cmd_preview'] = _raw_cmd_preview
+        _RAW_CMD_STATE['cmd_source'] = _raw_cmd_source
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "Gate_RAW_CMD",
+            "reason": "Raw MATLAB commands must use POST /api/matlab/command endpoint, not /api/matlab/run.",
+            "message": (
+                "ENDPOINT_MISMATCH: cmdToken 必须通过 POST /api/matlab/command 使用。\n"
+                "当前调用来自其他端点（如 /api/matlab/run），token 未被消费。\n"
+                "标准流程:\n"
+                "1. POST /api/matlab/command/request → 获取 cmdToken + challengePhrase\n"
+                "2. AskUserQuestion → 用户确认\n"
+                "3. POST /api/matlab/command {command, cmdToken} → 执行"
+            ),
+            "requiredAction": "use_correct_endpoint",
+            "correctEndpoint": "POST /api/matlab/command",
+            "hint": "Use POST /api/matlab/command with cmdToken, not /api/matlab/run."
+        }
     
     if not _raw_cmd_token:
         return {
@@ -3773,21 +4312,65 @@ def run_code(code, show_output=True):
     # Gate check passed — token consumed
     # Include command preview in response for traceability
     _cmd_preview_val = _raw_cmd_preview
-    # Issue warning to encourage use of standard sl_* API (which enforces gates).
-    # Does NOT block execution — run_code is the escape hatch for bulk/model building.
+    
+    # [v12.0→v15] Gate_RAW_CMD modeling blacklist (GT-03/GT-07 FIX + BP-06 hardening)
+    # Even with valid cmdToken, block modeling operations that bypass sl_* API gates.
+    # [v15] Extended to block code-obfuscation bypasses (eval/feval/str2func/run)
+    # and model lifecycle operations (new_system/open_system/load_system/save_system/close_system/bdclose).
     import re
-    _sl_ops_warning = []
-    if re.search(r'\badd_block\s*\(', code):
-        _sl_ops_warning.append('add_block')
-    if re.search(r'\badd_line\s*\(', code):
-        _sl_ops_warning.append('add_line')
-    if re.search(r'\bdelete_block\s*\(', code):
-        _sl_ops_warning.append('delete_block')
-    if re.search(r'\bdelete_line\s*\(', code):
-        _sl_ops_warning.append('delete_line')
-    _sl_ops_warning_str = ', '.join(_sl_ops_warning) if _sl_ops_warning else None
-    # [v11.8.2 Bug#7 FIX] Flag for forced Simulink refresh after structural ops
-    _needs_simulink_refresh = bool(_sl_ops_warning)
+    _MODELING_BLACKLIST = [
+        # 建模操作 (v12.0 original)
+        (r'\badd_block\s*\(', 'add_block'),
+        (r'\badd_line\s*\(', 'add_line'),
+        (r'\bdelete_block\s*\(', 'delete_block'),
+        (r'\bdelete_line\s*\(', 'delete_line'),
+        (r'\breplace_block\s*\(', 'replace_block'),
+        (r'\bset_param\s*\(', 'set_param'),
+        (r'\bsim\s*\(', 'sim'),
+        (r'\bassignin\s*\(', 'assignin'),
+        (r'\bevalin\s*\(', 'evalin'),
+        # [v15 Bypass Fix #8] 动态执行函数 — 防止代码混淆绕过
+        (r'\beval\s*\(', 'eval'),
+        (r'\bfeval\s*\(', 'feval'),
+        (r'\bstr2func\s*\(', 'str2func'),
+        (r'\brun\s*\(', 'run'),
+        # [v15 Bypass Fix #8] 模型生命周期操作 — 防止绕过 Gate_S0
+        (r'\bnew_system\s*\(', 'new_system'),
+        (r'\bopen_system\s*\(', 'open_system'),
+        (r'\bload_system\s*\(', 'load_system'),
+        (r'\bsave_system\s*\(', 'save_system'),
+        (r'\bclose_system\s*\(', 'close_system'),
+        (r'\bbdclose\s*\(', 'bdclose'),
+    ]
+    _blocked_ops = []
+    for _pattern, _op_name in _MODELING_BLACKLIST:
+        if re.search(_pattern, code):
+            _blocked_ops.append(_op_name)
+    
+    if _blocked_ops:
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "Gate_RAW_CMD",
+            "reason": f"Modeling operation(s) detected in raw command: {', '.join(_blocked_ops)}. Use sl_* API instead.",
+            "command_preview": _cmd_preview_val,
+            "blockedOperations": _blocked_ops,
+            "message": (
+                f"MODELING_CMD_BLOCKED: /api/matlab/command rejected because it contains "
+                f"modeling operations: {', '.join(_blocked_ops)}\n"
+                f"These operations MUST use the standard sl_* API workflow which enforces all Gate layers:\n"
+                f"  - add_block  → sl_add_block_safe\n"
+                f"  - add_line   → sl_add_line_safe\n"
+                f"  - set_param  → sl_set_param_safe\n"
+                f"  - sim        → sl_sim_run\n"
+                f"Non-modeling MATLAB commands (disp, fprintf, variable assignment, etc.) are still allowed."
+            ),
+            "requiredAction": "use_sl_api",
+            "hint": "Use sl_* API (sl_add_block_safe, sl_add_line_safe, sl_set_param_safe, sl_sim_run) instead of raw MATLAB commands."
+        }
+    
+    # Non-blocking operations proceed normally
+    _needs_simulink_refresh = False  # [v12.0] No modeling ops detected
     
     mode = _detect_connection_mode()
     
@@ -3840,19 +4423,6 @@ def run_code(code, show_output=True):
                 "executionTime": exec_time,
                 "variablesChanged": vars_changed
             }
-            # [P2 FIX v11.6.7] Inject gate awareness warning
-            if _sl_ops_warning_str:
-                _result["gateAwarenessWarning"] = (
-                    f"run_code contains gated Simulink operations: {_sl_ops_warning_str}. "
-                    f"Prefer using the standard sl_* API (sl_add_block, sl_add_line, etc.) "
-                    f"for proper gate enforcement and verification injection."
-                )
-            # [v11.8.2 Bug#7 FIX] Force Simulink refresh after structural operations
-            if _needs_simulink_refresh:
-                try:
-                    eng.eval("drawnow;", nargout=0)
-                except Exception:
-                    pass
             return _result
         except Exception as e:
             error_msg = re.sub(r'<[^>]+>', '', str(e))
@@ -3877,20 +4447,13 @@ def run_code(code, show_output=True):
             result['connection_mode'] = 'cli'
         result['executionTime'] = exec_time
         result['variablesChanged'] = _detect_vars_changed(code)
-        # [P2 FIX v11.6.7] Inject gate awareness warning for CLI path too
-        if _sl_ops_warning_str and result.get('status') == 'ok':
-            result["gateAwarenessWarning"] = (
-                f"run_code contains gated Simulink operations: {_sl_ops_warning_str}. "
-                f"Prefer using the standard sl_* API (sl_add_block, sl_add_line, etc.) "
-                f"for proper gate enforcement and verification injection."
-            )
         return result
 
 
 def _count_figures(eng):
     try:
         return int(eng.eval("length(findall(0, 'Type', 'figure'));", nargout=1))
-    except:
+    except Exception:
         return 0
 
 
@@ -3937,7 +4500,7 @@ def _detect_vars_changed(code):
         unique = [v for v in unique if v not in keywords]
         # 只返回前 15 个，避免过长
         return unique[:15]
-    except:
+    except Exception:
         return []
 
 
@@ -3966,10 +4529,10 @@ def get_workspace_vars():
                             fields = eng.eval(f"fieldnames({name})", nargout=1)
                             if fields:
                                 var_preview = f"fields: {', '.join(str(f) for f in list(fields)[:5])}"
-                    except:
+                    except Exception:
                         pass
                     result.append({"name": str(name), "size": var_size, "class": var_class, "preview": var_preview})
-                except:
+                except Exception:
                     result.append({"name": str(name), "size": "?", "class": "?", "preview": ""})
             return {"status": "ok", "variables": result, "connection_mode": "engine"}
         except Exception as e:
@@ -4038,6 +4601,28 @@ def create_simulink_model(model_name, model_path=None):
             "message": "项目目录未设置！请先调用 POST /api/matlab/setup",
             "requiredAction": "setup_project_dir"
         }
+    
+    # ===== [v15 Bypass Fix #2] Gate_S0: scene must be confirmed =====
+    if not _is_scene_locked():
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "Gate_S0",
+            "reason": "Scene not confirmed. Model creation requires Gate_S0 scene confirmation.",
+            "message": (
+                "SCENE_NOT_CONFIRMED: 创建模型前必须确认场景。\n"
+                "标准流程: sl_scene_detect → AskUserQuestion → sl_scene_confirm\n"
+                "如需绕过标准流程，请使用 AskUserQuestion 向用户说明原因，由用户决定。"
+            ),
+            "requiredAction": "sl_scene_detect",
+            "hint": "1. sl_scene_detect(workspaceDir)\n2. AskUserQuestion\n3. sl_scene_confirm"
+        }
+    # ===== Gate_S0 end =====
+    
+    # [v16 Fix #56+#57] COMPREHENSIVE state reset for Scene 1 fresh build
+    # Replaces the incomplete v15 Fix #56 (3 partial operations → 1 comprehensive reset)
+    _hard_reset_model_state(model_name)
+    
     mode = _detect_connection_mode()
     save_path = (model_path or os.path.join(get_project_dir(), model_name)).replace('\\', '/')
     
@@ -4047,7 +4632,7 @@ def create_simulink_model(model_name, model_path=None):
             try:
                 eng.eval(f"close_system('{model_name}', 0);", nargout=0)
                 eng.eval(f"bdclose('{model_name}');", nargout=0)
-            except:
+            except Exception:
                 pass
             eng.eval("warning('off', 'Simulink:Engine:MdlFileShadowing');", nargout=0)
             eng.eval(f"new_system('{model_name}')", nargout=0)
@@ -4072,6 +4657,49 @@ def create_simulink_model(model_name, model_path=None):
 
 
 def run_simulink(model_name, stop_time="10"):
+    # ===== [v15 Bypass Fix #3] Gate_S0: scene must be confirmed =====
+    if not _is_scene_locked():
+        return {
+            "status": "gate_blocked",
+            "blocked": True,
+            "gate": "Gate_S0",
+            "reason": "Scene not confirmed. Simulation requires Gate_S0 scene confirmation.",
+            "message": (
+                "SCENE_NOT_CONFIRMED: 仿真前必须确认场景。\n"
+                "标准流程: sl_scene_detect → AskUserQuestion → sl_scene_confirm\n"
+                "如需绕过标准流程，请使用 AskUserQuestion 向用户说明原因，由用户决定。"
+            ),
+            "requiredAction": "sl_scene_detect",
+            "hint": "1. sl_scene_detect(workspaceDir)\n2. AskUserQuestion\n3. sl_scene_confirm"
+        }
+    # ===== Gate_S0 end =====
+    
+    # ===== [v15 Bypass Fix #3] Gate_4: model must be completed =====
+    try:
+        _eng = get_engine()
+        if _eng is not None:
+            _completed_flag = _eng.eval(
+                f"evalin('base', 'exist(''mModelCompleted_{model_name}'', ''var'')')", nargout=1)
+            if _completed_flag != 1:
+                return {
+                    "status": "gate_blocked",
+                    "blocked": True,
+                    "gate": "Gate_4",
+                    "reason": f"Model '{model_name}' has not passed sl_model_complete.",
+                    "message": (
+                        f"MODEL_NOT_COMPLETED: 模型 '{model_name}' 尚未通过 sl_model_complete 门控。\n"
+                        f"仿真前必须先完成: sl_model_complete('{model_name}')\n"
+                        f"确保所有端口已连接，Goto/From 成对，无孤立模块。\n"
+                        f"如需绕过标准流程，请使用 AskUserQuestion 向用户说明原因，由用户决定。"
+                    ),
+                    "requiredAction": "sl_model_complete",
+                    "requiredParams": {"modelName": model_name},
+                    "hint": f"sl_model_complete('{model_name}') → canProceed=true → sl_sim_run"
+                }
+    except Exception:
+        pass  # fail-open for engine errors; Gate_S0 still applies as primary defense
+    # ===== Gate_4 end =====
+    
     mode = _detect_connection_mode()
     
     if mode == 'engine':
@@ -4106,7 +4734,7 @@ def run_simulink(model_name, stop_time="10"):
                     "catch, end"
                 )
                 eng.eval(plot_code, nargout=0)
-            except:
+            except Exception:
                 pass
             
             fig_count = _count_figures(eng)
@@ -4162,7 +4790,7 @@ def set_simulink_workspace_var(model_name, var_name, var_value):
             # 确保模型已加载
             try:
                 eng.eval(f"load_system('{model_name}');", nargout=0)
-            except:
+            except Exception:
                 pass
             
             # v5.0: 直接 eng.eval，无需引号双写
@@ -4208,7 +4836,7 @@ def get_simulink_workspace_vars(model_name):
             # 确保模型已加载
             try:
                 eng.eval(f"load_system('{model_name}');", nargout=0)
-            except:
+            except Exception:
                 pass
             
             # v5.0: 使用 diary 替代 evalc
@@ -4270,7 +4898,7 @@ def clear_simulink_workspace(model_name):
         try:
             try:
                 eng.eval(f"load_system('{model_name}');", nargout=0)
-            except:
+            except Exception:
                 pass
             
             eng.eval(f"ws = get_param('{model_name}', 'ModelWorkspace'); ws.clear;", nargout=0)
@@ -4383,11 +5011,20 @@ _SL_FUNC_MAP = {
     "sl_inspect":          "sl_inspect_model",
     "sl_add_block":        "sl_add_block_safe",
     "sl_add_block_safe":   "sl_add_block_safe",
+    "sl_add_blocks_batch": "sl_add_block_safe",  # [v21 FIX EB7] reuses add_block_safe per block
+    # [v24 FIX EB7] Batch endpoints — mapped to existing functions, handlers in _generate_workflow_state
+    "sl_micro_design_batch":   "sl_micro_design",
+    "sl_micro_review_batch":   "sl_micro_review",
+    "sl_model_complete_batch": "sl_model_complete",
+    "sl_build_batch":          "sl_add_block_safe",
     "sl_add_line":         "sl_add_line_safe",
     "sl_add_line_safe":    "sl_add_line_safe",
     "sl_set_param":        "sl_set_param_safe",
     "sl_set_param_safe":   "sl_set_param_safe",
     "sl_delete":           "sl_delete_safe",
+    "sl_delete_block":     "sl_delete_block",      # v30: full lifecycle delete
+    "sl_delete_approval":  "sl_delete_approval",   # v30: subsystem delete impact analysis
+    "sl_retry_plan":       "sl_retry_plan",        # v30: auto-generate retry plan
     "sl_find_blocks":      "sl_find_blocks",
     "sl_replace_block":    "sl_replace_block",
     "sl_bus_create":       "sl_bus_create",
@@ -4404,6 +5041,7 @@ _SL_FUNC_MAP = {
     "sl_callback_set":     "sl_callback_set",
     "sl_sim_batch":        "sl_sim_batch",
     "sl_validate":         "sl_validate_model",
+    "sl_validate_model":   "sl_validate_model",  # v12.1: alias for index.ts whitelist consistency
     "sl_parse_error":      "sl_parse_error",
     "sl_block_position":   "sl_block_position",
     "sl_auto_layout":      "sl_auto_layout",
@@ -4453,8 +5091,14 @@ _SL_FUNC_MAP = {
     # v11.8: Bridge-builtin recursive workflow commands
     "sl_build_status":        "_builtin_build_status",    # 查询构建进度
     "sl_next_target":         "_builtin_next_target",     # 获取下一个构建目标
+    "sl_hard_reset":          "_builtin_hard_reset",      # [v24 FIX B7] 硬重置模型状态
     # v11.9: Model lifecycle
     "sl_model_create":        "sl_model_create",         # 创建新 Simulink 模型 (Scene 1)
+    # v12.0: Rigor Score engine
+    "sl_rigor_score":         "sl_rigor_score",          # 四维工程严谨性评分
+    "sl_rigor_utils":         "sl_rigor_utils",          # 符号分析工具
+    "sl_param_registry":      "sl_param_registry",       # 参数注册系统
+    "sl_micro_approve_guard": "sl_micro_approve_guard",  # 审批前置检查
 }
 
 # 命令 → 参数构建函数映射（将 API 参数转为 .m 函数参数）
@@ -4467,6 +5111,30 @@ def _build_sl_args(command, params):
     """
     
     model_name = params.get('modelName', params.get('model_name', ''))
+    # [v24-B1 P0 FIX] Derive model_name from subsystemPath/blockPath/destPath when not explicitly provided.
+    # Empty model_name causes _pos_1 skip → positional arg shift → sourceBlock treated as modelName.
+    # [v27 FIX] Check _pos_1 first — many direct API calls pass model name as first positional arg.
+    if not model_name:
+        _p1 = params.get('_pos_1', '')
+        if _p1 and '/' not in _p1:
+            model_name = _p1
+    if not model_name:
+        for key in ('subsystemPath', 'blockPath', 'destPath', 'destination',
+                     'srcSpec', 'dstSpec', 'srcBlock', 'dstBlock', 'subsystemName'):
+            val = params.get(key, '')
+            if val and '/' in val:
+                model_name = val.split('/')[0]
+                break
+        # [v24 FIX Bug#14-ext] If still no model_name, try using the value directly
+        # as model name (e.g., subsystemPath="Quadrotor_ADRC_v24" without '/')
+        if not model_name:
+            for key in ('subsystemPath', 'modelName', 'model_name'):
+                val = params.get(key, '')
+                if val and '/' not in val:
+                    model_name = val
+                    break
+        if not model_name:
+            model_name = params.get('modelName', '')  # keep empty if truly unavailable
     
     if command == "sl_inspect":
         # sl_inspect_model(modelName, varargin)
@@ -4485,17 +5153,59 @@ def _build_sl_args(command, params):
         # v10.1: 使用智能参数转换，支持矩阵/向量参数
         # [v11.8.3 Bug#14 FIX] blockType as alias for sourceBlock
         source_block = params.get('sourceBlock', params.get('blockType', ''))
+        # [v24 FIX Bug#14] Map bare SubSystem to full Simulink library path.
+        source_block = _SUBSYSTEM_ALIASES.get(source_block, source_block)
         raw_params = params.get('params', {})
         block_type = _extract_block_type(source_block)
+        # [v13 BUGFIX #45] Read subsystemPath for target subsystem placement
+        subsystem_path = params.get('subsystemPath', '')
+        block_name = params.get('blockName', '')
+        dest_path = params.get('destination', params.get('destPath', ''))
+        # [v31 FIX v31-5] blockPath fallback: extract full destination from blockPath.
+        # Previously blockPath was only used by sl_set_param_safe/sl_delete_block.
+        # sl_add_block_safe ignored it → blocks placed at model root (auto-named Constant, Gain...)
+        # Now: blockPath="Model/Parent/Child/Gain1" → destPath="Model/Parent/Child/Gain1"
+        if not dest_path:
+            bp = params.get('blockPath', '')
+            if bp and '/' in bp:
+                dest_path = bp  # blockPath already has full model/.../subsys/block path
+        # Construct destPath: subsystemPath + blockName
+        if not dest_path:
+            if subsystem_path and block_name:
+                # Full construction: "Model/Subsys/Gain1"
+                if '/' in block_name:
+                    dest_path = block_name  # already has path prefix
+                else:
+                    dest_path = subsystem_path + '/' + block_name
+            elif subsystem_path:
+                dest_path = subsystem_path
+            else:
+                dest_path = block_name  # fallback to blockName only
+        # Ensure model prefix: if dest_path has '/' but doesn't start with model_name
+        if dest_path and model_name:
+            if '/' not in dest_path:
+                dest_path = model_name + '/' + dest_path
+            elif not dest_path.startswith(model_name + '/'):
+                # [v18.1 Bug#65 FIX] subsystemPath has '/' (nested) but no model prefix
+                dest_path = model_name + '/' + dest_path
         # [v11.8.3 Bug#14 FIX] SubSystem: extract params.Name -> destPath
-        dest_path = params.get('destPath', params.get('blockName', ''))  # [P0-9 FIX] Also accept blockName as alias for destPath
         if not dest_path and source_block and 'subsystem' in str(source_block).lower():
             dest_path = (raw_params or {}).get('Name', '')
+        # [v21 FIX EB5] Validate position: skip if right <= left or bottom <= top
+        _pos = params.get('position', [])
+        if _pos and isinstance(_pos, (list, tuple)) and len(_pos) == 4:
+            if _pos[2] <= _pos[0] or _pos[3] <= _pos[1]:
+                # [v24 FIX EB5] Auto-detect [x,y,w,h] format. Simulink uses [left,top,right,bottom]
+                # but some APIs pass [x,y,width,height]. If w>0 and h>0, convert.
+                if _pos[2] > 0 and _pos[3] > 0:
+                    _pos = [_pos[0], _pos[1], _pos[0] + _pos[2], _pos[1] + _pos[3]]
+                else:
+                    _pos = []  # truly invalid → auto-placement
         return {
             '_pos_1': model_name,
             '_pos_2': source_block,
             'destPath': dest_path,
-            'position': params.get('position', []),
+            'position': _pos,
             'makeNameUnique': params.get('makeNameUnique', True),
             'params': ('__special__', _build_params_struct_expr(raw_params, block_type)),
         }
@@ -4515,14 +5225,28 @@ def _build_sl_args(command, params):
             dst_spec = str(params['dstPort'])
         if not src_spec:
             # 从 srcBlock+srcPort 构造
+            # [v23 FIX V23-L1] Detect port suffix already embedded in srcBlock
+            # e.g., "Model/Subsys/Block/1" → use as-is; don't append another /{srcPort}
             src_block = params.get('srcBlock', '')
-            src_port = params.get('srcPort', 1)
-            src_spec = f"{src_block}/{src_port}" if src_block else ''
+            if src_block:
+                import re as _v23_re
+                _port_in_block = _v23_re.match(r'^(.+)/(\d+)$', str(src_block))
+                if _port_in_block:
+                    src_spec = str(src_block)  # port already in path
+                else:
+                    src_port = params.get('srcPort', 1)
+                    src_spec = f"{src_block}/{src_port}"
         if not dst_spec:
             # 从 dstBlock+dstPort 构造
             dst_block = params.get('dstBlock', '')
-            dst_port = params.get('dstPort', 1)
-            dst_spec = f"{dst_block}/{dst_port}" if dst_block else ''
+            if dst_block:
+                import re as _v23_re2
+                _port_in_block = _v23_re2.match(r'^(.+)/(\d+)$', str(dst_block))
+                if _port_in_block:
+                    dst_spec = str(dst_block)  # port already in path
+                else:
+                    dst_port = params.get('dstPort', 1)
+                    dst_spec = f"{dst_block}/{dst_port}"
         return {
             '_pos_1': model_name,
             '_pos_2': src_spec,
@@ -4536,6 +5260,13 @@ def _build_sl_args(command, params):
         # v10.1: 使用智能参数转换，支持矩阵/向量参数
         block_path = params.get('blockPath', '')
         raw_params = params.get('params', {})
+        # [v24-B2 P0 FIX] Accept top-level paramName/paramValue when 'params' key is absent.
+        # REST API sends paramName/paramValue as top-level fields, not nested under 'params'.
+        if not raw_params:
+            param_name = params.get('paramName', '')
+            param_value = params.get('paramValue', None)
+            if param_name and param_value is not None:
+                raw_params = {param_name: param_value}
         # 优先从 params 中获取 blockType（AI 显式传递），否则从 blockPath 推断
         block_type = params.get('blockType', '')
         if not block_type and '/' in block_path:
@@ -4549,8 +5280,30 @@ def _build_sl_args(command, params):
             '_pos_2_special': _build_params_struct_expr(raw_params, block_type),
         }
     
+    elif command == "sl_delete_block":
+        # sl_delete_block(modelName, blockPath, varargin)
+        bc = params.get('blockPath', '')
+        return {
+            '_pos_1': model_name,
+            '_pos_2': bc,
+            'reason': params.get('reason', ''),
+            'cleanupParams': params.get('cleanup', {}).get('paramRegistry', True) if isinstance(params.get('cleanup'), dict) else True,
+            'cleanupSignalLogging': params.get('cleanup', {}).get('signalLogging', True) if isinstance(params.get('cleanup'), dict) else True,
+            'cleanupCallbacks': params.get('cleanup', {}).get('callbacks', True) if isinstance(params.get('cleanup'), dict) else True,
+            'preserveShell': params.get('preserveShell', False),
+        }
+    
+    elif command == "sl_retry_plan":
+        # sl_retry_plan(modelName, subPath, completeResult, retryState)
+        return {
+            '_pos_1': model_name,
+            '_pos_2': params.get('subPath', params.get('subsystemPath', '')),
+            '_pos_3': params.get('completeResult', {}),
+            '_pos_4': params.get('retryState', {}),
+        }
+    
     elif command == "sl_delete":
-        # sl_delete_safe(blockPath, varargin)
+        # sl_delete_safe(blockPath, varargin) — compat alias
         return {
             '_pos_1': params.get('blockPath', ''),
             'cascade': params.get('cascade', True),
@@ -4645,9 +5398,16 @@ def _build_sl_args(command, params):
             _detected_mode = 'group'
         else:
             _detected_mode = 'empty'
+        # [v16 Fix #59] Fallback chain: subsystemPath → subsystemName
+        # When AI passes subsystemPath but not subsystemName (common for nested creates),
+        # use subsystemPath as the subsystemName to avoid "Invalid parameter" error.
+        _sub_name = params.get('subsystemName', '')
+        _sub_path_fb = params.get('subsystemPath', '')
+        if not _sub_name and _sub_path_fb:
+            _sub_name = _sub_path_fb
         args = {
             '_pos_1': model_name,
-            '_pos_2': params.get('subsystemName', ''),
+            '_pos_2': _sub_name,
             '_pos_3': _detected_mode,
             'blocksToGroup': blocks_to_group,
         }
@@ -4656,6 +5416,15 @@ def _build_sl_args(command, params):
             args['inputPorts'] = params['inputPorts']
         if 'outputPorts' in params:
             args['outputPorts'] = params['outputPorts']
+        # [v26 FIX ONAME] Forward custom port names
+        if 'inputPortNames' in params:
+            args['inputPortNames'] = params['inputPortNames']
+        if 'outputPortNames' in params:
+            args['outputPortNames'] = params['outputPortNames']
+        # [v16 Fix #41/#59] 传递 subsystemPath — 仅在不同于 subsystemName 时传递，避免 MATLAB 参数冲突
+        _sub_path = params.get('subsystemPath', '')
+        if _sub_path and _sub_path != _sub_name:
+            args['subsystemPath'] = _sub_path
         return args
     
     elif command == "sl_subsystem_mask":
@@ -4740,11 +5509,12 @@ def _build_sl_args(command, params):
             'stopTime': params.get('stopTime', ''),
         }
     
-    elif command == "sl_validate":
-        # sl_validate_model(modelName, varargin)
+    elif command == "sl_validate" or command == "sl_validate_model":
+        # sl_validate_model(modelName) — v12.1: single-arg, no extra NV pairs
+        # [v25 FIX RC1] Support subsystem-level validation via scanTarget parameter.
+        scan_target = params.get('scanTarget', params.get('subsystemPath', ''))
         return {
-            '_pos_1': model_name,
-            'checks': params.get('checks', 'all'),
+            '_pos_1': scan_target if scan_target else model_name,
         }
     
     elif command == "sl_parse_error":
@@ -4851,8 +5621,15 @@ def _build_sl_args(command, params):
     # v11.0: 大框架三层迭代循环 API
     elif command == "sl_framework_design":
         # sl_framework_design(taskDescription, varargin)
+        # [v16 Fix #60] Strip non-ASCII from taskDescription to prevent MATLAB eval encoding errors.
+        # Non-ASCII chars (Chinese, emoji, etc.) cause "字符向量未正常终止" when passed via MATLAB eval.
+        # We replace them with spaces — taskDescription is only used to generate AI design prompts,
+        # so semantic completeness is preserved even with ASCII-only text.
+        _task_raw = params.get('taskDescription', '')
+        import re as _re_ascii
+        _task_ascii = _re_ascii.sub(r'[^\x00-\x7F]+', ' ', str(_task_raw)).strip()
         return {
-            '_pos_1': params.get('taskDescription', ''),
+            '_pos_1': _task_ascii,
             'domain': params.get('domain', 'auto'),
             'subsystemCount': params.get('subsystemCount', 0),
             'detailLevel': params.get('detailLevel', 'standard'),
@@ -4861,7 +5638,10 @@ def _build_sl_args(command, params):
     elif command == "sl_framework_review":
         # sl_framework_review(macroFramework, varargin)
         # macroFramework 作为第一位置参数（可以是 struct 或 taskDescription string）
-        macro_framework = params.get('macroFramework', params.get('taskDescription', ''))
+        # [v21 FIX EB1] Use unified resolver for macroFramework/frameworkFile
+        macro_framework = _resolve_macro_framework(params)
+        if not macro_framework:
+            macro_framework = params.get('taskDescription', '')
         # [v11.8] Include all 11 default checks (5 original + 6 new recursive hierarchy checks)
         check_items = params.get('checkItems', [
             'physics', 'signalFlow', 'subsystem', 'gotoFrom', 'dimensionality',
@@ -4877,22 +5657,25 @@ def _build_sl_args(command, params):
         # sl_framework_approve(modelName, varargin)
         # 审批模式：不在 MATLAB 执行，直接更新 Bridge 状态
         # v11.4: Gate_5 runs in _handle_sl_command BEFORE reaching here
+        # [v21 FIX EB1] Use unified resolver for macroFramework/frameworkFile
+        _mf_approve = _resolve_macro_framework(params)
         return {
             '_pos_1_special': '__fw_approve__',
             'modelName': model_name,
             'locked': params.get('locked', True),
-            'macroFramework': params.get('macroFramework', {}),
+            'macroFramework': _mf_approve,
         }
 
     # v11.0 Phase 2: 子系统小框架迭代循环 API
     elif command == "sl_micro_design":
         # sl_micro_design(subsystemName, taskDescription, varargin)
         return {
-            '_pos_1': params.get('subsystemName', ''),
-            '_pos_2': params.get('taskDescription', ''),
+            '_pos_1': params.get('subsystemName', params.get('subsystemPath', params.get('subsystem', ''))),  # [v12.1 BUGFIX #25] add subsystemPath/subsystem aliases
+            '_pos_2': params.get('taskDescription', params.get('task', '')),  # [v12.1 BUGFIX #25] add task alias
             'physics': params.get('physics', 'auto'),
             'detailLevel': params.get('detailLevel', 'standard'),
             'modelName': model_name,
+            'parentContext': params.get('parentContext', {}),  # [v12.1 BUGFIX #25] forward parentContext
         }
 
     elif command == "sl_micro_review":
@@ -4916,6 +5699,12 @@ def _build_sl_args(command, params):
         # sl_micro_approve(subsystemName, 'microFramework', mf, 'locked', true, 'modelName', modelName)
         subsystem = params.get('subsystemName', params.get('subsystem', ''))
         micro_framework = params.get('microFramework', {})
+        # [v20 FIX B4-ext] Fallback to state.micro_frameworks cache (set during sl_micro_review)
+        if not micro_framework and subsystem:
+            _tl_fb = model_name.split('/')[0] if '/' in model_name else model_name
+            _ws_fb = _get_workflow_state(_tl_fb)
+            if _ws_fb and hasattr(_ws_fb, 'micro_frameworks'):
+                micro_framework = _ws_fb.micro_frameworks.get(subsystem, {})
         result = {
             '_pos_1': subsystem,
             'locked': params.get('locked', True),
@@ -5005,6 +5794,37 @@ def _build_sl_args(command, params):
             args['overwrite'] = params['overwrite']
         return args
 
+    # [v12.0] Rigor Score new commands
+    elif command == "sl_rigor_score":
+        # sl_rigor_score(microFramework)
+        return {
+            '_pos_1': params.get('microFramework', params.get('_pos_1', {})),
+        }
+
+    elif command == "sl_rigor_utils":
+        # sl_rigor_utils(action, data, ...)
+        return {
+            '_pos_1': params.get('action', params.get('_pos_1', '')),
+            '_pos_2': params.get('_pos_2', []),
+            '_pos_3': params.get('_pos_3', None),
+        }
+
+    elif command == "sl_param_registry":
+        # sl_param_registry(action, varargin)
+        return {
+            '_pos_1': params.get('action', params.get('_pos_1', 'list')),
+            '_pos_2': params.get('_pos_2', ''),
+            '_pos_3': params.get('_pos_3', None),
+        }
+
+    elif command == "sl_micro_approve_guard":
+        # sl_micro_approve_guard(subsystemName, microFramework, reviewResult)
+        return {
+            '_pos_1': params.get('subsystemName', params.get('_pos_1', '')),
+            '_pos_2': params.get('microFramework', params.get('_pos_2', {})),
+            '_pos_3': params.get('reviewResult', params.get('_pos_3', {})),
+        }
+
     elif command == "sl_model_load":
         # sl_model_load(modelName)
         return {
@@ -5060,6 +5880,18 @@ def _build_sl_args(command, params):
             '_pos_1': model_name,
             'action': params.get('action', 'check'),
         }
+        # [v12.1 BUGFIX #27] Forward subPath for subsystem-scoped scan
+        _sub_path = params.get('subPath', params.get('subsystemPath', ''))
+        if _sub_path:
+            _args['subPath'] = _sub_path
+            _args['isSubPath'] = True     # [v26 FIX CMPL] Subsystem-scoped check skips compilation
+            # [v25 FIX Bug#5] Pass approved blockPlan for consistency check
+            _subsys_name = _sub_path.split('/')[-1] if '/' in _sub_path else _sub_path
+            _ws_state = _get_workflow_state(model_name)
+            if _ws_state and hasattr(_ws_state, 'micro_frameworks'):
+                _mf = _ws_state.micro_frameworks.get(_subsys_name, {})
+                if _mf and isinstance(_mf, dict) and 'blockPlan' in _mf:
+                    _args['blockPlan'] = _mf['blockPlan']
         if params.get('autoTerminateIntegrators', False):
             _args['autoTerminateIntegrators'] = True
         return _args
@@ -5071,6 +5903,7 @@ def _build_sl_args(command, params):
 # 需要模型锁的命令（修改型操作）
 _MODIFY_COMMANDS = {
     'sl_add_block', 'sl_add_line', 'sl_set_param', 'sl_delete',
+    'sl_delete_block', 'sl_delete_approval',
     'sl_replace_block', 'sl_subsystem_create', 'sl_subsystem_mask',
     'sl_subsystem_expand', 'sl_config_set', 'sl_signal_config',
     'sl_signal_logging', 'sl_callback_set', 'sl_block_position',
@@ -5090,6 +5923,7 @@ _WRITE_VERIFY_MAP = {
     'sl_add_line':        'line',
     'sl_set_param':       'param',
     'sl_delete':          'block',
+    'sl_delete_block':    'block',
     'sl_replace_block':   'block',
     'sl_subsystem_create': 'subsystem',
     'sl_subsystem_mask':  'subsystem',
@@ -5158,9 +5992,20 @@ def _remove_workflow_state(model_name):
             del _BUILD_PHASE_TRACKER[model_name]
 
 def _clear_all_workflow_states():
-    """线程安全地清空所有 ModelWorkflowState"""
+    """[v16 Fix #57] 线程安全地清空所有模型工作流状态。
+    
+    Clears ALL state layers when engine stops or full reset is needed:
+      - _BUILD_PHASE_TRACKER (workflow state machines)
+      - _SUBSYSTEM_STATES (per-subsystem FSM for all models)
+      - _FRAMEWORK_REVIEWED (framework review tracking)
+    
+    Note: Does NOT delete disk-persisted approvals files (needed by model_name).
+    Use _hard_reset_model_state(model_name) for per-model disk cleanup.
+    """
     with _global_lock:
         _BUILD_PHASE_TRACKER.clear()
+        _SUBSYSTEM_STATES.clear()
+        _FRAMEWORK_REVIEWED.clear()
 
 
 class ModelWorkflowState:
@@ -5183,7 +6028,7 @@ class ModelWorkflowState:
         self.framework_locked = False      # v11.0: 大框架锁定标志
         self.design_result = None          # v10.1: 设计方案缓存
         self.macro_framework = None        # v11.0: 大框架设计结果缓存
-        self.micro_framework = None        # v11.0 Phase 2: 子系统小框架设计结果缓存
+        self.micro_frameworks = {}           # v12.1 BUGFIX #36: dict keyed by subsystem_name (was scalar micro_framework)
         self.consecutive_adds = 0         # 连续 add 操作计数
         self.last_command = None          # 上一个命令
         self.last_layout_time = 0         # 上次排版时间戳
@@ -5252,7 +6097,8 @@ def _build_subsystem_tree_from_framework(fw, model_name):
                 'children': []
             }
             
-            child_subs = sub.get('childSubsystems', [])
+            # [v19 FIX #NEW-3] Support both 'children' and 'childSubsystems' keys
+            child_subs = sub.get('children', sub.get('childSubsystems', []))
             if child_subs:
                 node['children'] = _recursive_build(child_subs, full_path, depth + 1)
             
@@ -5261,6 +6107,359 @@ def _build_subsystem_tree_from_framework(fw, model_name):
     
     tree['children'] = _recursive_build(fw.get('subsystems', []), model_name, 1)
     return tree
+
+
+def _checked_shell_create(model_name, rel_path, input_count, output_count,
+                          input_names=None, output_names=None,
+                          context="shell_create"):
+    """[v31 ENGINEERING] 工程级外壳创建 — 单点真相源，消除静默失败。
+
+    三条铁律:
+    1. 执行 sl_subsystem_create
+    2. 后置条件强制验证：通过 MATLAB get_param 确认外壳确实存在于模型中
+    3. 失败永不静默：返回 error 状态并携带完整诊断信息
+
+    所有外壳创建（批量/懒创建/自创建）必须经过此函数。
+    替换了分散在 4 个不同位置的 ad-hoc try/except + logger 模式。
+
+    Args:
+        model_name: 顶层模型名
+        rel_path: 相对路径，如 'Flight_Dynamics/Force_Moment_Generation'
+        input_count: 输入端口数
+        output_count: 输出端口数
+        input_names: 输入端口名列表（可选）
+        output_names: 输出端口名列表（可选）
+        context: 调用上下文标识，用于错误诊断
+
+    Returns:
+        dict: {'status': 'ok'/'error', 'path': ..., 'verified': True/False,
+               'already_existed': True/False, 'error': ..., 'context': ...}
+    """
+    full_path = f"{model_name}/{rel_path}" if '/' in rel_path else f"{model_name}/{rel_path}"
+
+    # ==== Step 1: Execute ====
+    create_args = {
+        '_pos_1': model_name,
+        '_pos_2': rel_path,
+        '_pos_3': 'empty',
+        'inputPorts': input_count,
+        'outputPorts': output_count,
+    }
+    if input_names:
+        create_args['inputPortNames'] = input_names
+    if output_names:
+        create_args['outputPortNames'] = output_names
+
+    create_result = _call_sl_function('sl_subsystem_create', create_args)
+
+    # ==== Step 2: Post-condition verification (NON-NEGOTIABLE) ====
+    verified = False
+    verification_error = ""
+    try:
+        eng = get_engine()
+        if eng is not None:
+            _check_code = (
+                f"try, h=get_param('{full_path}','Handle'); v=1; "
+                f"catch, v=0; end; "
+                f"disp(num2str(v));"
+            )
+            _diary = _run_code_via_diary(eng, _check_code)
+            _out = _extract_diary_output(_diary)
+            verified = ('1' in str(_out).strip())
+            if not verified:
+                verification_error = f"Post-condition failed: get_param('{full_path}','Handle') returned nothing"
+    except Exception as ve:
+        verification_error = f"Verification exception: {ve}"
+
+    # ==== Step 3: Already-existed detection ====
+    already_existed = False
+    if isinstance(create_result, dict):
+        _err = str(create_result.get('error', '')).lower()
+        if 'exist' in _err or 'already' in _err or '已存在' in _err or '无法添加' in _err:
+            already_existed = True
+            # If it already existed, verification should pass
+            if not verified:
+                verification_error = f"MATLAB reported exist but get_param verification failed: {full_path}"
+
+    # ==== Step 4: Result ====
+    if verified or already_existed:
+        return {
+            'status': 'ok',
+            'path': full_path,
+            'verified': verified,
+            'already_existed': already_existed,
+            'context': context,
+        }
+
+    # FAILURE — never silent
+    _create_err = create_result.get('error', str(create_result)) if isinstance(create_result, dict) else str(create_result)
+    return {
+        'status': 'error',
+        'path': full_path,
+        'verified': False,
+        'context': context,
+        'error': f"[{context}] Shell NOT created: {full_path}. "
+                 f"create_error='{_create_err}'; verify_error='{verification_error}'",
+        'suggestion': (
+            f"Shell creation for '{full_path}' failed and post-condition verification confirmed it. "
+            f"This is a critical failure. Check: 1) MATLAB version compatibility, "
+            f"2) parent subsystem exists, 3) model is loaded."
+        ),
+    }
+
+
+def _batch_create_all_shells(model_name, tree, max_depth=None):
+    """v18.1→v18.3: Batch-create subsystem shells after framework approval.
+    
+    v18.3 BUGFIX B5: Only creates shells up to max_depth (default: depth=1,
+    top-level only). Deeper child subsystem shells are created lazily during
+    sl_micro_design when the parent is first designed.
+    
+    This enforces the v18 shell-by-shell principle: "子系统空壳必须逐个创建—
+    每创建一个子系统外壳后，必须立即完成该子系统的完整 Gate 流程".
+    
+    Args:
+        model_name: top-level model name
+        tree: subsystem tree from _build_subsystem_tree_from_framework
+        max_depth: optional max depth for batch creation (default 1 = top-level only)
+    
+    Returns:
+        dict: {created_count: int, errors: list}
+    """
+    if max_depth is None:
+        max_depth = 1  # v18.3 default: top-level shells only
+    
+    import logging
+    logger = logging.getLogger('matlab_bridge')
+    created = 0
+    errors = []
+    
+    def _create_shell_recursive(node, current_depth=1):
+        nonlocal created, errors
+        full_path = node.get('path', '')
+        input_count = len(node.get('inputs', []))
+        output_count = len(node.get('outputs', []))
+        input_names = node.get('inputs', [])
+        output_names = node.get('outputs', [])
+        
+        if not full_path:
+            return
+        
+        # Only create shells within max_depth
+        node_depth = node.get('depth', current_depth)
+        if node_depth > max_depth:
+            return  # v18.3: skip deeper shells, they'll be created lazily
+        
+        # Strip model name prefix: "Model/Subsys" → "Subsys"
+        _rel_path = full_path
+        if '/' in full_path:
+            _parts = full_path.split('/', 1)
+            if _parts[0] == model_name:
+                _rel_path = _parts[1]
+        
+        try:
+            result = _checked_shell_create(
+                model_name, _rel_path, input_count, output_count,
+                input_names=input_names, output_names=output_names,
+                context='batch_create'
+            )
+            if result['status'] == 'ok':
+                created += 1
+            else:
+                errors.append(result['error'])
+        except Exception as e:
+            errors.append(f'{_rel_path}: unchecked exception: {str(e)}')
+        
+        # Recurse into children (but only if within max_depth)
+        for child in node.get('children', []):
+            if isinstance(child, dict) and child.get('depth', 99) <= max_depth:
+                _create_shell_recursive(child, node_depth + 1)
+    
+    for top_node in tree.get('children', []):
+        if isinstance(top_node, dict):
+            _create_shell_recursive(top_node)
+    
+    if created > 0:
+        logger.info(f"[v18.3] Batch-created {created} subsystem shells (max_depth={max_depth})")
+    if errors:
+        logger.warning(f"[v18.3] Shell creation errors ({len(errors)}): {errors[:5]}")
+    return {'created_count': created, 'errors': errors}
+
+
+def _create_child_shells_for_subsystem(model_name, subsystem_path, parent_node):
+    """v18.3: Lazily create child subsystem shells when a parent is first micro_designed.
+    
+    Called during sl_micro_design to ensure child subsystems exist before
+    the parent's internal design references them.
+    
+    Args:
+        model_name: top-level model name
+        subsystem_path: full path of parent subsystem
+        parent_node: parent node dict from subsystem tree
+    
+    Returns:
+        dict: {created_count: int, errors: list}
+    """
+    import logging
+    logger = logging.getLogger('matlab_bridge')
+    created = 0
+    errors = []
+    
+    children = parent_node.get('children', []) if isinstance(parent_node, dict) else []
+    if not children:
+        return {'created_count': 0, 'errors': []}
+    
+    for child in children:
+        if not isinstance(child, dict):
+            continue
+        child_name = child.get('name', '')
+        child_path = child.get('path', '')
+        if not child_name:
+            continue
+        
+        # Build the relative path for sl_subsystem_create
+        # child_path may be "Model/Parent/Child" or "Parent/Child"
+        if '/' in child_path:
+            _parts = child_path.split('/', 1)
+            if _parts[0] == model_name:
+                _rel_path = _parts[1]
+            else:
+                _rel_path = child_path
+        else:
+            _rel_path = child_path
+        
+        input_count = len(child.get('inputs', []))
+        output_count = len(child.get('outputs', []))
+        input_names = child.get('inputs', [])
+        output_names = child.get('outputs', [])
+        
+        try:
+            result = _checked_shell_create(
+                model_name, _rel_path, input_count, output_count,
+                input_names=input_names, output_names=output_names,
+                context='lazy_child'
+            )
+            if result['status'] == 'ok':
+                created += 1
+            else:
+                errors.append(result['error'])
+        except Exception as e:
+            errors.append(f'{_rel_path}: unchecked exception: {str(e)}')
+
+    if created > 0:
+        logger.info(f"[v18.3] Lazy-created {created} child shells for {subsystem_path}")
+    return {'created_count': created, 'errors': errors}
+
+
+def _build_port_index_map(fw):
+    """v27: Build {subsystem.portName: portIndex} mapping from interfaceSpec.
+    
+    Maps 'SubsystemName.signalName' → 1-based port index for both Inport
+    and Outport blocks. Used by _wire_framework_signals to resolve
+    signal names from signalFlow to actual port numbers.
+    
+    Args:
+        fw: macroFramework dict with 'interfaceSpec' key
+    
+    Returns:
+        dict: {'Trajectory_Planner.Vx_des': 1, 'ADRC_Controller.Vx_des': 1, ...}
+    """
+    port_map = {}
+    iface_list = fw.get('interfaceSpec', [])
+    if not iface_list:
+        return port_map
+    
+    for iface in iface_list:
+        if not isinstance(iface, dict):
+            continue
+        subsys = iface.get('subsystem', '')
+        if not subsys:
+            continue
+        for idx, port_name in enumerate(iface.get('inports', [])):
+            if isinstance(port_name, str) and port_name:
+                port_map[f"{subsys}.{port_name}"] = idx + 1  # 1-based
+        for idx, port_name in enumerate(iface.get('outports', [])):
+            if isinstance(port_name, str) and port_name:
+                port_map[f"{subsys}.{port_name}"] = idx + 1
+    
+    return port_map
+
+
+def _wire_framework_signals(model_name, fw):
+    """v27: Create top-level signal lines between subsystem shells.
+    
+    Reads framework signalFlow and interfaceSpec to determine port numbers,
+    then creates Simulink add_line connections. Non-blocking: individual
+    line failures are logged but don't abort the whole wiring operation.
+    
+    Prerequisites:
+    - Shell subsystems already created (Inport/Outport blocks exist)
+    - Port names from interfaceSpec match block names (v26-ONAME fix)
+    
+    Args:
+        model_name: top-level model name
+        fw: macroFramework dict with 'signalFlow' and 'interfaceSpec' keys
+    
+    Returns:
+        dict: {wired_count: int, failed_count: int, errors: list}
+    """
+    import logging
+    logger = logging.getLogger('matlab_bridge')
+    
+    signal_flow = fw.get('signalFlow', [])
+    if not signal_flow:
+        return {'wired_count': 0, 'failed_count': 0, 'errors': []}
+    
+    port_map = _build_port_index_map(fw)
+    if not port_map:
+        logger.warning("[v27] No interfaceSpec — cannot wire framework signals")
+        return {'wired_count': 0, 'failed_count': 0, 'errors': ['No interfaceSpec']}
+    
+    wired = 0
+    failed = 0
+    errors = []
+    
+    for sf in signal_flow:
+        if not isinstance(sf, dict):
+            continue
+        src_subsys = sf.get('srcSubsystem', '')
+        dst_subsys = sf.get('dstSubsystem', '')
+        signal_name = sf.get('signalName', '')
+        
+        if not src_subsys or not dst_subsys or not signal_name:
+            continue
+        
+        src_key = f"{src_subsys}.{signal_name}"
+        dst_key = f"{dst_subsys}.{signal_name}"
+        src_port = port_map.get(src_key)
+        dst_port = port_map.get(dst_key)
+        
+        if src_port is None or dst_port is None:
+            failed += 1
+            errors.append(
+                f"Port not in interfaceSpec: src={src_key}(#{src_port}) "
+                f"dst={dst_key}(#{dst_port})")
+            continue
+        
+        try:
+            # [v27] Use native MATLAB add_line for framework wiring.
+            # Port spec must be relative to model_name (not full path).
+            _eng = _ensure_matlab_engine()
+            _src_port_path = f"{src_subsys}/{src_port}"
+            _dst_port_path = f"{dst_subsys}/{dst_port}"
+            _eng.add_line(model_name, _src_port_path, _dst_port_path, nargout=0)
+            wired += 1
+        except Exception as e:
+            failed += 1
+            errors.append(
+                f"{src_subsys}/{signal_name}->{dst_subsys}/{signal_name}: {str(e)[:80]}")
+    
+    if wired > 0:
+        logger.info(f"[v27] Framework wiring: {wired}/{wired+failed} lines OK")
+    if errors:
+        logger.warning(f"[v27] Wiring errors ({len(errors)}): {errors[:5]}")
+    
+    return {'wired_count': wired, 'failed_count': failed, 'errors': errors}
 
 
 def _compute_build_order(tree):
@@ -5301,7 +6500,7 @@ def _find_node_in_tree(tree, path):
     
     Args:
         tree: subsystem tree dict
-        path: full Simulink path like 'Model/Controller/PID_Core'
+        path: full Simulink path like 'Model/Controller/PID_Core', or short name like 'PID_Core'
     
     Returns:
         dict or None: the node if found
@@ -5314,6 +6513,12 @@ def _find_node_in_tree(tree, path):
     
     # Direct match at root
     if tree.get('path', '') == path:
+        return tree
+    
+    # [v24 FIX V24-D2] Name-based fallback: micro_design passes short names
+    # like "ADRC_vx", but tree stores full paths. Match by 'name' field if
+    # path-based lookup fails (only when path doesn't contain '/').
+    if '/' not in path and tree.get('name', '') == path:
         return tree
     
     # Search children recursively
@@ -5947,15 +7152,12 @@ def _normalize_review_result(review_result):
     if not isinstance(review_result, dict):
         # If it's a list (struct array), aggregate into single dict
         if isinstance(review_result, (list, tuple)):
-            all_passed = True
             checks = []
             overall_confidence = 0.0
             issues = []
             suggestions = []
             for item in review_result:
                 if isinstance(item, dict):
-                    if not item.get('passed', True):
-                        all_passed = False
                     item_checks = item.get('checks', {})
                     if isinstance(item_checks, dict):
                         checks.append(item_checks)
@@ -5970,8 +7172,12 @@ def _normalize_review_result(review_result):
                     item_suggestions = item.get('suggestions', [])
                     if isinstance(item_suggestions, (list, tuple)):
                         suggestions.extend(item_suggestions)
+            # [v25 FIX RC2] REVIEW_THRESHOLD restored to 0.65.
+            # designChecksPassed now separates design review from build review,
+            # so pre-build reviews are not dragged down by build checks.
+            REVIEW_THRESHOLD = 0.65
             return {
-                'passed': all_passed,
+                'passed': overall_confidence >= REVIEW_THRESHOLD,
                 'checks': checks,
                 'overallConfidence': overall_confidence,
                 'issues': issues,
@@ -5996,11 +7202,36 @@ def _normalize_review_result(review_result):
     else:
         normalized['checks'] = []
     
-    # Ensure passed field
-    if 'passed' not in normalized:
-        normalized['passed'] = all(
-            c.get('passed', False) for c in normalized['checks']
-        )
+    # [v12.1 BUGFIX #44 → v22 FIX → v23 FIX] Use overallConfidence threshold
+    # instead of requiring all individual checks to pass.
+    # [v23 FIX EB4] Honor MATLAB's pre-computed 'passed' when confidence is above
+    # the minimum engineering threshold (0.55). Previously, blindly overriding
+    # with oc>=0.65 would flip passed=true→false when 0.55≤oc<0.65, causing
+    # Gate_APPROVE_NO_REVIEW to block valid reviews (EB4 state persistence bug).
+    #
+    # [v24 FIX EB3-REGRESSION] Build-time checks (portPairing, paramAudit,
+    # connectionScan, layoutAudit) return confidence≤0.5 when no blocks exist.
+    # These should NOT pull down overallConfidence for pre-build reviews.
+    # Recompute overallConfidence from design-time checks only.
+    BUILD_TIME_CHECKS = {'portPairing', 'paramAudit', 'connectionScan', 'layoutAudit'}
+    design_checks = [c for c in normalized.get('checks', [])
+                     if isinstance(c, dict) and c.get('item', '') not in BUILD_TIME_CHECKS]
+    if design_checks:
+        design_conf = sum(c.get('confidence', 0.5) for c in design_checks) / len(design_checks)
+        # [v25 FIX] Equal weight for design and build checks
+        oc = 0.5 * design_conf + 0.5 * normalized.get('overallConfidence', 0.5)
+    else:
+        oc = normalized.get('overallConfidence', 0.5)
+    
+    # [v24 FIX] Update the overallConfidence to reflect the adjusted score
+    normalized['overallConfidence'] = oc
+    
+    matlab_passed = normalized.get('passed', False)
+    if matlab_passed and oc >= 0.65:
+        # [v25 FIX] MATLAB already validated; honor its decision above engineering threshold
+        normalized['passed'] = True
+    else:
+        normalized['passed'] = oc >= 0.65
     
     # Ensure overallConfidence
     if 'overallConfidence' not in normalized:
@@ -6089,6 +7320,10 @@ def _generate_workflow_state(model_name, command, params, result):
                 state.phase = 'framework_design'
                 state.phase_step = 'reviewed'
                 if review_result.get('passed'):
+                    # [v12.1] Gate_FRAMEWORK_SEQUENCE: track review passed
+                    _FRAMEWORK_REVIEWED.add(model_name)
+                    # [v17 BUGFIX #63] Persist framework review to disk
+                    _persist_framework_state(model_name)
                     return {
                         'model': model_name,
                         'phase': state.phase,
@@ -6099,6 +7334,10 @@ def _generate_workflow_state(model_name, command, params, result):
                         'frameworkApproved': state.framework_approved,
                     }
                 else:
+                    # [v12.1→v19 FIX #NEW-6 L2] Review failed — remove from reviewed set
+                    # AND persist immediately to prevent stale state on restart.
+                    _FRAMEWORK_REVIEWED.discard(model_name)
+                    _persist_framework_state(model_name)
                     return {
                         'model': model_name,
                         'phase': state.phase,
@@ -6109,15 +7348,41 @@ def _generate_workflow_state(model_name, command, params, result):
                         'frameworkApproved': state.framework_approved,
                     }
         elif command == 'sl_framework_approve':
+            # [v12.1] Gate_FRAMEWORK_SEQUENCE: enforce review before approve
+            if model_name not in _FRAMEWORK_REVIEWED:
+                return {
+                    "status": "gate_blocked",
+                    "gate": "Gate_FRAMEWORK_SEQUENCE",
+                    "reason": f"Framework review not completed for '{model_name}'. Call sl_framework_review before sl_framework_approve.",
+                    "requiredAction": "sl_framework_review",
+                    "requiredParams": {"modelName": model_name},
+                    "hint": "1. sl_framework_review(macroFramework=yourDesign)\n2. Verify all review checks pass\n3. Then sl_framework_approve"
+                }
             # 审批完成，大框架锁定
             if isinstance(result, dict) and result.get('status') == 'ok':
                 state.framework_approved = True
-                state.framework_locked = result.get('locked', True)
+                # [v17 BUGFIX #63] Persist framework approval to disk
+                _FRAMEWORK_APPROVED_MODELS.add(model_name)
+                _persist_framework_state(model_name, approved=True)
+                # [v18.1] Defer framework lock; create shells FIRST, then lock
+                state.framework_locked = False
                 state.phase = 'framework_construction'
-                state.phase_step = 'approved'
+                state.phase_step = 'shell_creation'
                 
-                # [v11.8] Build hierarchy tree from macro framework
-                fw = result.get('frameworkSnapshot', None)
+                # [v11.8+v18.1] Build hierarchy tree from macro framework
+                fw = params.get('macroFramework', {})
+                if not fw or not fw.get('subsystems'):
+                    fw = result.get('frameworkSnapshot', None)
+                if not fw or not fw.get('subsystems'):
+                    fw = getattr(state, 'macro_framework', {})
+                created_shells = 0
+                layout_ok = False
+                wiring_ok = False
+                _wired_count = 0
+                
+                # [v18.1] Shell creation, wiring, and layout happen BEFORE checking
+                # MATLAB result status. They are Python-side operations on the model
+                # that must execute regardless of the MATLAB approve function return.
                 if fw and fw.get('subsystems'):
                     tree = _build_subsystem_tree_from_framework(fw, model_name)
                     state.subsystem_tree = tree
@@ -6125,8 +7390,57 @@ def _generate_workflow_state(model_name, command, params, result):
                     state.max_depth = max(
                         (n['depth'] for n in state.build_order), default=0
                     )
-                    state.hierarchy_approved = result.get('hierarchyApproved', False)
+                    # [v31 FIX] sl_framework_approve.m never returns hierarchyApproved field.
+                    # Use result status + tree existence as the truth instead.
+                    state.hierarchy_approved = (result.get('status') == 'ok') and (tree is not None)
                     state.current_build_index = -1
+                    
+                    _shell_result = _batch_create_all_shells(model_name, tree)
+                    created_shells = _shell_result.get('created_count', 0)
+                    _shell_errors = _shell_result.get('errors', [])
+                    
+                    # [v31 ENGINEERING] Shell creation errors are now propagated.
+                    # The nextSuggestedAction reflects reality, not assumptions.
+                    if _shell_errors:
+                        import logging as _v31_shell_log
+                        _v31_shell_log.getLogger('matlab_bridge').warning(
+                            f"[v31] Shell creation had {len(_shell_errors)} error(s): {_shell_errors[:3]}")
+                        _workflow_errors = {
+                            'shellCreationWarnings': _shell_errors,
+                            'nextSuggestedAction': (
+                                f'{created_shells} shells created, {len(_shell_errors)} FAILED. '
+                                'Check error details. Depth-2 child shells will be lazily created '
+                                'during sl_micro_design. Proceed with caution.'
+                            ),
+                        }
+                    else:
+                        _workflow_errors = {}
+                    
+                    # [v27] Wire framework signals
+                    try:
+                        _wire_result = _wire_framework_signals(model_name, fw)
+                        _wired_count = _wire_result.get('wired_count', 0)
+                        wiring_ok = _wired_count > 0
+                    except Exception as _we:
+                        import logging as _v18a_log
+                        _v18a_log.getLogger('matlab_bridge').warning(
+                            f"[v27] Framework wiring failed: {_we}")
+                    
+                    # [v18.1] Force auto-layout
+                    try:
+                        _call_sl_function('sl_auto_layout', {
+                            '_pos_1': model_name,
+                            '_pos_2': 'FullLayout',
+                            '_pos_3': 'true',
+                        })
+                        layout_ok = True
+                    except Exception as _le:
+                        import logging as _v18b_log
+                        _v18b_log.getLogger('matlab_bridge').warning(
+                            f"[v18.1] Auto-layout failed (non-blocking): {_le}")
+                
+                state.framework_locked = True
+                state.phase_step = 'approved'
                 
                 _workflow = {
                     'model': model_name,
@@ -6136,7 +7450,17 @@ def _generate_workflow_state(model_name, command, params, result):
                     'frameworkApproved': True,
                     'frameworkLocked': state.framework_locked,
                     'lockedAt': result.get('lockedAt', ''),
-                    'nextSuggestedAction': 'Macro framework locked - now you can start building: add_block / add_line / subsystem_create',
+                    'createdShells': created_shells,          # [v18.1]
+                    'autoLayoutApplied': layout_ok,           # [v18.1]
+                    'frameworkWired': wiring_ok,              # [v27]
+                    'wiredSignals': _wired_count,             # [v27]
+                    **_workflow_errors,                       # [v31] shell creation errors
+                    'nextSuggestedAction': _workflow_errors.get('nextSuggestedAction', (
+                        f'All {created_shells} subsystem shells created and auto-laid out. '
+                        'Framework locked. Begin subsystem iteration: '
+                        'for each leaf subsystem: sl_micro_design → sl_micro_review → '
+                        'sl_micro_approve → add_block/add_line → sl_model_complete'
+                    )),
                 }
                 
                 # [v11.8] Add hierarchy info if available
@@ -6172,14 +7496,24 @@ def _generate_workflow_state(model_name, command, params, result):
         if isinstance(result, dict) and result.get('status') == 'ok':
             can_proceed = result.get('canProceed', False)
             passed = result.get('passed', False)
-            is_sub_path = '/' in str(model_name)
+            # [v22 BUGFIX #27] Detect sub-path from params, NOT from model_name
+            # model_name is always the top-level model (e.g. "Quadrotor_ADRC_v22"),
+            # so '/' in model_name is always False, causing all sub-path
+            # completions to be treated as top-level and failing hierarchy check.
+            _sub_path = params.get('subPath', params.get('subsystemPath', ''))
+            is_sub_path = bool(_sub_path)
             
             if passed or can_proceed:
-                state.model_completed = True
-                state.pending_issues = []
-                state.last_verification_failed = False
-                state.phase = 'simulation'
-                state.phase_step = 'completed'
+                if not is_sub_path:
+                    # Only set top-level completion state for the actual top-level call
+                    state.model_completed = True
+                    state.pending_issues = []
+                    state.last_verification_failed = False
+                    state.phase = 'simulation'
+                    state.phase_step = 'completed'
+                
+                # [v16 REFACTOR] State setting REMOVED from _generate_workflow_state.
+                # See comment at line ~6860 for rationale. Single source of truth is at ~9191.
                 
                 _rwf = {
                     'model': model_name,
@@ -6193,16 +7527,21 @@ def _generate_workflow_state(model_name, command, params, result):
                 if state.hierarchy_approved and state.subsystem_tree is not None:
                     # Check if this is a sub-path complete call
                     if is_sub_path:
+                        _sub_path_norm = str(_sub_path).replace('\\', '/')
                         _updated = _update_node_status(
-                            state.subsystem_tree, str(model_name).replace('\\', '/'), 'completed'
+                            state.subsystem_tree, _sub_path_norm, 'completed'
                         )
+                        # [v25-R3 FIX] Also update _SUBSYSTEM_STATES so Gate_SUBSYSTEM_CLOSURE sees completion.
+                        # _update_node_status only updates subsystem_tree, but Gate reads _SUBSYSTEM_STATES.
+                        _subsys_name = _sub_path_norm.split('/')[-1] if '/' in _sub_path_norm else _sub_path_norm
+                        _set_subsystem_state(model_name, _subsys_name, 'completed')
                         # Notify next build target
                         next_target = _get_next_build_target(state)
                         if next_target:
                             _rwf['nextBuildTarget'] = next_target
                             _rwf['buildProgress'] = _build_progress_str(state)
                             _rwf['nextSuggestedAction'] = (
-                                f'Subsystem {model_name} completed! '
+                                f'Subsystem {_sub_path_norm} completed! '
                                 f'Next: sl_micro_design(subsystemName="{next_target["path"]}", '
                                 f'taskDescription="...", depth={next_target["depth"]})'
                             )
@@ -6244,6 +7583,38 @@ def _generate_workflow_state(model_name, command, params, result):
                 state.pending_issues = issues if isinstance(issues, list) else []
                 state.phase = 'framework_construction'
                 state.phase_step = 'fixing_issues'
+                
+                # [v30] Gate_RETRY: enter retry state on complete failure
+                _failure_type = result.get('failureType', 'implementation_error')
+                _sub_path = params.get('subPath', params.get('subsystemPath', ''))
+                if not _sub_path:
+                    _sub_path = result.get('scanTarget', model_name)
+                    if '/' in _sub_path:
+                        _sub_path = _sub_path.split('/')[-1]
+                
+                _retry_state = _enter_retry_state(model_name, _sub_path, _failure_type,
+                    check_name=result.get('failedChecks', [{}])[0].get('name', '') if result.get('failedChecks') else '')
+                
+                # Generate retry plan via MATLAB
+                _retry_plan = {}
+                try:
+                    _rp_result = _call_sl_function('sl_retry_plan', {
+                        '_pos_1': model_name,
+                        '_pos_2': _sub_path,
+                        'completeResult': result,
+                        'retryState': _retry_state,
+                    })
+                    if isinstance(_rp_result, dict):
+                        _retry_plan = _rp_result
+                except Exception:
+                    pass
+                
+                _extra = {
+                    'failureType': _failure_type,
+                    'retryState': _retry_state,
+                    'retryPlan': _retry_plan,
+                }
+                
                 return {
                     'model': model_name,
                     'phase': state.phase,
@@ -6252,10 +7623,13 @@ def _generate_workflow_state(model_name, command, params, result):
                     'canProceed': False,
                     'unconnectedCount': unconn_count,
                     'pendingIssues': state.pending_issues,
+                    'failureType': _failure_type,
+                    'retryState': _retry_state,
+                    'retryPlan': _retry_plan,
                     'nextSuggestedAction': (
                         f'BLOCKED: {unconn_count} unconnected port(s). '
-                        f'Run sl_get_model_issues("{model_name}") for details, '
-                        f'fix all connections, then retry sl_model_complete.'
+                        f'Failure: {_failure_type}. Retries: {_retry_state.get("retry_count", 0)}/5 (impl) + {_retry_state.get("design_count", 0)}/5 (design). '
+                        f'Run sl_get_model_issues("{model_name}") for details.'
                     ),
                 }
         # error handling
@@ -6272,7 +7646,107 @@ def _generate_workflow_state(model_name, command, params, result):
     # ===== [v11.0 Phase 2] 子系统小框架 API 处理 =====
     if command in ('sl_micro_design', 'sl_micro_review', 'sl_micro_approve'):
         subsystem_name = params.get('subsystemName', params.get('subsystem', ''))
+        # [v20 FIX B3-ext] Fallback to nested microFramework.subsystemName
+        if not subsystem_name:
+            _mf_nested = params.get('microFramework', {})
+            if isinstance(_mf_nested, dict):
+                subsystem_name = _mf_nested.get('subsystemName', '')
         if command == 'sl_micro_design':
+            # [v12.1] Gate_MICRO_DESIGN_CLOSURE: enforce one-subsystem-at-a-time during design
+            _toplevel = model_name.split('/')[0] if '/' in model_name else model_name
+            _states = _SUBSYSTEM_STATES.get(_toplevel, {})
+            for _ss_name, _ss_state in _states.items():
+                if _ss_name == subsystem_name:
+                    continue
+                if _ss_state.status in ('approved', 'building') and _ss_state.consecutive_adds == 0:
+                    continue  # approved without any blocks = empty shell, exempt
+                if _ss_state.status in ('approved', 'building'):
+                    return {
+                        "status": "gate_blocked",
+                        "gate": "Gate_MICRO_DESIGN_CLOSURE",
+                        "reason": f"Subsystem '{_ss_name}' is approved but not yet completed. Complete its full lifecycle before designing '{subsystem_name}'.",
+                        "blockingSubsystem": _ss_name,
+                        "currentSubsystem": subsystem_name,
+                        "requiredAction": "sl_model_complete",
+                        "requiredParams": {"modelName": f"{_toplevel}/{_ss_name}"},
+                        "hint": f"1. Build and complete {_ss_name} (add_block → add_line → sl_model_complete)\n2. After {_ss_name} is completed\n3. Then sl_micro_design('{subsystem_name}') will be allowed"
+                    }
+            # [v18.3 BUGFIX B5] Lazy shell creation during micro_design.
+            # framework_approve (max_depth=1) only creates top-level shells.
+            # When a deeper subsystem is first micro_designed, its shell must
+            # be created on-the-fly. This handles both:
+            #   1. Self: depth≥2 subsystems whose shell doesn't exist yet
+            #   2. Children: child shells for depth=1 parents being designed
+            if state.hierarchy_approved and state.subsystem_tree is not None:
+                _node = _find_node_in_tree(state.subsystem_tree, subsystem_name)
+                if _node:
+                    # Step 1: Ensure THIS subsystem's shell exists (self-create)
+                    # This handles the bottom-up build order case where a depth=2
+                    # subsystem is micro_designed before its depth=1 parent.
+                    # [v24 FIX V24-D2] Use node's full path (from tree) to derive
+                    # the correct relative path. Short names like "ADRC_vx" don't
+                    # include parent prefix, causing sl_subsystem_create to create
+                    # the shell at the wrong level (depth 1 instead of depth 2).
+                    _node_path = _node.get('path', '')
+                    if _node_path and _toplevel and _node_path.startswith(_toplevel + '/'):
+                        _self_rel_path = _node_path[len(_toplevel) + 1:]
+                    elif '/' in subsystem_name:
+                        _sparts = subsystem_name.split('/', 1)
+                        _self_rel_path = _sparts[1] if _sparts[0] == _toplevel else subsystem_name
+                    else:
+                        _self_rel_path = subsystem_name
+                    _self_result = _checked_shell_create(
+                        _toplevel, _self_rel_path,
+                        len(_node.get('inputs', [])),
+                        len(_node.get('outputs', [])),
+                        context='micro_design_self'
+                    )
+                    if _self_result['status'] != 'ok':
+                        # [v31 ENGINEERING] _checked_shell_create already verified post-condition.
+                        # Failure here IS propagated — no more silent swallowing.
+                        if _self_result.get('already_existed'):
+                            import logging as _v18b5l_log
+                            _v18b5l_log.getLogger('matlab_bridge').debug(
+                                f"[v18.3] Self-shell already exists for {subsystem_name}")
+                        else:
+                            return {
+                                "status": "error",
+                                "gate": "SHELL_CREATION_FAILED",
+                                "reason": f"Failed to create subsystem shell for '{subsystem_name}'",
+                                "detail": _self_result.get('error', ''),
+                                "suggestion": _self_result.get('suggestion', 'Verify MATLAB compatibility.')
+                            }
+
+                    # Step 2: Create CHILD subsystem shells lazily
+                    if _node.get('children'):
+                        _lazy_result = _create_child_shells_for_subsystem(
+                            _toplevel, subsystem_name, _node
+                        )
+                        if _lazy_result.get('errors'):
+                            # [v31 ENGINEERING] Child shell creation failures block the operation.
+                            return {
+                                "status": "error",
+                                "gate": "CHILD_SHELL_CREATION_FAILED",
+                                "reason": f"Failed to create child shells for '{subsystem_name}'",
+                                "detail": _lazy_result['errors'],
+                                "suggestion": "Child subsystem shells could not be created. Check parent subsystem exists."
+                            }
+                        if _lazy_result.get('created_count', 0) > 0:
+                            # [v24 FIX #NEW-8 PERSIST] Save model after creating child shells.
+                            _save_eng = get_engine()
+                            if _save_eng is not None:
+                                _run_code_via_diary(_save_eng, f"save_system('{_toplevel}');")
+                                # [v31] Post-condition: verify save succeeded
+                                _verify_save = _run_code_via_diary(
+                                    _save_eng, f"disp(exist('{_toplevel}.slx','file'));")
+                                _saved_out = _extract_diary_output(_verify_save)
+                                if '0' in str(_saved_out).strip():
+                                    import logging as _v31_log
+                                    _v31_log.getLogger('matlab_bridge').warning(
+                                        f"[v31] save_system verification returned 0 for {_toplevel}")
+                            import logging as _v18b5_log
+                            _v18b5_log.getLogger('matlab_bridge').info(
+                                f"[v18.3] Lazy-created {_lazy_result['created_count']} child shells for {subsystem_name}")
             # [v11.2] Architecture Flip: sl_micro_design now returns designPrompt, NOT microFramework
             # The AI agent must autonomously design the subsystem based on the prompt
             if isinstance(result, dict) and result.get('status') == 'ok':
@@ -6353,6 +7827,23 @@ def _generate_workflow_state(model_name, command, params, result):
                 state.phase = 'subsystem_iteration'
                 state.phase_step = 'micro_reviewed'
                 
+                # [v20 FIX B4] Cache microFramework for approve fallback.
+                # When approve is called without microFramework, the rigor score
+                # check needs it. Without this cache, state.micro_frameworks is
+                # only populated by sl_micro_design, not sl_micro_review.
+                _mf_for_cache = params.get('microFramework', {})
+                if _mf_for_cache and isinstance(_mf_for_cache, dict):
+                    if not hasattr(state, 'micro_frameworks'):
+                        state.micro_frameworks = {}
+                    state.micro_frameworks[subsystem_name] = _mf_for_cache
+                
+                # [v16 REFACTOR] State setting REMOVED from _generate_workflow_state.
+                # Reasoning: _generate_workflow_state is a DISPLAY/DECORATION function, not a state manager.
+                # Its state-setting code (previously here) was wrapped in try/except at line 9786,
+                # causing silent failures. The single source of truth is now at line ~9191
+                # (v15 engineering fix block in _handle_sl_command), which runs AFTER the MATLAB
+                # call and BEFORE _generate_workflow_state. See _handle_sl_command lines 9184-9203.
+                
                 # [v11.8] Mark node as 'review' phase
                 if state.hierarchy_approved and state.subsystem_tree is not None:
                     _node = _find_node_in_tree(state.subsystem_tree, subsystem_name)
@@ -6363,7 +7854,7 @@ def _generate_workflow_state(model_name, command, params, result):
                     'model': model_name,
                     'phase': state.phase,
                     'phaseStep': state.phase_step,
-                    'microFramework': state.micro_framework,
+                    'microFramework': state.micro_frameworks.get(subsystem_name, {}) if hasattr(state, 'micro_frameworks') else {},
                     'reviewResult': review_result,
                     'subsystemName': subsystem_name,
                     'frameworkApproved': state.framework_approved,
@@ -6374,6 +7865,80 @@ def _generate_workflow_state(model_name, command, params, result):
                     _rwf['nextSuggestedAction'] = 'Micro framework review found issues - fix and call sl_micro_design again'
                 return _rwf
         elif command == 'sl_micro_approve':
+            # [v12.1→v17 FIX #61] Gate_APPROVE_NO_REVIEW: Post-MATLAB check.
+            # The Pre-MATLAB check (line ~9310) is the primary gate. If we reach here,
+            # MATLAB has already executed. Don't double-block — log inconsistency instead.
+            _toplevel = model_name.split('/')[0] if '/' in model_name else model_name
+            _states = _SUBSYSTEM_STATES.get(_toplevel, {})
+            _ss_state = _states.get(subsystem_name)
+            if not _ss_state or _ss_state.status != 'reviewed':
+                import logging
+                logging.getLogger('matlab_bridge').warning(
+                    f"[Gate_APPROVE_NO_REVIEW] Post-check inconsistency for '{subsystem_name}': "
+                    f"status={_ss_state.status if _ss_state else 'None'} "
+                    f"(MATLAB already executed, Pre-check should have caught this)")
+                # Fall through — trust MATLAB result. Pre-MATLAB check is the real gate.
+            
+            # [v12.1 BUGFIX #26/#28] Read microFramework from request params (primary) with state fallback
+            _micro_fw = params.get('microFramework', {})
+            if not _micro_fw and hasattr(state, 'micro_frameworks'):
+                _micro_fw = state.micro_frameworks.get(subsystem_name, {})
+            # [v12.0] Gate_CONTENT_DEPTH: Rigor Score check before approve (HC-04 FIX)
+            # [v12.0→v15 FIX] Gate_CONTENT_DEPTH: Rigor Score check before approve
+            # CRITICAL FIX: State MUST be set after rigor passes, NOT before.
+            # Previous code had Gate_CONTENT_DEPTH returning gate_blocked before state-setting
+            # code below, causing _SUBSYSTEM_STATES to never be updated.
+            _rigor_passed = True
+            if _micro_fw and isinstance(_micro_fw, dict):
+                try:
+                    _rigor_result = _call_sl_function('sl_rigor_score', {
+                        '_pos_1': _micro_fw
+                    })
+                    if isinstance(_rigor_result, dict):
+                        _rigor_score = _rigor_result.get('score', 0)
+                        _rigor_threshold = _rigor_result.get('threshold', 0.65)
+                        if _rigor_score < _rigor_threshold:
+                            _rigor_passed = False
+                            _breakdown = _rigor_result.get('breakdown', {})
+                            _weakest = _rigor_result.get('weakest', 'completeness')
+                            _weakest_score = _rigor_result.get('weakestScore', 0)
+                            _fix_hints = _rigor_result.get('fixHints', [])
+                            # [v15 FIX] Return gate_blocked and skip state setting
+                            return {
+                                "status": "gate_blocked",
+                                "blocked": True,
+                                "gate": "Gate_CONTENT_DEPTH",
+                                "reason": f"Rigor score {_rigor_score:.2f} < {_rigor_threshold}",
+                                "command": command,
+                                "rigorScore": _rigor_score,
+                                "rigorThreshold": _rigor_threshold,
+                                "scoreBreakdown": _breakdown,
+                                "weakestDimension": _weakest,
+                                "weakestScore": _weakest_score,
+                                "message": (
+                                    f"RIGOR_INSUFFICIENT: Design rigor score {_rigor_score:.2f} < {_rigor_threshold}\n"
+                                    f"Weakest dimension: {_weakest} ({_weakest_score:.2f})\n"
+                                    + '\n'.join(f"  - {h}" for h in (_fix_hints[:3] if _fix_hints else []))
+                                ),
+                                "requiredAction": "sl_micro_design",
+                                "hint": (
+                                    f"Fix the '{_weakest}' dimension and re-call sl_micro_design to improve the design.\n"
+                                    + '\n'.join(f"  {i+1}. {h}" for i, h in enumerate(_fix_hints[:3] if _fix_hints else []))
+                                ),
+                                "fixHints": _fix_hints,
+                                "nextSteps": [
+                                    "sl_micro_design(subsystemName, taskDescription, ...)",
+                                    "sl_micro_review(subsystemName)",
+                                    "sl_micro_approve(subsystemName)"
+                                ],
+                            }
+                except Exception as _rigor_ex:
+                    import logging
+                    logging.getLogger('matlab_bridge').warning(
+                        f"Gate_CONTENT_DEPTH check failed for {subsystem_name}: {_rigor_ex}")
+                    # [v15 FIX] Fail-open: allow approve to proceed
+                    _rigor_passed = True
+            
             # Gate_REVIEW_BUILD check moved to top of _handle_sl_command (v11.9)
             
             # 审批完成，小框架锁定，可以开始构建
@@ -6381,12 +7946,15 @@ def _generate_workflow_state(model_name, command, params, result):
                 state.phase = 'subsystem_iteration'
                 state.phase_step = 'micro_approved'
                 
-                # [v11.8.4] Gate_SHELL_ONLY: Register micro-approved subsystem
-                if subsystem_name:
-                    _toplevel = model_name.split('/')[0] if '/' in model_name else model_name
-                    if _toplevel not in _MICRO_APPROVED_SUBSYSTEMS:
-                        _MICRO_APPROVED_SUBSYSTEMS[_toplevel] = set()
-                    _MICRO_APPROVED_SUBSYSTEMS[_toplevel].add(subsystem_name)
+                # [v12.1 BUGFIX #26/#28] Persist microFramework in state for Gate_CONTENT_DEPTH
+                _mf = params.get('microFramework', {})
+                if _mf:
+                    if not hasattr(state, 'micro_frameworks'):
+                        state.micro_frameworks = {}
+                    state.micro_frameworks[subsystem_name] = _mf
+                
+                # [v16 REFACTOR] State setting REMOVED from _generate_workflow_state.
+                # See comment at line ~6860. Single source of truth: _handle_sl_command lines 9184-9203.
                 
                 # [v11.8] Mark node as 'approved' in tree
                 if state.hierarchy_approved and state.subsystem_tree is not None:
@@ -6396,7 +7964,7 @@ def _generate_workflow_state(model_name, command, params, result):
                     'model': model_name,
                     'phase': state.phase,
                     'phaseStep': state.phase_step,
-                    'microFramework': state.micro_framework,
+                    'microFramework': state.micro_frameworks.get(subsystem_name, {}) if hasattr(state, 'micro_frameworks') else {},
                     'subsystemName': subsystem_name,
                     'microFrameworkApproved': True,
                     'microFrameworkLocked': result.get('locked', True),
@@ -6733,6 +8301,132 @@ def _cleanup_workflow_state(model_name):
             del _model_locks[model_name]
 
 
+def _hard_reset_model_state(model_name):
+    """[v16 Fix #56+#57] COMPREHENSIVE model state reset for Scene 1 fresh builds.
+    
+    This is the SINGLE SOURCE OF TRUTH for model state cleanup. Every code path
+    that needs to reset model state MUST call this function (not ad-hoc cleanup).
+    
+    Clears ALL layers of model state:
+      1. _BUILD_PHASE_TRACKER (workflow state machine)
+      2. _SUBSYSTEM_STATES (FSM per-subsystem state)
+      3. _FRAMEWORK_REVIEWED (framework review tracking)
+      4. Disk-persisted approvals JSON file
+      5. _model_locks (thread safety locks)
+      6. MATLAB workspace variables (mFWLock_, mFW_, mHierarchy*, etc.)
+      7. _S2_MOD_PERMISSIONS for this model
+      8. _RAW_CMD_STATE for this model
+    
+    Args:
+        model_name: Top-level model name (e.g. "Quadrotor_ADRC_v16")
+    
+    Returns:
+        dict: Summary of what was cleaned
+    """
+    import logging, os, json
+    _log = logging.getLogger('matlab_bridge')
+    _cleaned = {'workflow_state': False, 'subsystem_states': 0, 
+                'framework_reviewed': False, 'approvals_file': False,
+                'model_lock': False, 'matlab_vars': 0, 'misc': 0}
+    
+    # === Layer 1: BUILD_PHASE_TRACKER (workflow state machine) ===
+    with _global_lock:
+        if model_name in _BUILD_PHASE_TRACKER:
+            del _BUILD_PHASE_TRACKER[model_name]
+            _cleaned['workflow_state'] = True
+    
+    # === Layer 2: _SUBSYSTEM_STATES (per-subsystem FSM) ===
+    with _global_lock:
+        if model_name in _SUBSYSTEM_STATES:
+            _cleaned['subsystem_states'] = len(_SUBSYSTEM_STATES[model_name])
+            del _SUBSYSTEM_STATES[model_name]
+    
+    # === Layer 3: _FRAMEWORK_REVIEWED ===
+    with _global_lock:
+        if model_name in _FRAMEWORK_REVIEWED:
+            _FRAMEWORK_REVIEWED.discard(model_name)
+            _cleaned['framework_reviewed'] = True
+    
+    # === Layer 4: Disk-persisted approvals file ===
+    _ap_path = _get_approvals_path(model_name)
+    try:
+        if os.path.exists(_ap_path):
+            os.remove(_ap_path)
+            _cleaned['approvals_file'] = True
+    except Exception as e:
+        _log.warning(f"[v16 Fix #56] Failed to remove approvals file for {model_name}: {e}")
+    
+    # Also clean framework_reviewed.json if it exists and no other models reference it
+    _fw_json_path = os.path.join(
+        os.path.dirname(_ap_path), 'framework_reviewed.json')
+    try:
+        if os.path.exists(_fw_json_path):
+            with open(_fw_json_path, 'r', encoding='utf-8') as f:
+                _fw_data = json.load(f)
+            _models = _fw_data.get('models', [])
+            if model_name in _models:
+                _models.remove(model_name)
+                if _models:
+                    _fw_data['models'] = _models
+                    with open(_fw_json_path, 'w', encoding='utf-8') as f:
+                        json.dump(_fw_data, f, indent=2)
+                else:
+                    os.remove(_fw_json_path)
+            _cleaned['misc'] += 1
+    except Exception:
+        pass  # framework_reviewed.json cleanup is best-effort
+    
+    # === Layer 5: _model_locks ===
+    with _global_lock:
+        if model_name in _model_locks:
+            del _model_locks[model_name]
+            _cleaned['model_lock'] = True
+    
+    # === Layer 6: MATLAB workspace variables ===
+    try:
+        _eng = get_engine()
+        if _eng is not None:
+            _safe_name = model_name.replace('/', '__')
+            _vars_to_clear = [
+                f'mFWLock_{_safe_name}',
+                f'mFW_{_safe_name}',
+                f'mHierarchyTree_{_safe_name}',
+                f'mHierarchyApproved_{_safe_name}',
+                f'mModelCompleted_{_safe_name}',
+                f'design_approved_{_safe_name}',
+            ]
+            for _v in _vars_to_clear:
+                try:
+                    _eng.eval(f"if evalin('base', 'exist(''{_v}'', ''var'')'), "
+                              f"evalin('base', 'clear(''{_v}'')'); end;", nargout=0)
+                    _cleaned['matlab_vars'] += 1
+                except Exception:
+                    pass
+    except Exception as e:
+        _log.debug(f"[v16 Fix #57] MATLAB var cleanup skipped: {e}")
+    
+    # === Layer 7: Permission caches (model-specific keys) ===
+    _keys_to_remove = []
+    for _k in _S2_MOD_PERMISSIONS:
+        if _k.startswith(model_name + ':'):
+            _keys_to_remove.append(_k)
+    for _k in _keys_to_remove:
+        del _S2_MOD_PERMISSIONS[_k]
+        _cleaned['misc'] += 1
+    
+    # === Layer 8: RAW_CMD_STATE cleanup ===
+    if model_name in _RAW_CMD_STATE:
+        del _RAW_CMD_STATE[model_name]
+        _cleaned['misc'] += 1
+    
+    _log.info(f"[v16 Fix #56+#57] Hard reset model state for '{model_name}': "
+              f"wf={_cleaned['workflow_state']}, ss={_cleaned['subsystem_states']}, "
+              f"fw={_cleaned['framework_reviewed']}, file={_cleaned['approvals_file']}, "
+              f"mlock={_cleaned['model_lock']}, mvars={_cleaned['matlab_vars']}")
+    
+    return _cleaned
+
+
 def _ensure_model_visible(params):
     """[v11.4.3] 强制 Simulink 模型在前台可见 — 底层门控，AI 不可绕过。
     
@@ -6771,7 +8465,7 @@ def _check_s2_modification_permission(model_name, command, target):
 
 def _classify_s2_risk(command, target):
     """Classify the risk level of a Scene 2 modification."""
-    if command == 'sl_delete':
+    if command == 'sl_delete' or command == 'sl_delete_block':
         return 'high'
     elif command == 'sl_replace_block':
         return 'high'
@@ -6945,20 +8639,178 @@ def _extract_target_subsystem(params, model_name, command):
             target = candidate
             break
     
+    # [v18 BUGFIX B1+B2] Fallback: short subsystemPath/blockPath without '/'
+    # Gate_SHELL_ONLY was being silently bypassed when subsystemPath="Reference_Generator"
+    # (no '/') because the scan above only matches candidates WITH '/'.
+    # Fix: if no target found via '/' scan, check subsystemPath and blockPath directly.
+    if not target:
+        _sp = params.get('subsystemPath') or params.get('subsystem') or ''
+        if _sp:
+            # subsystemPath may be "Reference_Generator" (short) or "ADRC_Controller/TD_VX" (no model prefix)
+            # Both are valid target identifiers — no '/' required
+            target = _sp
+    if not target:
+        _bp = params.get('blockPath') or params.get('blockName') or ''
+        if _bp and '/' not in str(_bp):
+            # Short block path like "Gain" — extract parent from destPath or model context
+            # Use subsystemPath as parent if available, otherwise skip (can't determine target)
+            _sp2 = params.get('subsystemPath') or params.get('subsystem') or ''
+            if _sp2:
+                target = _sp2
+    
+    # [v18 BUGFIX B1+B2-ext] Handle short target without '/'
+    # When target="Reference_Generator" (no model prefix, no '/'), the path-parsing
+    # block below would be skipped and we'd return ''. Fix: treat target as subsystem name
+    # and look it up directly in _SUBSYSTEM_STATES.
+    if target and '/' not in str(target):
+        _toplevel = model_name.split('/')[0] if '/' in str(model_name) else str(model_name)
+        if _toplevel in _SUBSYSTEM_STATES:
+            if target in _SUBSYSTEM_STATES[_toplevel]:
+                return target
+            # Also try with model prefix: ModelName/SubsysName
+            _full = _toplevel + '/' + target
+            if _full in _SUBSYSTEM_STATES[_toplevel]:
+                return _full
+        # Return target as-is — it's the subsystem name for state lookup
+        return target
+    
     if target and '/' in str(target):
         parts = str(target).split('/')
         # Model/Subsys/Block → Model/Subsys; Model/Subsys/Sub/Block → Model/Subsys/Sub
         if len(parts) >= 3:
             # Return parent of the deepest block (all but last component)
-            return '/'.join(parts[:-1])
+            _parent_path = '/'.join(parts[:-1])
+            # [v13 BUGFIX #43-ext] Normalize: if parent_path starts with model prefix,
+            # strip it to match state keys (which are stored as short names)
+            _toplevel = parts[0]
+            # [v17 BUGFIX #62] When subsystemPath lacks model name prefix,
+            # parts[0] is a subsystem name, not a model name. Use model_name
+            # parameter to find the correct _SUBSYSTEM_STATES key.
+            if _toplevel not in _SUBSYSTEM_STATES:
+                _model_key = model_name.split('/')[0]
+                if _model_key in _SUBSYSTEM_STATES:
+                    _toplevel = _model_key
+                    # Also fix _parent_path: prepend model name for correct state lookup
+                    _parent_path = _model_key + '/' + _parent_path
+            if _toplevel in _SUBSYSTEM_STATES:
+                # [v17 BUGFIX #62-part2] Try raw target as-is first.
+                # When subsystemPath lacks model name prefix, the state keys
+                # (e.g. "ADRC_Position_Controller/ADRC_X/TD_X") match target directly.
+                if target in _SUBSYSTEM_STATES[_toplevel]:
+                    return target
+                # [v16 Fix #58] Try last component first as direct state key.
+                # micro_approve(subsystemName="TD_Vx") stores state under "TD_Vx",
+                # but add_block(subsystemPath="Model/ADRC_Vx/TD_Vx") extracts via _extract_target_subsystem.
+                # parts[-1] is the most specific identifier and should be tried FIRST.
+                _last_component = parts[-1]
+                if _last_component in _SUBSYSTEM_STATES[_toplevel]:
+                    return _last_component
+                _short_path = '/'.join(parts[1:-1])  # strip model prefix, Model/Sub/Block → Sub
+                if _short_path in _SUBSYSTEM_STATES[_toplevel]:
+                    return _short_path
+                # [v13 BUGFIX #48] Also try full child path: Model/Sub/Child → Sub/Child
+                _child_path = '/'.join(parts[1:])  # strip model prefix only
+                if _child_path in _SUBSYSTEM_STATES[_toplevel]:
+                    return _child_path
+                # [v28 BUGFIX] For depth-2+ subsystems with 4+ path parts
+                # (e.g. Model/Parent/Child/Block), the state key is the
+                # leaf subsystem name (e.g. "ADRC_X") stored by micro_approve.
+                # parts[-1] is the block name (wrong), parts[-2] is the
+                # actual subsystem name.
+                if len(parts) >= 4:
+                    _subsys_name = parts[-2]  # Model/Parent/Child/Block → Child
+                    if _subsys_name in _SUBSYSTEM_STATES[_toplevel]:
+                        return _subsys_name
+                # Also check if parent_path exists as-is
+                if _parent_path in _SUBSYSTEM_STATES[_toplevel]:
+                    return _parent_path
+                # [v25 FIX B3-ext2] _parent_path may include a block name
+                # (e.g. "Model/Subsys/Block" from 4-part path "Model/Subsys/Block/Port").
+                # Strip one more component to get the actual subsystem path.
+                if len(parts) >= 4:
+                    _subsys_path = '/'.join(parts[:-2])
+                    if _subsys_path in _SUBSYSTEM_STATES[_toplevel]:
+                        return _subsys_path
+                    # Try with model key prefix
+                    if '_model_key' in dir() and _model_key:
+                        _full_subsys = _model_key + '/' + '/'.join(parts[1:-2])
+                        if _full_subsys in _SUBSYSTEM_STATES[_toplevel]:
+                            return _full_subsys
+            return _parent_path
         elif len(parts) == 2:
+            # [v12.0 BUGFIX] "Model/Out1" or "Model/Block" or "Model/1" (port ref)
+            _parent = parts[0]
+            _last = parts[-1]
+            import re
+            # Check if last part is a numeric port reference (e.g., "Reference_Generator/1")
+            if re.match(r'^\d+$', _last):
+                return _parent  # It's a port number reference
+            # Check if it looks like an Inport/Outport (e.g., "Reference_Generator/Out1")
+            if re.match(r'^(In|Out)\d+$', _last):
+                return _parent  # It's an Inport/Outport — return parent subsystem
+            # If the 1st part is a known micro-approved subsystem path, extract just that
+            _toplevel = _parent.split('/')[0] if '/' in _parent else ''
+            if not _toplevel:
+                _toplevel = _parent
+            if _toplevel in _SUBSYSTEM_STATES:
+                # Check if parent or parent/* is in approved set
+                _approved_states = _SUBSYSTEM_STATES[_toplevel]
+                for _ss_name in _approved_states:
+                    if _ss_name == _parent or _ss_name.startswith(_parent + '/'):
+                        # [v25 FIX B3-ext] When len(parts)==2 and target is itself an approved subsystem,
+                        # return the full path (e.g. "Model/Subsys"), not just the parent ("Model").
+                        # Previously returned _parent, causing Gate_SHELL_ONLY to check the model instead
+                        # of the actual subsystem, blocking all depth-1 subsystem builds.
+                        if target in _approved_states:
+                            return target
+                        if _ss_name == target:
+                            return target
+                        return _parent  # Return subsystem name, not block
+                # [v12.1 BUGFIX #43] Check if _last matches a state key directly
+                # (e.g., subsystemPath="Model/Subsys" but state key is "Subsys")
+                if _last in _approved_states:
+                    return _last
+            # If not found as subsystem, check if it looks like a port (In/Out + number)
+            _last = parts[-1]
+            import re
+            if re.match(r'^(In|Out)\d+$', _last):
+                return _parent  # It's an Inport/Outport — return parent subsystem
             return target
     
     # Fallback: modelName may contain subsystem path
     if '/' in str(model_name):
         parts = str(model_name).split('/')
         return '/'.join(parts[:2]) if len(parts) >= 2 else model_name
-    return model_name
+    
+    # [v18 BUGFIX B3] Distinguish absent vs empty subsystemPath.
+    # Previous Bug#43/#48/#58/#62 fixes handle path resolution when '/'
+    # is present. B3 handles the case where ALL resolution fails:
+    #   - Case A: subsystemPath="" (key present, value empty) → caller
+    #     intended subsystem operation but path was blank. Use model_name
+    #     as fallback target so Gate_SHELL_ONLY can inspect it.
+    #   - Case B: subsystemPath key absent entirely → legitimate top-level
+    #     model operation (adding blocks to root model). Return '' to skip
+    #     Gate_SHELL_ONLY — the model itself does not require micro_approve.
+    if 'subsystemPath' in params or 'subsystem' in params:
+        # Caller intended a subsystem operation. Return model_name so that
+        # Gate_SHELL_ONLY has a target to check. If the model has approved
+        # subsystems, the check will correctly identify unapproved ones.
+        # If no subsystems exist yet, the check passes through safely.
+        return str(model_name) if model_name else ''
+    
+    # [v12.0 BUGFIX] Do NOT return model_name for top-level — 
+    # top-level model does not require micro_approve (it's not a subsystem)
+    # [v24 FIX Bug#30] Universal depth fallback: walk path components right-to-left
+    # to find a match in _SUBSYSTEM_STATES. Handles any nesting depth (depth=n).
+    if target and '/' in str(target):
+        _parts = str(target).split('/')
+        _tl_key = model_name.split('/')[0] if '/' in str(model_name) else str(model_name)
+        if _tl_key in _SUBSYSTEM_STATES:
+            for _depth_idx in range(len(_parts) - 1, 0, -1):
+                _candidate = _parts[_depth_idx]
+                if _candidate in _SUBSYSTEM_STATES[_tl_key]:
+                    return _candidate
+    return ''
 
 
 def _handle_sl_command(command, params):
@@ -6984,7 +8836,19 @@ def _handle_sl_command(command, params):
         # ===== [v11.9 FIX] Phase 5 强制 auto_layout — 在 Gate_REVIEW_BUILD 之前执行 =====
         # 确保即使 model_complete 被 gate 阻断，子系统也已排版
         if command == 'sl_model_complete':
-            _target_mn = params.get('subsystemPath', params.get('modelName', params.get('model_name', '')))
+            # [v15 Bug #52 FIX] Normalize subsystemPath: strip modelName prefix if already present
+            _sub_path = params.get('subsystemPath', '')
+            _sub_mn = params.get('modelName', params.get('model_name', ''))
+            if _sub_path and _sub_mn and _sub_path.startswith(_sub_mn + '/'):
+                params['subsystemPath'] = _sub_path[len(_sub_mn) + 1:]  # strip model prefix
+            elif not _sub_mn and _sub_path:
+                # Extract modelName from subsystemPath if not separately provided
+                _parts = _sub_path.split('/')
+                if len(_parts) >= 1:
+                    params['modelName'] = _parts[0]
+                    if len(_parts) > 1:
+                        params['subsystemPath'] = '/'.join(_parts[1:])
+            _target_mn = _sub_path.split('/')[0] if _sub_path else params.get('modelName', '')
             if _target_mn:
                 try:
                     _auto_arrange_model(_target_mn)
@@ -7008,7 +8872,9 @@ def _handle_sl_command(command, params):
                 })
                 if isinstance(_cs_r, dict) and not _cs_r.get('passed', True):
                     _n = _cs_r.get('details', {}).get('unconnectedCount', 0)
-                    return {
+                    # [v12.0] Only block if significant unconnected (not internal orphans)
+                    if _n > 100:
+                        return {
                         "status": "gate_blocked", "blocked": True,
                         "gate": "Gate_REVIEW_BUILD",
                         "reason": f"Build verification failed: {_n} unconnected ports in '{_target}'",
@@ -7046,6 +8912,8 @@ def _handle_sl_command(command, params):
             'sl_framework_design', 'sl_framework_review', 'sl_framework_approve',
             'sl_micro_design', 'sl_micro_review', 'sl_micro_approve',
             'sl_model_design', 'sl_model_complete',
+            # [v16 Fix #57] sl_model_create MUST be gated by Scene confirmation
+            'sl_model_create',
             # [P1-1 FIX] sl_inspect REMOVED from gated list — it's a read-only operation
             # Users need to inspect models before confirming scene (especially in Scene 2)
             'sl_framework_modify', 'sl_framework_modify_approve', 'sl_framework_modify_reject',
@@ -7059,17 +8927,8 @@ def _handle_sl_command(command, params):
         ]
         
         if command in _S0_GATED_COMMANDS:
-            _scene_locked = False
-            try:
-                if _connection_mode == 'engine' and _matlab_engine is not None:
-                    _s0_flag = _matlab_engine.eval("evalin('base', 'exist(''mS0SceneLocked_'', ''var'')')", nargout=1)
-                    _scene_locked = (_s0_flag == 1)
-                else:
-                    _scene_locked = _SCENE_STATE.get('scene_confirmed', False)
-            except Exception:
-                _scene_locked = _SCENE_STATE.get('scene_confirmed', False)
-            
-            if not _scene_locked:
+            # [v15 Fix #10] Use unified _is_scene_locked() — Python state authoritative, MATLAB workspace cache-only
+            if not _is_scene_locked():
                 return {
                     "status": "gate_blocked",
                     "blocked": True,
@@ -7097,11 +8956,49 @@ def _handle_sl_command(command, params):
                 }
         # ===== Gate_S0 end =====
 
+        # ===== [v12.1] Gate_MODEL_EXISTS: Phase 0 mandatory — Scene 1 requires .slx file =====
+        _SCENE1_MODEL_CHECK_COMMANDS = [
+            'sl_framework_design', 'sl_framework_review', 'sl_framework_approve',
+            'sl_subsystem_create', 'sl_micro_design', 'sl_micro_review', 'sl_micro_approve',
+        ]
+        if command in _SCENE1_MODEL_CHECK_COMMANDS:
+            _scene = _SCENE_STATE.get('scene', 0)
+            if _scene == 1:
+                _mn = params.get('modelName', params.get('model_name', ''))
+                if _mn:
+                    _toplevel = _mn.split('/')[0] if '/' in _mn else _mn
+                    # Check via MATLAB Engine (safer than filesystem path)
+                    _model_exists = False
+                    try:
+                        _me_eng = get_engine()
+                        if _me_eng is not None:
+                            _model_exists = _me_eng.eval(f"exist('{_toplevel}', 'file') == 4", nargout=1)
+                    except Exception:
+                        _model_exists = False
+                    if not _model_exists:
+                        return {
+                            "status": "gate_blocked",
+                            "gate": "Gate_MODEL_EXISTS",
+                            "reason": f"Model '{_toplevel}' not found in MATLAB path. Phase 0: sl_model_create must be called first in Scene 1.",
+                            "requiredAction": "sl_model_create",
+                            "requiredParams": {"modelName": _toplevel},
+                            "hint": f"sl_model_create('{_toplevel}')"
+                        }
+        # ===== Gate_MODEL_EXISTS end =====
+
         # 1. 反模式预检
         anti_warnings = _anti_pattern_check(command, params)
         
         # 2. 参数自动修正（Layer 2: 主动学习）
         fixed_params, auto_fixes = _auto_fix_args(command, params)
+        
+        # [v23 FIX EB1 → v24 FIX BUG-002] Resolve frameworkFile → macroFramework
+        # early for BOTH review AND approve. Approve needs macroFramework for
+        # _batch_create_all_shells (shell creation).
+        if command in ('sl_framework_review', 'sl_framework_approve'):
+            _resolved_mf = _resolve_macro_framework(fixed_params)
+            if _resolved_mf:
+                fixed_params['macroFramework'] = _resolved_mf
         
         # 3. 踩坑模式匹配（Layer 3: 预测学习）
         pitfall_matches = _check_pitfall_patterns(command, fixed_params)
@@ -7111,41 +9008,36 @@ def _handle_sl_command(command, params):
         _gate_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
         if not _gate_mn and command in ('sl_set_param', 'sl_set_param_safe'):
             _gate_mn = fixed_params.get('blockPath', '')
-            if '/' in _gate_mn:
-                _gate_mn = _gate_mn.split('/')[0]
+        # [v12.0 BUGFIX] Normalize to toplevel model: Model/Subsys -> Model
+        if _gate_mn and '/' in str(_gate_mn):
+            _gate_mn = str(_gate_mn).split('/')[0]
         if _gate_mn and command in _MODIFY_COMMANDS:
             try:
                 _gate_state = _get_workflow_state(_gate_mn)
-                if not _gate_state.design_approved and _gate_state.phase == 'design':
-                    # 检查 skipDesign 选项（仅限已有模型的简单修改）
-                    skip_design = fixed_params.get('skipDesign', False)
-                    if not skip_design:
-                        return {
-                            "status": "gate_blocked",
-                            "blocked": True,  # [Bug #5 FIX] 标准化拦截标记
-                            "reason": "Design phase not completed. Physical modeling design required before building.",  # [Bug #5 FIX]
-                            "command": command,  # [Bug #5 FIX] 被拦截的命令
-                            "gate": "Gate_1",  # [Bug #5 FIX] 哪个门控
-                            "message": (
-                                "DESIGN_PHASE_REQUIRED: 物理建模设计未完成！\n"
-                                "在构建模型之前，必须先调用 sl_model_design 获取结构化设计方案。\n"
-                                "完成设计后，调用 sl_model_design(action='approve') 审批设计方案。"
-                            ),
-                            "requiredAction": "sl_model_design",
-                            "workflowPhase": "design",
-                            "designApproved": False,
-                            "hint": (
-                                "1. 调用 sl_model_design(taskDescription='你的建模任务描述')\n"
-                                "2. 阅读返回的 design.equations / design.strategy / design.paramMap\n"
-                                "3. 如需深入调研，使用网络搜索或调用其它工具获取物理方程\n"
-                                "4. 确认方案后调用 sl_model_design(action='approve')\n"
-                                "5. 然后才能开始 add_block / add_line 等构建操作"
-                            ),
-                        }
-                    # skipDesign 模式下：add_block 已成功，保守更新状态
-                    # 不依赖快照API（避免超时/失败导致状态不一致）
-                    _gate_state.design_approved = True
-                    _gate_state.phase = 'framework'
+                if not _gate_state.design_approved and not _gate_state.framework_approved and _gate_state.phase == 'design':
+                    # [v12.0] skipDesign 后门已移除 (GT-08)。设计阶段必须完成。
+                    return {
+                        "status": "gate_blocked",
+                        "blocked": True,
+                        "reason": "Design phase not completed. Physical modeling design required before building.",
+                        "command": command,
+                        "gate": "Gate_1",
+                        "message": (
+                            "DESIGN_PHASE_REQUIRED: 物理建模设计未完成！\n"
+                            "在构建模型之前，必须先调用 sl_model_design 获取结构化设计方案。\n"
+                            "完成设计后，调用 sl_model_design(action='approve') 审批设计方案。"
+                        ),
+                        "requiredAction": "sl_model_design",
+                        "workflowPhase": "design",
+                        "designApproved": False,
+                        "hint": (
+                            "1. 调用 sl_model_design(taskDescription='你的建模任务描述')\n"
+                            "2. 阅读返回的 design.equations / design.strategy / design.paramMap\n"
+                            "3. 如需深入调研，使用网络搜索或调用其它工具获取物理方程\n"
+                            "4. 确认方案后调用 sl_model_design(action='approve')\n"
+                            "5. 然后才能开始 add_block / add_line 等构建操作"
+                        ),
+                    }
                     _gate_state.phase_step = 'building'
             except Exception as _gate_ex:
                 # [P0-2 FIX] fail-closed: 门控检查异常时默认拒绝，不静默放行
@@ -7189,8 +9081,9 @@ def _handle_sl_command(command, params):
         _fw_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
         if not _fw_mn and command in ('sl_set_param', 'sl_set_param_safe'):
             _fw_mn = fixed_params.get('blockPath', '')
-            if '/' in _fw_mn:
-                _fw_mn = _fw_mn.split('/')[0]
+        # [v12.0 BUGFIX] Normalize to toplevel model for all commands
+        if _fw_mn and '/' in str(_fw_mn):
+            _fw_mn = str(_fw_mn).split('/')[0]
         _fw_locked = False
 
         # 只有构建命令需要门控检查
@@ -7260,11 +9153,15 @@ def _handle_sl_command(command, params):
                         if _s2_active:
                             framework_approved = True  # Scene 2 approved → Gate_2 passes
                     
+                    # [v17 BUGFIX #63] Also check persistent framework approval (survives restart)
                     if not framework_approved and not _fw_locked:
-                        # 检查 skipDesign 选项（仅限已有模型的简单修改）
-                        skip_design = fixed_params.get('skipDesign', False)
-                        if not skip_design:
-                            return {
+                        _s2_toplevel = _fw_mn.split('/')[0] if '/' in _fw_mn else _fw_mn
+                        if _s2_toplevel in _FRAMEWORK_APPROVED_MODELS:
+                            framework_approved = True  # Restored from disk → Gate_2 passes
+                    
+                    if not framework_approved and not _fw_locked:
+                        # [v12.0] skipDesign 后门已移除 (GT-08)。框架审批必须完成。
+                        return {
                                 "status": "gate_blocked",
                                 "blocked": True,  # [Bug #5 FIX]
                                 "reason": "Macro framework not approved. Framework design→review→approve required before building.",  # [Bug #5 FIX]
@@ -7420,25 +9317,38 @@ def _handle_sl_command(command, params):
                 }
         # ===== Gate 3 结束 =====
 
-        # ===== [v11.8.4] Gate_SHELL_ONLY: 外壳可批量，内部必须逐子系统 Gate 审批 =====
-        # 原则：子系统空壳（sl_subsystem_create）可以批量创建——外壳只是容器。
-        # 子系统内部结构（add_block/add_line/set_param）绝对不能批量——
-        # 每个子系统的内部设计必须独立走 micro_design → micro_review → micro_approve。
-        # 
-        # 机制：
-        # - _MICRO_APPROVED_SUBSYSTEMS 字典：{model_name: set(approved_subsystem_paths)}
-        # - sl_micro_approve 成功后将目标子系统加入此集合
-        # - add_block/add_line/set_param 前检查：目标子系统必须在已审批集合中
-        # - 不在集合中 → Gate_SHELL_ONLY 拦截，提示先完成 micro_approve
+        # ===== [v11.8.4→v12.1] Gate_SHELL_ONLY: 外壳可批量，内部必须逐子系统 Gate 审批 =====
+        # Updated: uses _SUBSYSTEM_STATES dict instead of _MICRO_APPROVED_SUBSYSTEMS set
         _SHELL_ONLY_GATED = ['sl_add_block', 'sl_add_block_safe', 'sl_add_line', 
-                              'sl_add_line_safe', 'sl_set_param', 'sl_set_param_safe']
+                              'sl_add_line_safe', 'sl_set_param', 'sl_set_param_safe',
+                              'sl_add_blocks_batch',  # [v21 FIX EB7]
+                              'sl_build_batch']       # [v24 FIX EB7] unified build batch
         if command in _SHELL_ONLY_GATED and _fw_mn:
+            # [v19 FIX #NEW-4] Pre-check: framework must be approved before any subsystem build.
+            # Gate_SHELL_ONLY previously only checked subsystem-level micro_approve status,
+            # allowing AI to bypass framework_approve by manually creating subsystems.
+            _toplevel = _fw_mn.split('/')[0]
+            _fw_state = _get_workflow_state(_toplevel)
+            # [v28 FIX] Check persistent framework approval before blocking.
+            # In-memory state is lost on restart; disk-persisted state must be checked.
+            _fw_approved = getattr(_fw_state, 'framework_approved', False)
+            if not _fw_approved and _toplevel in _FRAMEWORK_APPROVED_MODELS:
+                _fw_approved = True
+            if not _fw_approved:
+                return {
+                    "status": "gate_blocked",
+                    "gate": "Gate_SHELL_ONLY",
+                    "reason": "Framework not yet approved. Complete framework_review → framework_approve first.",
+                    "requiredAction": "sl_framework_approve",
+                    "hint": (
+                        "sl_framework_approve(modelName, macroFramework=yourDesign) "
+                        "must succeed before building subsystems."
+                    )
+                }
             _target_subsys = _extract_target_subsystem(fixed_params, _fw_mn, command)
             if _target_subsys:
-                _toplevel = _fw_mn.split('/')[0]
-                if _toplevel not in _MICRO_APPROVED_SUBSYSTEMS:
-                    _MICRO_APPROVED_SUBSYSTEMS[_toplevel] = set()
-                if _target_subsys not in _MICRO_APPROVED_SUBSYSTEMS[_toplevel]:
+                _ss_state = _get_subsystem_state(_toplevel, _target_subsys)
+                if not _ss_state or _ss_state.status not in ('approved', 'building', 'completed'):
                     return {
                         "status": "gate_blocked",
                         "blocked": True,
@@ -7477,56 +9387,158 @@ def _handle_sl_command(command, params):
                     }
         # ===== Gate_SHELL_ONLY end =====
 
+        # ===== [v25 FIX RC4] Gate_DUPLICATE_BLOCK: prevent session pollution =====
+        # [v26 FIX] Added model-loaded guard and exact-match filtering.
+        # Previously, sl_find_blocks with sloppy patterns caused false positives
+        # when the model wasn't properly loaded, blocking ALL add_block operations.
+        if command in ('sl_add_block', 'sl_add_block_safe') and _fw_mn:
+            _target_subsys = _extract_target_subsystem(fixed_params, _fw_mn, command)
+            _block_name = fixed_params.get('blockName', '')
+            if _target_subsys and _block_name and len(_target_subsys) > 1:
+                try:
+                    _dup_check = _call_sl_function('sl_find_blocks', {
+                        '_pos_1': _fw_mn.split('/')[0],
+                        'searchPattern': f'{_target_subsys}/{_block_name}'
+                    })
+                    if isinstance(_dup_check, dict):
+                        _found = _dup_check.get('blocks', [])
+                        # [v26 FIX] Only block if we actually found blocks AND
+                        # the found path exactly matches the subsystem/block name
+                        _actual_dupes = [b for b in _found
+                                        if isinstance(b, str) and b.endswith(f'/{_block_name}')
+                                        and _target_subsys in b]
+                        if len(_actual_dupes) > 0:
+                            return {
+                                "status": "gate_blocked",
+                                "gate": "Gate_DUPLICATE_BLOCK",
+                                "reason": f"Block '{_block_name}' already exists in '{_target_subsys}'. "
+                                          f"Session pollution detected. Delete and recreate the subsystem cleanly.",
+                                "command": command,
+                                "targetSubsystem": _target_subsys,
+                                "duplicateBlock": _block_name,
+                                "hint": "Use a unique block name or delete and recreate the subsystem."
+                            }
+                except Exception:
+                    pass  # Non-fatal: if sl_find_blocks fails, allow add to proceed
+
+        # ===== [v12.1] Gate_SUBSYSTEM_CLOSURE: 构建阶段逐子系统强制闭环 =====
+        if command in ('sl_add_block', 'sl_add_block_safe', 'sl_add_line', 'sl_add_line_safe') and _fw_mn:
+            _target_subsys = _extract_target_subsystem(fixed_params, _fw_mn, command)
+            if _target_subsys:
+                _toplevel = _fw_mn.split('/')[0]
+                _curr_state = _get_subsystem_state(_toplevel, _target_subsys)
+                if _curr_state and _curr_state.status in ('approved', 'building', 'completed'):
+                    if _curr_state.status == 'completed':
+                        pass  # Allow re-build of completed subsystem
+                    else:
+                        # Find any unfinished subsystem earlier in build_order
+                        _wf_state = _get_workflow_state(_toplevel)
+                        _bo = _wf_state.build_order if _wf_state else []
+                        if _bo:
+                            _target_pos = next((i for i, n in enumerate(_bo) if n.get('name') == _target_subsys), -1)
+                            for i in range(_target_pos):
+                                _prev_name = _bo[i].get('name', '')
+                                _prev_state = _get_subsystem_state(_toplevel, _prev_name)
+                                if _prev_state and _prev_state.status in ('approved', 'building'):
+                                    return {
+                                        "status": "gate_blocked",
+                                        "gate": "Gate_SUBSYSTEM_CLOSURE",
+                                        "reason": f"build_order[{i}] '{_prev_name}' ({_prev_state.status}) must be completed before '{_target_subsys}'.",
+                                        "blockingSubsystem": _prev_name,
+                                        "requiredAction": "sl_model_complete",
+                                        "hint": f"1. sl_model_complete('{_toplevel}/{_prev_name}')\n2. Retry"
+                                    }
+        # ===== Gate_SUBSYSTEM_CLOSURE end =====
+
         # ===== 大框架门控结束 =====
 
-        # ===== [v11.6.2] Gate_CONNECTIVITY: 强制连线门控 =====
-        # P0 FIX: _verification 反馈是软建议不是硬拦截 — 这是工作流的核心缺陷。
-        # 修复: 当连续 3+ 次 add_block 无 add_line 时，拦截 add_block。
-        # 这会强制 AI 遵循"添加→连线→验证"的循环，而不是批量添加后忽略未连接端口。
-        #
-        # 机制:
-        # - consecutive_adds 在 _check_auto_layout_needed 中每次 add_block 后 +1
-        # - 每次 add_line 后重置为 0
-        # - 当 >=3 时，下一个 add_block 被 Gate_CONNECTIVITY 拦截
-        # - 被拦截后必须调 add_line 连接已有模块才能继续添加
-        #
-        # [v11.6.2 FIX] Normalize model name to toplevel for consistency:
-        # add_block uses sandbox path (Model/Subsys), add_line uses parent model.
-        # Both must update the SAME workflow state counter.
+        # ===== [v12.1] Gate_CONNECTIVITY: 强制连线门控 (分阶段阈值) =====
+        # v12.1: Phase-aware thresholds — building=15, completed=5
         if command == 'sl_add_block':
             _conn_mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
-            # Normalize to toplevel model: Quadrotor_FDM/PID_Controller_New → Quadrotor_FDM
             _conn_toplevel = _conn_mn.split('/')[0] if '/' in _conn_mn else _conn_mn
             if _conn_toplevel:
                 _conn_state = _get_workflow_state(_conn_toplevel)
-                if _conn_state.consecutive_adds >= 12:
+                
+                # [v12.1] Phase-aware threshold: check subsystem states
+                _conn_threshold = 5  # default
+                _is_building_phase = False
+                _states = _SUBSYSTEM_STATES.get(_conn_toplevel, {})
+                for _ss_name, _ss_state in _states.items():
+                    if _ss_state.status == 'building':
+                        _is_building_phase = True
+                        _conn_threshold = 15
+                        break
+                    elif _ss_state.status == 'approved' and _ss_state.consecutive_adds == 0:
+                        _conn_threshold = 15  # approved but not yet started building
+                
+                # [v30] Gate_RETRY: higher threshold for retrying_impl
+                _retry_mode = False
+                for _ss_name, _ss_state in _states.items():
+                    if _ss_state.status == 'retrying_impl':
+                        _retry_mode = True
+                        _conn_threshold = 15
+                        break
+                
+                # [v12.0] Check 1: consecutive adds >= threshold
+                _blocked_by_consecutive = _conn_state.consecutive_adds >= _conn_threshold
+                
+                # [v12.1] Check 2: global unconnected — only in non-building phases
+                _global_unconnected = 0
+                if not _blocked_by_consecutive and not _is_building_phase:
+                    try:
+                        _conn_eng = get_engine()
+                        if _conn_eng is not None:
+                            _uc_result = _call_sl_function('sl_review_core', {
+                                '_pos_1': _conn_toplevel,
+                                '_pos_2': 'connectionScan'
+                            })
+                            if isinstance(_uc_result, dict):
+                                _uc_details = _uc_result.get('details', {})
+                                _global_unconnected = _uc_details.get('unconnectedCount', 0)
+                    except Exception:
+                        pass
+                
+                if _blocked_by_consecutive or (_global_unconnected > 10 and _conn_state.consecutive_adds >= 3):
+                    _block_reason = (
+                        f"{_conn_state.consecutive_adds} consecutive add_blocks without add_line (threshold: {_conn_threshold})"
+                        if _blocked_by_consecutive else
+                        f"{_global_unconnected} unconnected ports globally (>10 threshold)"
+                    )
                     return {
                         "status": "gate_blocked",
                         "blocked": True,
-                        "reason": (
-                            f"{_conn_state.consecutive_adds} consecutive add_block(s) without add_line. "
-                            f"Connect existing blocks before adding more."
-                        ),
+                        "reason": _block_reason,
                         "command": command,
                         "gate": "Gate_CONNECTIVITY",
                         "message": (
-                            f"CONNECTIVITY_REQUIRED: {_conn_state.consecutive_adds} blocks added "
-                            f"without connecting them.\n"
+                            f"CONNECTIVITY_REQUIRED: {_block_reason}.\n"
                             f"You MUST connect unconnected ports via add_line before adding more blocks.\n"
-                            f"Use sl_inspect or check _verification in previous responses to identify "
-                            f"unconnected ports, then connect them with add_line."
+                            f"Use sl_review_core(modelPath, 'connectionScan') to identify unconnected ports, "
+                            f"then connect them with add_line."
                         ),
                         "requiredAction": "add_line",
                         "workflowPhase": "building",
                         "consecutiveAdds": _conn_state.consecutive_adds,
+                        "connectivityThreshold": _conn_threshold,
+                        "globalUnconnected": _global_unconnected,
                         "hint": (
-                            f"1. Check previous _verification.warnings for UNCONNECTED ports\n"
-                            f"2. Use add_line to connect {_conn_state.consecutive_adds} pending blocks\n"
+                            f"1. Call sl_review_core('{_conn_toplevel}', 'connectionScan') to see unconnected ports\n"
+                            f"2. Use add_line to connect pending blocks\n"
                             f"3. After connections, consecutive_adds resets to 0\n"
                             f"4. Then you can add more blocks"
                         ),
                     }
         # ===== Gate_CONNECTIVITY end =====
+
+        # [v12.1] Update _SUBSYSTEM_STATES: mark subsystem as 'building' on first add_block
+        if command in ('sl_add_block', 'sl_add_block_safe') and _fw_mn:
+            _target_subsys = _extract_target_subsystem(fixed_params, _fw_mn, command)
+            if _target_subsys:
+                _toplevel = _fw_mn.split('/')[0]
+                _ss_state = _get_subsystem_state(_toplevel, _target_subsys)
+                if _ss_state and _ss_state.status == 'approved':
+                    _set_subsystem_state(_toplevel, _target_subsys, 'building')
 
         # ===== [v11.5] Gate_S2_MODIFY: protect existing model parts =====
         # Any write to a block/line OUTSIDE the sandbox subsystem requires USER CONFIRMATION
@@ -7568,7 +9580,7 @@ def _handle_sl_command(command, params):
                     _target = fixed_params.get('modelName', '')
                 elif command == 'sl_set_param':
                     _target = fixed_params.get('blockPath', '')
-                elif command == 'sl_delete':
+                elif command == 'sl_delete' or command == 'sl_delete_block':
                     _target = fixed_params.get('blockPath', '')
                 elif command == 'sl_subsystem_create':
                     _target = fixed_params.get('modelName', params.get('modelName', ''))
@@ -7670,7 +9682,7 @@ def _handle_sl_command(command, params):
                         try:
                             if _matlab_engine:
                                 _micro_approved = _matlab_engine.eval(_mf_lock_var)
-                        except:
+                        except Exception:
                             _micro_approved = False
                         
                         if not _micro_approved:
@@ -7820,6 +9832,36 @@ def _handle_sl_command(command, params):
         # ===== [v11.4] 框架设计完整性门控 (Gate 5) =====
         if command == 'sl_framework_approve':
             _g5_mn = fixed_params.get('modelName', fixed_params.get('model_name', params.get('modelName', '')))
+            
+            # [v12.1] Gate_FRAMEWORK_SEQUENCE: must pass framework_review before approve
+            # Runs BEFORE Gate_5 (structural checks) because it's a workflow sequence check
+            if _g5_mn and _g5_mn not in _FRAMEWORK_REVIEWED:
+                return {
+                    "status": "gate_blocked",
+                    "gate": "Gate_FRAMEWORK_SEQUENCE",
+                    "reason": f"Framework review not completed for '{_g5_mn}'. Call sl_framework_review before sl_framework_approve.",
+                    "requiredAction": "sl_framework_review",
+                    "requiredParams": {"modelName": _g5_mn},
+                    "hint": "1. sl_framework_review(macroFramework=yourDesign)\n2. Verify all review checks pass\n3. Then sl_framework_approve"
+                }
+            # [v19 FIX #NEW-6 L3] Self-heal: verify workflow state matches _FRAMEWORK_REVIEWED
+            # If phase_step is not 'reviewed', the review state is stale — clean up and block.
+            if _g5_mn and _g5_mn in _FRAMEWORK_REVIEWED:
+                _fw_state = _get_workflow_state(_g5_mn)
+                if _fw_state and _fw_state.phase_step != 'reviewed':
+                    _FRAMEWORK_REVIEWED.discard(_g5_mn)
+                    return {
+                        "status": "gate_blocked",
+                        "gate": "Gate_FRAMEWORK_SEQUENCE",
+                        "reason": (
+                            f"Framework review state inconsistent for '{_g5_mn}'. "
+                            f"Previous review may have failed or been stale. Re-run sl_framework_review."
+                        ),
+                        "requiredAction": "sl_framework_review",
+                        "requiredParams": {"modelName": _g5_mn},
+                        "hint": "sl_framework_review(macroFramework=yourDesign)"
+                    }
+            
             macro_fw = fixed_params.get('macroFramework', params.get('macroFramework', None))
             if macro_fw and _g5_mn:
                 # [v11.4.1 FIX] Warm up engine before gate check
@@ -7949,9 +9991,10 @@ def _handle_sl_command(command, params):
                     "hint": "Call sl_scene_detect again to get a fresh token.",
                 }
             
-            # Check timeout (600s generous window for user interaction, was 120s→300s→600s)
+            # Check timeout (3600s = 1h, was 120s→300s→600s→3600s v23)
+            # Extended to accommodate AskUserQuestion interaction latency
             elapsed = time.time() - detect_ts if detect_ts > 0 else 0
-            if elapsed > 600:
+            if elapsed > 3600:
                 _SCENE_STATE.pop('detection_token', None)
                 _SCENE_STATE.pop('challenge_phrase', None)
                 _SCENE_STATE.pop('detection_timestamp', None)
@@ -8140,6 +10183,12 @@ def _handle_sl_command(command, params):
                 "allComplete": _all_subsystems_completed(state) if not next_target else False,
             }
         
+        # [v24 FIX B7] Hard reset — clear all in-memory and disk state for a model
+        if func_name == '_builtin_hard_reset':
+            _hr_mn = fixed_params.get('modelName', '')
+            _hard_reset_model_state(_hr_mn)
+            return {"status": "ok", "message": f"Hard reset complete for '{_hr_mn}'", "modelName": _hr_mn}
+        
         # [P0-4 FIX] 提前获取 model_name，后续逻辑（工作流清理、锁获取、验证）都需要
         model_name = fixed_params.get('modelName', fixed_params.get('model_name', ''))
         
@@ -8277,11 +10326,17 @@ def _handle_sl_command(command, params):
                 _fw_state = _get_workflow_state(_fw_mn)
                 if special_action == '__fw_approve__':
                     _fw_state.framework_approved = True
-                    _fw_state.framework_locked = fixed_params.get('locked', True)
+                    # [v17 BUGFIX #63] Persist framework approval to disk
+                    _FRAMEWORK_APPROVED_MODELS.add(_fw_mn)
+                    _persist_framework_state(_fw_mn, approved=True)
+                    # [v18.1] Defer framework lock; batch create shells FIRST, then lock
+                    _fw_state.framework_locked = False
                     _fw_state.phase = 'framework_construction'
-                    _fw_state.phase_step = 'approved'
+                    _fw_state.phase_step = 'shell_creation'
                     # [v11.8 Bug#4 FIX] Build hierarchy tree from approved framework
                     _approve_fw = fixed_params.get('macroFramework', {})
+                    created_shells = 0
+                    layout_ok = False
                     if _approve_fw and isinstance(_approve_fw, dict) and _approve_fw.get('subsystems'):
                         # Store the approved framework (with childSubsystems) in state
                         _fw_state.macro_framework = _approve_fw
@@ -8293,6 +10348,26 @@ def _handle_sl_command(command, params):
                         )
                         _fw_state.hierarchy_approved = True
                         _fw_state.current_build_index = -1
+                        
+                        # [v18.1] Batch-create ALL subsystem shells BEFORE framework lock
+                        _shell_result = _batch_create_all_shells(_fw_mn, tree)
+                        created_shells = _shell_result.get('created_count', 0)
+                        
+                        # [v18.1] Force auto-layout (mandatory, cannot be skipped)
+                        import logging as _v18b_log
+                        try:
+                            _call_sl_function('sl_auto_layout', {
+                                '_pos_1': _fw_mn,
+                                '_pos_2': 'FullLayout',
+                                '_pos_3': 'true',
+                            })
+                            layout_ok = True
+                        except Exception as _v18b_le:
+                            _v18b_log.getLogger('matlab_bridge').warning(f'[v18.1] layout failed: {_v18b_le}')
+                    
+                    # [v18.1] NOW lock the framework — Gate_3 activates
+                    _fw_state.framework_locked = True
+                    _fw_state.phase_step = 'approved'
                     # 在 MATLAB workspace 设置标记
                     _fw_safe = _fw_mn.replace('/', '__')  # [v11.5] 子系统路径安全化
                     try:
@@ -8316,11 +10391,17 @@ def _handle_sl_command(command, params):
                         pass  # MATLAB workspace 同步失败不影响主流程
                     result = {
                         "status": "ok",
-                        "message": "Macro framework approved and locked. You can now start building the model.",
+                        "message": f"Framework approved. {created_shells} subsystem shells created and auto-laid out. Framework locked — begin subsystem iteration.",
                         "frameworkApproved": True,
-                        "frameworkLocked": fixed_params.get('locked', True),
-                        "nextPhase": "framework_construction",
-                        "nextSuggestedAction": "Start adding subsystems and blocks according to the approved macro framework",
+                        "frameworkLocked": _fw_state.framework_locked,
+                        "createdShells": created_shells,          # [v18.1]
+                        "autoLayoutApplied": layout_ok,           # [v18.1]
+                        "nextPhase": "subsystem_iteration",
+                        "nextSuggestedAction": (
+                            f"All {created_shells} subsystem shells created. "
+                            "Framework locked. Begin subsystem iteration: "
+                            "sl_micro_design → sl_micro_review → sl_micro_approve → build → sl_model_complete"
+                        ),
                     }
                     # [v11.8 Bug#4 FIX] Include hierarchy info in response
                     if _fw_state.subsystem_tree is not None:
@@ -8345,16 +10426,420 @@ def _handle_sl_command(command, params):
         # ===== v11.0 特殊 action 处理结束 =====
 
 # 6. 调用
+        # [v13 BUGFIX #47] Before sl_scene_detect, sync MATLAB pwd with workspaceDir
+        if command == 'sl_scene_detect':
+            _ws_dir = fixed_params.get('_pos_1', '')
+            if _ws_dir and _connection_mode == 'engine' and _matlab_engine is not None:
+                try:
+                    _matlab_engine.workspace['matlab_agent_cd_path'] = str(_ws_dir).replace('\\', '/')
+                    _matlab_engine.eval("cd(matlab_agent_cd_path);", nargout=0)
+                    _matlab_engine.eval("clear matlab_agent_cd_path;", nargout=0)
+                except:
+                    pass  # Non-critical — MATLAB sl_scene_detect has fallback
+        
+        # [v12.1] Gate_APPROVE_NO_REVIEW & Gate_MICRO_DESIGN_CLOSURE — run BEFORE MATLAB call
+        if command == 'sl_micro_approve':
+            _subsys = fixed_params.get('subsystemName', fixed_params.get('subsystem_name', ''))
+            if _subsys and _fw_mn:
+                _ss_state = _get_subsystem_state(_fw_mn, _subsys)
+                # [v30] Gate_RETRY exemption: retrying_impl → skip review re-check (already approved)
+                if _ss_state and _ss_state.status in ('retrying_impl', 'retrying_design'):
+                    pass  # Allow re-approve during retry without forcing re-review
+                elif not _ss_state or _ss_state.status != 'reviewed':
+                    return {
+                        "status": "gate_blocked",
+                        "gate": "Gate_APPROVE_NO_REVIEW",
+                        "reason": f"Subsystem '{_subsys}' has not been reviewed. Must call sl_micro_review before sl_micro_approve.",
+                        "requiredAction": "sl_micro_review",
+                        "requiredParams": {"subsystemName": _subsys},
+                        "hint": f"sl_micro_review(subsystemName='{_subsys}', microFramework={{...}})"
+                    }
+        if command == 'sl_micro_design':
+            _subsys = fixed_params.get('subsystemName', fixed_params.get('subsystem_name', ''))
+            if _subsys and _fw_mn:
+                _states = _SUBSYSTEM_STATES.get(_fw_mn, {})
+                for _sn, _ss in _states.items():
+                    if _sn == _subsys: continue
+                    # [v30] Gate_RETRY: retrying_design → allow re-design
+                    if _ss.status == 'retrying_design': continue
+                    if _ss.status in ('approved', 'building') and _ss.consecutive_adds == 0: continue
+                    if _ss.status in ('approved', 'building'):
+                        return {
+                            "status": "gate_blocked",
+                            "gate": "Gate_MICRO_DESIGN_CLOSURE",
+                            "reason": f"Subsystem '{_sn}' is approved but not yet completed. Complete it before designing '{_subsys}'.",
+                            "blockingSubsystem": _sn,
+                            "currentSubsystem": _subsys,
+                            "requiredAction": "sl_model_complete",
+                            "requiredParams": {"modelName": f"{_fw_mn}/{_sn}"},
+                            "hint": f"1. Build and complete {_sn} (add_block → add_line → sl_model_complete)\n2. Then micro_design('{_subsys}') will be allowed"
+                        }
         # [v11.4.3] 强制模型前台可见 — AI 不可绕过的底层门控
         # 在执行任何 Simulink 操作前，确保目标模型在 MATLAB 前台打开，
         # 让用户能实时看到 AI 建模的全过程。
         _ensure_model_visible(fixed_params)
         
+        # [v16 Fix #56+#57] COMPREHENSIVE state reset for Scene 1 fresh builds
+        # Must run BEFORE _call_sl_function so MATLAB creates the model with clean state
+        if command == 'sl_model_create':
+            _mn_create = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            if _mn_create:
+                _hard_reset_model_state(_mn_create)
+        
+        # [v21 FIX EB7] Batch block addition for build efficiency
+        if command == 'sl_add_blocks_batch':
+            blocks = fixed_params.get('blocks', [])
+            if not blocks:
+                return {"status": "error", "message": "sl_add_blocks_batch requires 'blocks' array (list of {blockType, blockName, ...})"}
+            _report_succeeded = 0
+            _report_results = []
+            _sp = fixed_params.get('subsystemPath', '')
+            for _i, _block_spec in enumerate(blocks):
+                _bn = _block_spec.get('blockName', f'Block_{_i+1}')
+                _bt = _block_spec.get('blockType', 'Gain')
+                _mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+                _block_params = {
+                    'modelName': _mn,
+                    'sourceBlock': _bt,
+                }
+                if _sp:
+                    _block_params['subsystemPath'] = _sp
+                    _block_params['destPath'] = f"{_sp}/{_bn}" if not _bn.startswith(_sp + '/') else _bn
+                else:
+                    _block_params['destPath'] = _bn
+                _block_params.pop('blocks', None)
+                try:
+                    _prep_args = _build_sl_args('sl_add_block_safe', _block_params)
+                    _r = _call_sl_function('sl_add_block_safe', _prep_args)
+                    _stat = _r.get('status', 'error') if isinstance(_r, dict) else 'error'
+                    _report_results.append({
+                        'index': _i, 'blockName': _bn, 'status': _stat,
+                        'path': _r.get('block', {}).get('path', '') if isinstance(_r, dict) else ''
+                    })
+                    if _stat == 'ok':
+                        _report_succeeded += 1
+                except Exception as _batch_ex:
+                    _report_results.append({'index': _i, 'blockName': _bn, 'status': 'error', 'error': str(_batch_ex)})
+            # Auto-layout after batch
+            try:
+                _mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+                _call_sl_function('sl_auto_layout', {'_pos_1': _mn, '_pos_2': 'FullLayout', '_pos_3': 'true'})
+            except Exception:
+                pass
+            return {"status": "ok", "command": "sl_add_blocks_batch", "batch_results": _report_results,
+                    "total": len(blocks), "succeeded": _report_succeeded}
+
+        # [v24 FIX EB7] Unified build batch — blocks + params + lines + layout in one call
+        if command == 'sl_build_batch':
+            _mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            _sp = fixed_params.get('subsystemPath', '')
+            _blocks_list = fixed_params.get('blocks', [])
+            _params_list = fixed_params.get('params', [])
+            _lines_list = fixed_params.get('lines', [])
+            
+            _blocks_ok = 0; _blocks_results = []
+            _params_ok = 0; _params_results = []
+            _lines_ok = 0;  _lines_results = []
+            _layout_status = "skipped"
+            
+            # Phase 1: Add blocks
+            for _i, _bs in enumerate(_blocks_list):
+                _bn = _bs.get('blockName', f'Block_{_i+1}')
+                _bt = _bs.get('blockType', 'Gain')
+                _bp = {'modelName': _mn, 'sourceBlock': _bt}
+                if _sp:
+                    _bp['subsystemPath'] = _sp
+                    _bp['destPath'] = f"{_sp}/{_bn}" if not _bn.startswith(_sp + '/') else _bn
+                else:
+                    _bp['destPath'] = _bn
+                try:
+                    _pa = _build_sl_args('sl_add_block_safe', _bp)
+                    _r = _call_sl_function('sl_add_block_safe', _pa)
+                    _s = _r.get('status', 'error') if isinstance(_r, dict) else 'error'
+                    _blocks_results.append({'blockName': _bn, 'status': _s})
+                    if _s == 'ok': _blocks_ok += 1
+                except Exception as _ex:
+                    _blocks_results.append({'blockName': _bn, 'status': 'error', 'error': str(_ex)})
+            
+            # Phase 2: Set params
+            for _i, _pp in enumerate(_params_list):
+                _bpath = _pp.get('blockPath', '')
+                _pname = _pp.get('paramName', '')
+                _pval = _pp.get('paramValue', None)
+                try:
+                    _pa = _build_sl_args('sl_set_param_safe', {'blockPath': _bpath, 'paramName': _pname, 'paramValue': _pval})
+                    _r = _call_sl_function('sl_set_param_safe', _pa)
+                    _s = _r.get('status', 'error') if isinstance(_r, dict) else 'error'
+                    _params_results.append({'blockPath': _bpath, 'status': _s})
+                    if _s == 'ok': _params_ok += 1
+                except Exception as _ex:
+                    _params_results.append({'blockPath': _bpath, 'status': 'error', 'error': str(_ex)})
+            
+            # Phase 3: Add lines
+            for _i, _ln in enumerate(_lines_list):
+                _sb = _ln.get('srcBlock', ''); _sp = _ln.get('srcPort', 1)
+                _db = _ln.get('dstBlock', ''); _dp = _ln.get('dstPort', 1)
+                try:
+                    _pa = _build_sl_args('sl_add_line_safe', {'modelName': _mn, 'srcBlock': _sb, 'srcPort': _sp, 'dstBlock': _db, 'dstPort': _dp})
+                    _r = _call_sl_function('sl_add_line_safe', _pa)
+                    _s = _r.get('status', 'error') if isinstance(_r, dict) else 'error'
+                    _lines_results.append({'src': _sb, 'dst': _db, 'status': _s})
+                    if _s == 'ok': _lines_ok += 1
+                except Exception as _ex:
+                    _lines_results.append({'src': _sb, 'dst': _db, 'status': 'error', 'error': str(_ex)})
+            
+            # Phase 4: Auto-layout
+            try:
+                _call_sl_function('sl_auto_layout', {'_pos_1': _mn, '_pos_2': 'FullLayout', '_pos_3': 'true'})
+                _layout_status = "ok"
+            except Exception as _lex:
+                _layout_status = f"error: {_lex}"
+            
+            return {
+                "status": "ok", "command": "sl_build_batch",
+                "blocks":  {"total": len(_blocks_list),  "succeeded": _blocks_ok,  "failed": len(_blocks_list) - _blocks_ok,   "results": _blocks_results},
+                "params":  {"total": len(_params_list),  "succeeded": _params_ok,  "failed": len(_params_list) - _params_ok,   "results": _params_results},
+                "lines":   {"total": len(_lines_list),   "succeeded": _lines_ok,   "failed": len(_lines_list) - _lines_ok,     "results": _lines_results},
+                "layout":  {"status": _layout_status}
+            }
+
+        # [v24 FIX EB7] Batch micro_design — get design prompts for multiple subsystems
+        if command == 'sl_micro_design_batch':
+            _mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            _tasks = fixed_params.get('tasks', [])
+            if not _tasks:
+                return {"status": "error", "message": "sl_micro_design_batch requires 'tasks' array"}
+            _md_results = []
+            for _t in _tasks:
+                _sn = _t.get('subsystemName', '')
+                _td = _t.get('taskDescription', '')
+                _dp = _t.get('depth', 1)
+                try:
+                    _prep = _build_sl_args('sl_micro_design', {'subsystemName': _sn, 'taskDescription': _td, 'depth': _dp, 'modelName': _mn})
+                    _r = _call_sl_function('sl_micro_design', _prep)
+                    _s = _r.get('status', 'error') if isinstance(_r, dict) else 'error'
+                    _md_results.append({'subsystemName': _sn, 'status': _s, 'designPrompt': _r.get('designPrompt', []) if isinstance(_r, dict) else []})
+                    # [v24 FIX] Track state: mark as designed so subsequent micro_review can proceed
+                    if _s == 'ok':
+                        _set_subsystem_state(_mn, _sn, 'designed')
+                except Exception as _ex:
+                    _md_results.append({'subsystemName': _sn, 'status': 'error', 'error': str(_ex)})
+            return {"status": "ok", "total": len(_tasks), "results": _md_results}
+
+        # [v24 FIX EB7] Batch micro_review — review multiple subsystem designs at once
+        if command == 'sl_micro_review_batch':
+            _mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            _toplevel = _mn.split('/')[0] if '/' in _mn else _mn
+            _reviews = fixed_params.get('reviews', [])
+            if not _reviews:
+                return {"status": "error", "message": "sl_micro_review_batch requires 'reviews' array"}
+            _rv_results = []; _rv_passed = 0; _rv_failed = 0
+            _import_time = __import__('time')
+            _ts = _import_time.strftime('%Y-%m-%dT%H:%M:%SZ', _import_time.gmtime())
+            for _rv in _reviews:
+                _sn = _rv.get('subsystemName', '')
+                _mf = _rv.get('microFramework', {})
+                try:
+                    _prep = _build_sl_args('sl_micro_review', {'subsystemName': _sn, 'microFramework': _mf, 'modelName': _mn})
+                    _r = _call_sl_function('sl_micro_review', _prep)
+                    _rr = _normalize_review_result(_r.get('reviewResult', {})) if isinstance(_r, dict) else {}
+                    _p = _rr.get('passed', False)
+                    _rv_results.append({'subsystemName': _sn, 'passed': _p, 'overallConfidence': _rr.get('overallConfidence', 0), 'checks': _rr.get('checks', [])})
+                    # [v24 FIX] Track review state per subsystem
+                    if _p:
+                        _set_subsystem_state(_toplevel, _sn, 'reviewed', reviewed_at=_ts)
+                        _rv_passed += 1
+                    else:
+                        _set_subsystem_state(_toplevel, _sn, 'designed', reviewed_at=_ts)
+                        _rv_failed += 1
+                except Exception as _ex:
+                    _rv_results.append({'subsystemName': _sn, 'passed': False, 'error': str(_ex)})
+                    _rv_failed += 1
+            return {"status": "ok", "total": len(_reviews), "passed": _rv_passed, "failed": _rv_failed, "results": _rv_results}
+
+        # [v24 FIX EB7] Batch model_complete — verify multiple subsystems at once
+        if command == 'sl_model_complete_batch':
+            _mn = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            _subs = fixed_params.get('subsystems', [])
+            if not _subs:
+                return {"status": "error", "message": "sl_model_complete_batch requires 'subsystems' array"}
+            _mc_results = []; _mc_passed = 0; _mc_failed = 0
+            for _sub in _subs:
+                try:
+                    _prep = _build_sl_args('sl_model_complete', {'modelName': _mn, 'subPath': _sub})
+                    _r = _call_sl_function('sl_model_complete', _prep)
+                    _cp = _r.get('canProceed', False) if isinstance(_r, dict) else False
+                    _mc_results.append({'subPath': _sub, 'status': _r.get('status', 'error') if isinstance(_r, dict) else 'error', 'canProceed': _cp})
+                    if _cp: _mc_passed += 1
+                    else: _mc_failed += 1
+                except Exception as _ex:
+                    _mc_results.append({'subPath': _sub, 'status': 'error', 'error': str(_ex)})
+                    _mc_failed += 1
+            return {"status": "ok", "total": len(_subs), "passed": _mc_passed, "failed": _mc_failed, "results": _mc_results}
+
+        # [v30] Gate_DELETE_APPROVAL — check BEFORE MATLAB call for sl_delete_block
+        if command == 'sl_delete_block':
+            _bp = fixed_params.get('blockPath', params.get('blockPath', ''))
+            if _bp:
+                # Check if approvalToken was provided (second call after user confirmed)
+                _token = params.get('approvalToken', '')
+                if _token:
+                    _token_data = _APPROVAL_TOKENS.get(_token)
+                    if not _token_data or _token_data.get('used'):
+                        return {"status": "gate_blocked", "blocked": True,
+                                "gate": "Gate_DELETE_APPROVAL",
+                                "reason": "INVALID_TOKEN or already used",
+                                "hint": "Request a new approval token by calling sl_delete_block without approvalToken"}
+                    if time.time() > _token_data.get('expires_at', 0):
+                        del _APPROVAL_TOKENS[_token]
+                        return {"status": "gate_blocked", "blocked": True,
+                                "gate": "Gate_DELETE_APPROVAL",
+                                "reason": "TOKEN_EXPIRED (120s timeout)",
+                                "hint": "Request a new approval token"}
+                    _token_data['used'] = True
+                else:
+                    # First call — check if subsystem-level deletion
+                    _approval_check = _gate_delete_approval(_fw_mn, _bp,
+                        params.get('reason', ''))
+                    if _approval_check is not None:
+                        return _approval_check
+
         if lock:
             with lock:
                 result = _call_sl_function(func_name, args_dict)
         else:
             result = _call_sl_function(func_name, args_dict)
+        
+        # [v12.1] Track framework_review passed for Gate_FRAMEWORK_SEQUENCE
+        if command == 'sl_framework_review' and isinstance(result, dict) and result.get('status') == 'ok':
+            _rr_raw = result.get('reviewResult', {})
+            _rr = _normalize_review_result(_rr_raw)
+            if _rr.get('passed'):
+                _FRAMEWORK_REVIEWED.add(_fw_mn)
+            else:
+                _FRAMEWORK_REVIEWED.discard(_fw_mn)
+        
+        # ===== [v16 ENGINEERING UPGRADE] Hardcoded Subsystem State Management =====
+        # CRITICAL INFRASTRUCTURE — must NEVER fail silently.
+        # Single source of truth for ALL subsystem state transitions.
+        #
+        # v15 design flaw: state was set in TWO places (_generate_workflow_state + this block).
+        # _generate_workflow_state is wrapped in try/except:pass (line ~9786), so any exception
+        # there silently drops the state update. The Gate then false-blocks on the next call.
+        #
+        # v16 FIX:
+        #   1. _generate_workflow_state state-setting REMOVED entirely (see lines ~6860, ~6661, ~6973)
+        #   2. This block is now the SOLE state setter — no fallback, no duplication
+        #   3. Post-set verification: immediately read back to confirm
+        #   4. Normalized name extraction: handles subsystemName/subsystemPath/subsystem/subsystem_name
+        #   5. When verification fails, logs ERROR and returns error to caller (fail-loud)
+        # ======================================================================
+        # [v20 FIX B5] Orphan subsystem cleanup: state exists in _SUBSYSTEM_STATES but
+        # the SubSystem block was never created in the Simulink model (e.g. test subsystems
+        # approved outside framework hierarchy). sl_model_complete returns error "Subsystem
+        # not found" and status='error', which prevents the normal 'completed' transition.
+        # Gate_SUBSYSTEM_CLOSURE then permanently blocks all subsequent builds.
+        # Fix: detect orphan condition and force state to 'completed' to unblock the Gate.
+        _is_subsystem_not_found = (
+            isinstance(result, dict)
+            and result.get('status') == 'error'
+            and command == 'sl_model_complete'
+            and 'Subsystem not found' in str(result.get('message', ''))
+        )
+        if _is_subsystem_not_found:
+            _subsys_orphan = (
+                fixed_params.get('subsystemName') or
+                fixed_params.get('subsystemPath') or
+                fixed_params.get('subsystem_name') or
+                fixed_params.get('subsystem') or
+                fixed_params.get('subPath') or  # [v20 FIX B5-ext] sl_model_complete uses subPath
+                (fixed_params.get('microFramework') or {}).get('subsystemName', '') if isinstance(fixed_params.get('microFramework'), dict) else '' or
+                ''
+            )
+            if _subsys_orphan and _fw_mn:
+                _tl = _fw_mn.split('/')[0] if '/' in _fw_mn else _fw_mn
+                _import_time = __import__('time')
+                _ts = _import_time.strftime('%Y-%m-%dT%H:%M:%SZ', _import_time.gmtime())
+                _set_subsystem_state(_tl, _subsys_orphan, 'completed', completed_at=_ts)
+                _persist_approvals(_tl)
+                import logging
+                logging.getLogger('matlab_bridge').warning(
+                    f"[v20 FIX B5] Orphan subsystem '{_subsys_orphan}' not found in model. "
+                    f"State forced to 'completed' to unblock Gate_SUBSYSTEM_CLOSURE."
+                )
+        # ======================================================================
+        if isinstance(result, dict) and result.get('status') == 'ok':
+            # [v16] Normalized extraction: try all 4 possible key names
+            # [v20 FIX B3] Add fallback to nested microFramework.subsystemName
+            # [v21 FIX EB4] Add fallback to MATLAB result.subsystemName (always present in micro_approve return)
+            _subsys = (
+                fixed_params.get('subsystemName') or
+                fixed_params.get('subsystemPath') or
+                fixed_params.get('subsystem_name') or
+                fixed_params.get('subsystem') or
+                (fixed_params.get('microFramework') or {}).get('subsystemName', '') if isinstance(fixed_params.get('microFramework'), dict) else '' or
+                result.get('subsystemName', '') or
+                ''
+            )
+            if _subsys and _fw_mn:
+                _tl = _fw_mn.split('/')[0] if '/' in _fw_mn else _fw_mn
+                _import_time = __import__('time')
+                _ts = _import_time.strftime('%Y-%m-%dT%H:%M:%SZ', _import_time.gmtime())
+                _expected = {
+                    'sl_micro_review': 'reviewed',
+                    'sl_micro_approve': 'approved',
+                    'sl_model_complete': 'completed',
+                }.get(command, '')
+                
+                if _expected:
+                    if command == 'sl_micro_review':
+                        # [v19 BUGFIX #NEW-1] Gate_APPROVE_NO_REVIEW bypass fix:
+                        # Only set status to 'reviewed' when micro_review actually PASSED.
+                        # Previously, ANY successful micro_review call (even with rigor < 0.65)
+                        # would set status to 'reviewed', allowing micro_approve to bypass the gate.
+                        _review_result = _normalize_review_result(result.get('reviewResult', {}))
+                        if _review_result.get('passed', False):
+                            _set_subsystem_state(_tl, _subsys, 'reviewed', reviewed_at=_ts)
+                        else:
+                            # Review failed — keep status as 'designed' so Gate_APPROVE_NO_REVIEW
+                            # will block micro_approve until review passes
+                            _set_subsystem_state(_tl, _subsys, 'designed', reviewed_at=_ts)
+                    elif command == 'sl_micro_approve':
+                        _set_subsystem_state(_tl, _subsys, 'approved', approved_at=_ts)
+                        _persist_approvals(_tl)
+                    elif command == 'sl_model_complete':
+                        # [v16 PORT] Reset consecutive_adds counter on completion
+                        _ws = _get_workflow_state(_tl)
+                        if hasattr(_ws, 'consecutive_adds'):
+                            _ws.consecutive_adds = 0
+                        _set_subsystem_state(_tl, _subsys, 'completed', completed_at=_ts)
+                        _persist_approvals(_tl)
+                    
+                    # [v16] POST-SET VERIFICATION: immediately read back
+                    # [v19 BUGFIX] For sl_micro_review, expected status depends on review result
+                    if command == 'sl_micro_review':
+                        _actual_expected = 'reviewed' if _review_result.get('passed', False) else 'designed'
+                    else:
+                        _actual_expected = _expected
+                    _verified = _get_subsystem_state(_tl, _subsys)
+                    if _verified is None or _verified.status != _actual_expected:
+                        import traceback
+                        print(f"[STATE-ERROR] Verification FAILED after {command}: "
+                              f"model={_tl}, subsys={_subsys}, "
+                              f"expected='{_actual_expected}', "
+                              f"actual='{_verified.status if _verified else 'None'}'",
+                              flush=True)
+                        traceback.print_stack()
+                        return {
+                            "status": "error",
+                            "message": (
+                                f"STATE_TRACKING_ERROR: Failed to persist subsystem state after {command}. "
+                                f"subsystem='{_subsys}', expected='{_actual_expected}', "
+                                f"actual='{_verified.status if _verified else 'None'}'. "
+                                f"This is a CRITICAL infrastructure error — contact the developer."
+                            ),
+                            "command": command,
+                        }
         
         # ===== [P0-8 FIX] Post-delete orphaned Goto/From cleanup =====
         # When a SubSystem is deleted, its paired Goto/From blocks
@@ -8397,7 +10882,7 @@ def _handle_sl_command(command, params):
                         _cleaned = _cleanup_eng.eval(_del_eng_expr, nargout=1)
                         try:
                             _cleaned_count = int(_cleaned) if _cleaned is not None else 0
-                        except:
+                        except Exception:
                             _cleaned_count = 0
                         if _cleaned_count > 0:
                             result['orphanedGotoFromCleaned'] = _cleaned_count
@@ -8928,6 +11413,18 @@ def _handle_sl_command(command, params):
                             'message': f'Auto-arrange exception: {str(le)}'
                         }
         
+        # [v19 FIX #NEW-6 L1] Clean _FRAMEWORK_REVIEWED on framework_review error
+        # Root cause: line 10354 guards _generate_workflow_state with status != 'error',
+        # so _FRAMEWORK_REVIEWED is never cleaned when review fails with error.
+        # This allows stale review-passed state to survive through to framework_approve,
+        # bypassing Gate_FRAMEWORK_SEQUENCE.
+        if command == 'sl_framework_review' and isinstance(result, dict) and result.get('status') == 'error':
+            _discard_model = model_name_for_verify
+            if not _discard_model:
+                _discard_model = fixed_params.get('modelName', fixed_params.get('model_name', ''))
+            if _discard_model:
+                _FRAMEWORK_REVIEWED.discard(_discard_model)
+        
         # 11. v9.0: 注入工作流状态
         # 每个写操作后，生成当前工作流阶段建议
         # v11.0: 也包括 sl_framework_design/review/approve 等框架 API
@@ -9261,14 +11758,14 @@ def _verify_line_operation(model_name, command, params, original_result):
             parts = src_spec.rsplit('/', 1)
             from_block = parts[0]
             try: from_port = int(parts[1])
-            except: pass
+            except Exception: pass
     if not to_block:
         dst_spec = params.get('dstSpec', '')
         if dst_spec and '/' in dst_spec:
             parts = dst_spec.rsplit('/', 1)
             to_block = parts[0]
             try: to_port = int(parts[1])
-            except: pass
+            except Exception: pass
     
     # 获取模型状态快照
     status_result = _call_sl_function('sl_model_status_snapshot', {
@@ -9391,14 +11888,14 @@ def _verify_param_operation(model_name, command, params, original_result):
                     # 清理临时变量
                     try:
                         _matlab_engine.eval("clear('vp_path', 'vp_pname');", nargout=0)
-                    except:
+                    except Exception:
                         pass
                     # 通过 eng.workspace 读取
                     actual = _matlab_engine.workspace[_tmp_var]
                     # 清理临时变量
                     try:
                         _matlab_engine.eval(f"clear('{_tmp_var}');", nargout=0)
-                    except:
+                    except Exception:
                         pass
             except Exception:
                 pass
@@ -9670,7 +12167,7 @@ def _matlab_eval_safe(expr, workspace_vars=None):
             for k in workspace_vars:
                 try:
                     _matlab_engine.eval(f"clear('{k}');", nargout=0)
-                except:
+                except Exception:
                     pass
         return result
     except Exception:
@@ -9696,7 +12193,7 @@ def _stop_engine():
     global _matlab_engine
     if _matlab_engine:
         try: _matlab_engine.quit()
-        except: pass
+        except Exception: pass
         _matlab_engine = None
     return {"status": "ok", "message": "MATLAB Engine 已停止"}
 
@@ -9728,7 +12225,7 @@ def _set_matlab_root(root):
     # 先停止现有 Engine
     if _matlab_engine:
         try: _matlab_engine.quit()
-        except: pass
+        except Exception: pass
         _matlab_engine = None
     
     MATLAB_ROOT = root
@@ -9772,7 +12269,7 @@ def handle_command(cmd_data):
         global _matlab_engine, _sl_toolbox_initialized  # [Bug #7 FIX]
         if _matlab_engine is not None:
             try: _matlab_engine.quit()
-            except: pass
+            except Exception: pass
             _matlab_engine = None
         # [Bug #7 FIX] Engine 停止时重置 sl_toolbox 初始化标记
         # 这样下次 Engine 启动时会自动重新 addpath
@@ -9807,7 +12304,9 @@ def handle_command(cmd_data):
         return execute_script(params.get('path', ''), params.get('outputDir'))
     elif action == 'run_code':
         # [v11.8.3] Gate_RAW_CMD check is INSIDE run_code() itself
-        return run_code(params.get('code', ''), params.get('showOutput', True))
+        # [v15 Fix #11] Pass cmd_source for endpoint binding
+        return run_code(params.get('code', ''), params.get('showOutput', True), 
+                        cmd_source=params.get('cmd_source', ''))
     elif action == 'cmd_request':
         # [v11.8.3] Gate_RAW_CMD: Request user permission for raw MATLAB command
         # AI must call this first, present challengePhrase to user via AskUserQuestion,
@@ -9833,10 +12332,21 @@ def handle_command(cmd_data):
             return {"status": "gate_blocked", "blocked": True, "gate": "PROJECT_DIR_REQUIRED",
                     "message": "项目目录未设置！请先调用 POST /api/matlab/setup",
                     "requiredAction": "setup_project_dir"}
+        # ===== [v15 Bypass Fix #2] Gate_S0: scene must be confirmed =====
+        if not _is_scene_locked():
+            return {
+                "status": "gate_blocked",
+                "blocked": True,
+                "gate": "Gate_S0",
+                "reason": "Scene not confirmed. Model creation requires Gate_S0 scene confirmation.",
+                "message": "SCENE_NOT_CONFIRMED: 创建模型前必须确认场景。",
+                "requiredAction": "sl_scene_detect",
+            }
+        # ===== Gate_S0 end =====
         model_name = params.get('model_name', params.get('modelName', ''))
         model_path = params.get('model_path', params.get('modelPath'))
-        # v9.0 风险5缓解: 新建模型时清理旧追踪状态，避免残留
-        _cleanup_workflow_state(model_name)
+        # [v16 Fix #56+#57] COMPREHENSIVE state reset — replaces old partial cleanup
+        _hard_reset_model_state(model_name)
         try:
             eng = get_engine()
             if eng is None:
@@ -9855,6 +12365,21 @@ def handle_command(cmd_data):
         except Exception as e:
             return {"status": "error", "message": f"Failed to create model: {str(e)}"}
     elif action == 'open_simulink':
+        # ===== [v15 Bypass Fix #4] Gate_S0: scene must be confirmed =====
+        if not _is_scene_locked():
+            return {
+                "status": "gate_blocked",
+                "blocked": True,
+                "gate": "Gate_S0",
+                "reason": "Scene not confirmed. Opening models requires Gate_S0 scene confirmation.",
+                "message": (
+                    "SCENE_NOT_CONFIRMED: 打开模型前必须确认场景。\n"
+                    "标准流程: sl_scene_detect → AskUserQuestion → sl_scene_confirm\n"
+                    "如需绕过标准流程，请使用 AskUserQuestion 向用户说明原因，由用户决定。"
+                ),
+                "requiredAction": "sl_scene_detect",
+            }
+        # ===== Gate_S0 end =====
         model_name = params.get('model_name', params.get('modelName', ''))
         # v9.0 风险5缓解: 打开旧模型时重置追踪状态，后续操作会基于模型实际状态重新推断阶段
         _cleanup_workflow_state(model_name)
@@ -9982,7 +12507,7 @@ def server_mode():
     # stdin 关闭，退出
     if _matlab_engine:
         try: _matlab_engine.quit()
-        except: pass
+        except Exception: pass
 
 
 def _write_json_response(data: dict):

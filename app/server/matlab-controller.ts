@@ -893,14 +893,14 @@ export async function runMATLABCode(code: string, showOutput: boolean = true): P
   console.log(`[MATLAB] 运行代码: ${code.slice(0, 100)}...`);
   return executeBridgeCommand({
     action: 'run_code',
-    params: { code, show_output: showOutput }
+    params: { code, show_output: showOutput, cmd_source: 'run_endpoint' }  // [v15 Fix #11] endpoint binding
   });
 }
 
 export async function runMATLABCommand(command: string, cmdToken: string = ''): Promise<MATLABResult> {
   return executeBridgeCommand({ 
     action: 'run_code', 
-    params: { code: command, show_output: true, cmd_token: cmdToken }
+    params: { code: command, show_output: true, cmd_token: cmdToken, cmd_source: 'cmd_request' }  // [v15 Fix #11] endpoint binding
   });
 }
 

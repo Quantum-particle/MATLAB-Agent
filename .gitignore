@@ -10,6 +10,9 @@ app/data/*.db
 app/data/*.db-shm
 app/data/*.db-wal
 app/data/*.json
+app/data/*.pid
+app/data/*.port
+app/data/*.log
 app/data/logs/
 
 # Root-level data (local config with user paths)
@@ -77,5 +80,16 @@ app/vite.config.d.ts
 # Runtime files
 app/.matlab_agent_pid
 
+# MATLAB Agent temporary workspace (runtime only)
+app/.matlab_agent_tmp/
+
 # MATLAB inter-stage backup files
 *.bak2
+
+# MATLAB bridge test blocks (generated during block testing)
+app/matlab-bridge/blk_*.slx
+app/matlab-bridge/t*.slx
+app/matlab-bridge/TB_*.slx
+app/matlab-bridge/T_*.slx
+app/matlab-bridge/TestBlock_*.slx
+app/matlab-bridge/bridge_*.log

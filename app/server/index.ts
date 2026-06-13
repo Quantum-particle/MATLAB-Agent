@@ -252,36 +252,47 @@ app.post("/api/matlab/command", async (req, res) => {
   }
 });
 
-// 创建 Simulink 模型
+// 🔴 [v15 Bypass Fix #5] 创建 Simulink 模型 — 已禁用
+// 原因: 直接创建绕过 Gate_S0 场景确认 + 标准建模流程
+// 必须通过: POST /api/matlab/sl/sl_model_create（经 _handle_sl_command + Gate_S0~5）
 app.post("/api/matlab/simulink/create", async (req, res) => {
-  const { modelName, modelPath } = req.body;
-  
-  if (!modelName) {
-    return res.status(400).json({ error: "请提供模型名称" });
-  }
-  
-  try {
-    const result = await matlab.createSimulinkModel(modelName, modelPath);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
-  }
+  return res.status(403).json({
+    status: "gate_blocked",
+    blocked: true,
+    gate: "Gate_BYPASS_PREVENTION",
+    reason: "Direct model creation bypasses standard workflow. Use sl_model_create via POST /api/matlab/sl/sl_model_create.",
+    message: (
+      "BYPASS_PREVENTED: /api/matlab/simulink/create 已被禁用。" +
+      "创建 Simulink 模型必须通过标准流程:" +
+      "1. POST /api/matlab/sl/sl_scene_detect → Gate_S0 场景确认" +
+      "2. POST /api/matlab/sl/sl_scene_confirm → 用户确认" +
+      "3. POST /api/matlab/sl/sl_model_create → Phase 0 模型创建" +
+      "需要绕过标准流程？请使用 AskUserQuestion 向用户说明原因，由用户决定。"
+    ),
+    requiredAction: "use_standard_workflow_or_ask_user",
+    standardEndpoint: "POST /api/matlab/sl/sl_model_create",
+  });
 });
 
-// 运行 Simulink 仿真
+// 🔴 [v15 Bypass Fix #5] 运行 Simulink 仿真 — 已禁用
+// 原因: 直接仿真绕过 Gate_S0 + Gate_4 (model_complete)
+// 必须通过: POST /api/matlab/sl/sl_sim_run（经 _handle_sl_command + Gate_4 前置检查）
 app.post("/api/matlab/simulink/run", async (req, res) => {
-  const { modelName, stopTime } = req.body;
-  
-  if (!modelName) {
-    return res.status(400).json({ error: "请提供模型名称" });
-  }
-  
-  try {
-    const result = await matlab.runSimulinkSimulation(modelName, stopTime || '10');
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
-  }
+  return res.status(403).json({
+    status: "gate_blocked",
+    blocked: true,
+    gate: "Gate_BYPASS_PREVENTION",
+    reason: "Direct simulation bypasses Gate_4. Use sl_sim_run via POST /api/matlab/sl/sl_sim_run.",
+    message: (
+      "BYPASS_PREVENTED: /api/matlab/simulink/run 已被禁用。" +
+      "运行 Simulink 仿真必须通过标准流程:" +
+      "1. sl_model_complete → Gate_4 模型完成检查" +
+      "2. POST /api/matlab/sl/sl_sim_run → 仿真" +
+      "需要绕过标准流程？请使用 AskUserQuestion 向用户说明原因，由用户决定。"
+    ),
+    requiredAction: "use_standard_workflow_or_ask_user",
+    standardEndpoint: "POST /api/matlab/sl/sl_sim_run",
+  });
 });
 
 // ============= v3.0 新增 API =============
@@ -438,16 +449,23 @@ app.post("/api/matlab/workspace/clear", async (req, res) => {
   }
 });
 
-// 打开 Simulink 模型
+// 🔴 [v15 Bypass Fix #5] 打开 Simulink 模型 — 已禁用
+// 原因: 直接打开绕过 Gate_S0 场景确认
+// 必须通过: 先完成 Gate_S0 (sl_scene_detect → sl_scene_confirm)，然后通过标准 API 打开
 app.post("/api/matlab/simulink/open", async (req, res) => {
-  const { modelName } = req.body;
-  if (!modelName) return res.status(400).json({ error: "请提供模型名称" });
-  try {
-    const result = await matlab.openSimulinkModel(modelName);
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
-  }
+  return res.status(403).json({
+    status: "gate_blocked",
+    blocked: true,
+    gate: "Gate_BYPASS_PREVENTION",
+    reason: "Direct model open bypasses Gate_S0. Complete scene confirmation first.",
+    message: (
+      "BYPASS_PREVENTED: /api/matlab/simulink/open 已被禁用。" +
+      "打开模型前必须先完成 Gate_S0 场景确认。" +
+      "标准流程: POST /api/matlab/sl/sl_scene_detect → AskUserQuestion → POST /api/matlab/sl/sl_scene_confirm" +
+      "需要绕过标准流程？请使用 AskUserQuestion 向用户说明原因，由用户决定。"
+    ),
+    requiredAction: "use_standard_workflow_or_ask_user",
+  });
 });
 
 // ============= Simulink 模型工作区 API（v4.1 新增）=============
@@ -640,7 +658,7 @@ app.post("/api/matlab/sl/:command", async (req, res) => {
   }
   const params = req.body || {};
 
-  // 命令白名单 (防御: 仅允许已知 sl_ 命令)
+  // 命令白名单 (防御: 仅允许已知 sl_ 命令) — v12.1 BUGFIX #37: deduplicated, BUGFIX #39: unified error format
   const ALLOWED_COMMANDS = [
     // Gate & Scene
     'sl_scene_detect', 'sl_scene_confirm',
@@ -654,8 +672,10 @@ app.post("/api/matlab/sl/:command", async (req, res) => {
     'sl_model_create', 'sl_model_load', 'sl_model_understand',
     // Building (safe + aliases)
     'sl_add_block_safe', 'sl_add_block', 'sl_add_line_safe', 'sl_add_line',
+    'sl_add_blocks_batch',  // [v21 FIX EB7] batch block addition
     'sl_set_param_safe', 'sl_set_param',
     'sl_delete',
+    'sl_delete_block', 'sl_delete_approval', 'sl_retry_plan',
     'sl_block_position', 'sl_auto_layout',
     // Subsystem
     'sl_subsystem_create', 'sl_subsystem_mask', 'sl_subsystem_expand',
@@ -672,20 +692,30 @@ app.post("/api/matlab/sl/:command", async (req, res) => {
     // Hierarchy & Build management
     'sl_hierarchy_validate', 'sl_subsystem_tree',
     'sl_build_status', 'sl_next_target',
+    // [v24 FIX EB7] Batch operations (design + build + review + complete)
+    'sl_micro_design_batch', 'sl_micro_review_batch',
+    'sl_build_batch', 'sl_model_complete_batch',
+    // [v24 FIX B7] State management
+    'sl_hard_reset',
     // Utilities
     'sl_find_blocks', 'sl_replace_block', 'sl_clear_top_lines',
     'sl_snapshot', 'sl_snapshot_model', 'sl_model_status', 'sl_model_status_snapshot',
     'sl_parse_error', 'sl_best_practices',
-    // Scene 2
-    'sl_model_load', 'sl_model_understand', 'sl_modify_plan',
-    'sl_modify_review', 'sl_modify_approve', 'sl_model_sandbox',
-    'sl_modify_verify_step', 'sl_s2mod_confirm',
+    // v12.0: Rigor Score Engine
+    'sl_rigor_score', 'sl_rigor_utils', 'sl_param_registry', 'sl_micro_approve_guard',
+    // Scene 2 (modify existing model) — v12.1 BUGFIX #37: deduplicated
+    'sl_modify_plan', 'sl_modify_review', 'sl_modify_approve',
+    'sl_model_sandbox', 'sl_modify_verify_step', 'sl_s2mod_confirm',
   ];
 
   if (!ALLOWED_COMMANDS.includes(command)) {
     return res.status(400).json({
       status: 'error',
-      message: `未知的 sl_ 命令: ${command}`
+      error: {
+        code: 'UNKNOWN_COMMAND',
+        message: `未知的 sl_ 命令: ${command}`,
+        details: { command, allowedCommands: ALLOWED_COMMANDS.length }
+      }
     });
   }
 
@@ -701,7 +731,13 @@ app.post("/api/matlab/sl/:command", async (req, res) => {
       res.json(result);
     }
   } catch (error: any) {
-    res.status(500).json({ status: "error", message: error.message });
+    res.status(500).json({
+      status: 'error',
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: error.message || 'Internal server error'
+      }
+    });
   }
 });
 
